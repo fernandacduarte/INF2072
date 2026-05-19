@@ -4,22 +4,23 @@ import numpy as np
 class SimpleFootballEnv:
     """Minimal cooperative football-like grid environment.
 
-    Two agents cooperate to score in the rightmost goal area.
-    Both agents observe their own position, teammate position, ball position,
+    N agents cooperate to score in the rightmost goal area.
+    Each agent observes: own position, all other agents' positions, ball position,
     and whether they hold the ball.
     """
 
-    def __init__(self, grid_shape=(5, 6), max_steps=50):
+    def __init__(self, grid_shape=(5, 6), n_agents=2, max_steps=50):
         self.grid_shape = grid_shape
         self.max_steps = max_steps
-        self.n_agents = 2
+        self.n_agents = n_agents
         self.action_dim = 6
+        self.action_names = ["stay", "up", "down", "left", "right", "shoot"]
         self.reset()
 
     def reset(self):
         self.step_count = 0
         height, width = self.grid_shape
-        self.agent_pos = np.array([[0, 0], [1, 0]], dtype=np.int32)
+        self.agent_pos = np.array([[i % height, 0] for i in range(self.n_agents)], dtype=np.int32)
         self.ball_pos = np.array([0, 0], dtype=np.int32)
         self.ball_holder = 0
         self.done = False
@@ -27,13 +28,41 @@ class SimpleFootballEnv:
 
     def _get_obs(self):
         obs = []
+        grid_shape_f32 = np.array(self.grid_shape, dtype=np.float32)
         for i in range(self.n_agents):
-            own = self.agent_pos[i] / np.array(self.grid_shape, dtype=np.float32)
-            teammate = self.agent_pos[1 - i] / np.array(self.grid_shape, dtype=np.float32)
-            ball = self.ball_pos / np.array(self.grid_shape, dtype=np.float32)
+            own = self.agent_pos[i] / grid_shape_f32
+            all_others = np.concatenate([self.agent_pos[j] / grid_shape_f32 for j in range(self.n_agents) if j != i], axis=0)
+            ball = self.ball_pos / grid_shape_f32
             has_ball = np.array([1.0 if self.ball_holder == i else 0.0], dtype=np.float32)
-            obs.append(np.concatenate([own, teammate, ball, has_ball], axis=0))
+            agent_obs = np.concatenate([own, all_others, ball, has_ball], axis=0).astype(np.float32)
+            obs.append(agent_obs)
         return obs
+
+    def render(self, mode="human"):
+        height, width = self.grid_shape
+        grid = [["." for _ in range(width)] for _ in range(height)]
+
+        for row in range(height):
+            if grid[row][width - 1] == ".":
+                grid[row][width - 1] = "|"
+
+        for agent_id, pos in enumerate(self.agent_pos):
+            row, col = pos.tolist()
+            symbol = f"{agent_id}"
+            if self.ball_holder == agent_id:
+                symbol = f"{agent_id}*"
+            if grid[row][col] != "." and grid[row][col] != "|":
+                symbol = "X"
+            grid[row][col] = symbol
+
+        lines = [" ".join(f"{cell:>2}" for cell in row) for row in grid]
+        render_text = "\n".join(lines)
+
+        if mode == "human":
+            print("\n" + render_text)
+            print(f"step={self.step_count} ball_holder={self.ball_holder} ball_pos={tuple(self.ball_pos)}")
+            print(f"actions: {self.action_names}")
+        return render_text
 
     def step(self, actions):
         if self.done:

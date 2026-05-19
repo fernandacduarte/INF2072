@@ -81,6 +81,26 @@ class IQLLearner:
                 actions.append(int(q_values.argmax().item()))
         return actions
 
+    def state_dict(self):
+        return {
+            "q_networks": [net.state_dict() for net in self.q_networks],
+        }
+
+    def load_state_dict(self, state):
+        for net, net_state in zip(self.q_networks, state["q_networks"]):
+            net.load_state_dict(net_state)
+        self._sync_targets()
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    @classmethod
+    def load_from_checkpoint(cls, path, obs_dim, n_actions, n_agents, device="cpu"):
+        learner = cls(obs_dim, n_actions, n_agents, device=device)
+        state = torch.load(path, map_location=device)
+        learner.load_state_dict(state)
+        return learner
+
 
 class VDNLearner(IQLLearner):
     def __init__(self, obs_dim, n_actions, n_agents, lr=0.001, gamma=0.99, device="cpu"):
@@ -127,6 +147,26 @@ class QMIXLearner(VDNLearner):
     def _sync_targets(self):
         super()._sync_targets()
         self.target_mixer.load_state_dict(self.mixer.state_dict())
+
+    def state_dict(self):
+        state = super().state_dict()
+        state["mixer"] = self.mixer.state_dict()
+        return state
+
+    def load_state_dict(self, state):
+        super().load_state_dict(state)
+        self.mixer.load_state_dict(state["mixer"])
+        self.target_mixer.load_state_dict(state["mixer"])
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    @classmethod
+    def load_from_checkpoint(cls, path, obs_dim, n_actions, n_agents, state_dim, device="cpu"):
+        learner = cls(obs_dim, n_actions, n_agents, state_dim, device=device)
+        state = torch.load(path, map_location=device)
+        learner.load_state_dict(state)
+        return learner
 
     def update(self, batch):
         obs, actions, rewards, next_obs, dones = batch

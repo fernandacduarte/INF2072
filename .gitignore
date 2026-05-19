@@ -1,0 +1,9 @@
+/comparison.png
+/comparison_epsilon.png
+/iql_model.pth
+/iql_training.csv
+/qmix_model.pth
+/qmix_training.csv
+/vdn_model.pth
+/vdn_training.csv
+/futebol2d/__pycache__/*.pyc

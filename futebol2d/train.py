@@ -30,8 +30,8 @@ def save_training_csv(path, rewards, epsilons):
             writer.writerow({"episode": episode, "reward": reward, "epsilon": epsilon})
 
 
-def run_training(algorithm, episodes, device, output_csv=None):
-    env = SimpleFootballEnv()
+def run_training(algorithm, episodes, device, n_agents=2, output_csv=None, output_model=None):
+    env = SimpleFootballEnv(n_agents=n_agents)
     obs_dim = len(env.reset()[0])
     n_actions = env.action_dim
     n_agents = env.n_agents
@@ -81,6 +81,11 @@ def run_training(algorithm, episodes, device, output_csv=None):
     save_training_csv(output_csv, rewards, epsilons)
     print(f"Saved training log to {output_csv}")
 
+    if output_model is None:
+        output_model = f"{algorithm}_model.pth"
+    learner.save(output_model)
+    print(f"Saved trained model to {output_model}")
+
     return rewards, epsilons
 
 
@@ -89,15 +94,18 @@ def main():
     parser.add_argument("--algo", choices=["iql", "vdn", "qmix"], default="iql")
     parser.add_argument("--episodes", type=int, default=300)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--n-agents", type=int, default=2, help="Number of agents in the environment")
     parser.add_argument("--output-csv", default=None,
                         help="Path to save training results as a CSV file")
+    parser.add_argument("--save-model", default=None,
+                        help="Path to save the trained model checkpoint")
     args = parser.parse_args()
 
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
 
-    run_training(args.algo, args.episodes, args.device, output_csv=args.output_csv)
+    run_training(args.algo, args.episodes, args.device, n_agents=args.n_agents, output_csv=args.output_csv, output_model=args.save_model)
 
 
 if __name__ == "__main__":
