@@ -1,0 +1,229 @@
+"""
+Neural network architectures for multi-agent reinforcement learning.
+
+This module defines the network components used in IQL, VDN, and QMIX algorithms:
+  - MLP: Multi-layer perceptron with configurable hidden layers
+  - AgentQNetwork: Individual Q-network for each agent
+  - QMIXMixer: Value decomposition mixing network for QMIX algorithm
+"""
+import torch
+import torch.nn as nn
+
+
+class MLP(nn.Module):
+    """
+    Multi-Layer Perceptron (MLP) with configurable hidden layers.
+
+    A generic feedforward neural network that can be used as a building block
+    for Q-networks. Supports customizable architecture via hidden dimensions.
+
+    Architecture:
+      - Linear(input_dim, hidden_dims[0]) → activation
+      - Linear(hidden_dims[i], hidden_dims[i+1]) → activation (for each hidden layer)
+      - Linear(hidden_dims[-1], output_dim)
+
+    Example:
+      mlp = MLP(input_dim=10, output_dim=4, hidden_dims=(64, 64))
+      # Creates: 10→64→64→4 network with ReLU activation between layers
+    """
+
+    def __init__(self, input_dim, output_dim, hidden_dims=(64, 64), activation=nn.ReLU):
+        """
+        Initialize MLP.
+
+        Args:
+            input_dim (int): Input feature dimension
+            output_dim (int): Output dimension (e.g., number of actions)
+            hidden_dims (tuple): Sizes of hidden layers. Default (64, 64).
+            activation (class): Activation function class (default nn.ReLU)
+        """
+        super().__init__()
+        
+        layers = []  # List to accumulate network layers
+        last_dim = input_dim  # Track current dimension as we build layers
+        
+        # Build hidden layers with activation functions
+        for hidden_dim in hidden_dims:
+            # Add linear layer from last_dim to hidden_dim
+            layers.append(nn.Linear(last_dim, hidden_dim))
+            # Add activation function (e.g., ReLU) after each hidden layer
+            layers.append(activation())
+            # Update dimension for next layer
+            last_dim = hidden_dim
+        
+        # Add final output layer (no activation, raw output for Q-values)
+        layers.append(nn.Linear(last_dim, output_dim))
+        
+        # Combine all layers into a Sequential model
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """
+        Forward pass through the network.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, input_dim)
+
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, output_dim)
+        """
+        # Pass input through sequential model
+        return self.model(x)
+
+
+class AgentQNetwork(nn.Module):
+    """
+    Q-network for a single agent.
+
+    Maps agent observations to Q-values for each action.
+    Used in IQL, VDN, and QMIX (as the per-agent networks).
+
+    Architecture:
+      - MLP with two 64-unit hidden layers (configurable)
+      - Input: observation vector (obs_dim)
+      - Output: Q-value for each action (n_actions)
+
+    Example:
+      q_net = AgentQNetwork(obs_dim=5, n_actions=6)
+      obs = torch.randn(32, 5)  # batch of 32 observations
+      q_vals = q_net(obs)  # shape (32, 6)
+    """
+
+    def __init__(self, obs_dim, n_actions, hidden_dim=64):
+        """
+        Initialize agent Q-network.
+
+        Args:
+            obs_dim (int): Observation dimension
+            n_actions (int): Number of possible actions
+            hidden_dim (int): Size of hidden layers. Default 64.
+        """
+        super().__init__()
+        # Create MLP: obs_dim → hidden_dim → hidden_dim → n_actions
+        # Two hidden layers provide sufficient capacity for simple environments
+        self.net = MLP(obs_dim, n_actions, hidden_dims=(hidden_dim, hidden_dim))
+
+    def forward(self, obs):
+        """
+        Forward pass: observation → Q-values.
+
+        Args:
+            obs (torch.Tensor): Observation tensor of shape (batch_size, obs_dim)
+
+        Returns:
+            torch.Tensor: Q-values for each action, shape (batch_size, n_actions)
+        """
+        # Pass observation through MLP to get Q-values
+        return self.net(obs)
+
+
+class QMIXMixer(nn.Module):
+    """
+    Value decomposition mixing network for QMIX algorithm.
+
+    QMIX learns to mix individual agent Q-values into a joint Q-value,
+    while maintaining monotonicity (ensures representable solutions exist).
+
+    The mixer is a hypernetwork that:
+      1. Uses global state to generate mixing weights (hypernetwork)
+      2. Combines agent Q-values using these state-dependent weights
+
+    Architecture (hypernetwork generates:
+      - W1: Mixing weights for first layer (state → n_agents × hidden_dim)
+      - b1: Biases for first layer (state → hidden_dim)
+      - W2: Mixing weights for second layer (state → hidden_dim)
+      - b2: Output bias (state → 1)
+
+    Mathematical formulation:
+      Q_tot = W2^T * ReLU(W1 * Q_agents + b1) + b2
+      where W1, W2, b1, b2 are generated by hypernetworks using state
+
+    Monotonicity constraint: All weights are positive (via abs) to ensure
+    that increasing any agent's Q-value increases joint Q-value.
+
+    Reference: "QMIX: Monotonic Value Function Factorisation for Decentralised Multi-Agent RL"
+    """
+
+    def __init__(self, state_dim, n_agents, mixing_hidden_dim=32):
+        """
+        Initialize QMIX mixer network.
+
+        Args:
+            state_dim (int): Global state dimension (typically obs_dim * n_agents)
+            n_agents (int): Number of agents
+            mixing_hidden_dim (int): Size of mixing hidden layer. Default 32.
+        """
+        super().__init__()
+        # Store number of agents for later reshaping
+        self.n_agents = n_agents
+        
+        # Hypernetwork 1: generates W1 weights (state → n_agents × mixing_hidden_dim)
+        # These weights mix agent Q-values into intermediate representation
+        self.hyper_w1 = nn.Linear(state_dim, n_agents * mixing_hidden_dim)
+        
+        # Hypernetwork 1: generates b1 biases (state → mixing_hidden_dim)
+        # Biases for the first mixing layer
+        self.hyper_b1 = nn.Linear(state_dim, mixing_hidden_dim)
+        
+        # Hypernetwork 2: generates W2 weights (state → mixing_hidden_dim × 1)
+        # These weights combine intermediate representation to final Q-value
+        self.hyper_w2 = nn.Linear(state_dim, mixing_hidden_dim)
+        
+        # Hypernetwork 2: generates b2 biases (state → 1)
+        # Uses an MLP with hidden layer for expressiveness (final output scalar)
+        self.hyper_b2 = nn.Sequential(
+            nn.Linear(state_dim, mixing_hidden_dim),  # First MLP layer
+            nn.ReLU(),  # Activation
+            nn.Linear(mixing_hidden_dim, 1)  # Output single bias value
+        )
+
+    def forward(self, agent_qs, state):
+        """
+        Mix individual agent Q-values using state-dependent weights.
+
+        Args:
+            agent_qs (torch.Tensor): Agent Q-values, shape (batch_size, n_agents, n_actions)
+                                     But only passing max Q-values: (batch_size, n_agents)
+            state (torch.Tensor): Global state, shape (batch_size, state_dim)
+
+        Returns:
+            torch.Tensor: Mixed Q-values, shape (batch_size, 1)
+        """
+        batch_size = agent_qs.size(0)  # Extract batch size from input
+        
+        # STEP 1: Generate first layer weights using hypernetwork
+        # Generate W1: (batch_size, n_agents * mixing_hidden_dim)
+        w1 = torch.abs(self.hyper_w1(state))  # Apply abs() for monotonicity
+        # Reshape to (batch_size, n_agents, mixing_hidden_dim)
+        w1 = w1.view(batch_size, self.n_agents, -1)
+        
+        # Generate first layer biases: (batch_size, mixing_hidden_dim)
+        b1 = self.hyper_b1(state)  # No abs() for biases (can be negative)
+        # Reshape to (batch_size, 1, mixing_hidden_dim) for broadcasting
+        b1 = b1.view(batch_size, 1, -1)
+        
+        # STEP 2: First mixing layer
+        # Compute: h = ReLU(W1 @ Q_agents + b1)
+        # agent_qs.unsqueeze(1) reshapes from (batch, n_agents) to (batch, 1, n_agents)
+        # torch.bmm performs batch matrix multiply: (batch, 1, n_agents) @ (batch, n_agents, hidden) → (batch, 1, hidden)
+        hidden = torch.relu(torch.bmm(agent_qs.unsqueeze(1), w1) + b1)
+        
+        # STEP 3: Generate second layer weights using hypernetwork
+        # Generate W2: (batch_size, mixing_hidden_dim)
+        w2 = torch.abs(self.hyper_w2(state))  # Apply abs() for monotonicity
+        # Reshape to (batch_size, mixing_hidden_dim, 1) for batch matmul
+        w2 = w2.view(batch_size, -1, 1)
+        
+        # Generate second layer biases: (batch_size, 1)
+        b2 = self.hyper_b2(state)  # Returns (batch_size, 1)
+        # Reshape to (batch_size, 1, 1) for broadcasting
+        b2 = b2.view(batch_size, 1, 1)
+        
+        # STEP 4: Final mixing layer
+        # Compute: Q_tot = W2 @ h + b2
+        # hidden is (batch, 1, mixing_hidden_dim), w2 is (batch, mixing_hidden_dim, 1)
+        # Result: (batch, 1, 1)
+        y = torch.bmm(hidden, w2) + b2
+        
+        # Reshape output from (batch, 1, 1) to (batch,) for loss computation
+        return y.view(batch_size, -1)

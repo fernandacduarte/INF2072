@@ -1,0 +1,339 @@
+"""
+Environment module for cooperative multi-agent football game.
+
+SimpleFootballEnv is a grid-world where N agents cooperate to move a ball and score.
+Agents share a single reward signal that encourages teamwork.
+"""
+import numpy as np
+
+
+class SimpleFootballEnv:
+    """
+    Minimal cooperative football-like grid environment.
+
+    N agents cooperate to score in the rightmost goal area (goal column).
+    The team earns +1 reward when the ball-holder shoots from the rightmost column,
+    -0.001 per step to encourage fast solutions, and 0 for timeout.
+
+    Environment State:
+      - grid_shape: (height, width) tuple defining grid dimensions
+      - n_agents: number of cooperative agents
+      - agent_pos: (n_agents, 2) array of agent [row, col] positions
+      - ball_pos: (2,) array of ball [row, col] position
+      - ball_holder: index (0 to n_agents-1) of agent currently holding ball
+      - step_count: number of steps taken in current episode
+
+    Observations (per agent):
+      - own position (normalized): [row/height, col/width]
+      - all other agents' positions (normalized): [(n_agents-1)*2 floats]
+      - ball position (normalized): [row/height, col/width]
+      - possession flag: 1.0 if agent holds ball, 0.0 otherwise
+      - Total obs_dim = 2 + 2*(n_agents-1) + 2 + 1 = 2*n_agents + 1
+
+    Actions (discrete, 0-5):
+      - 0: stay (no movement)
+      - 1: move up (row -= 1)
+      - 2: move down (row += 1)
+      - 3: move left (col -= 1)
+      - 4: move right (col += 1)
+      - 5: shoot (score if ball-holder is in rightmost column)
+    """
+
+    def __init__(self, grid_shape=(5, 6), n_agents=2, max_steps=50):
+        """
+        Initialize the football environment.
+
+        Args:
+            grid_shape (tuple): (height, width) of the grid world. Default (5, 6).
+            n_agents (int): Number of cooperative agents. Default 2.
+            max_steps (int): Maximum steps per episode. Default 50.
+        """
+        # Store grid dimensions (used for normalization and boundary checks)
+        self.grid_shape = grid_shape
+        # Maximum episode length (episode ends after this many steps)
+        self.max_steps = max_steps
+        # Number of agents in the environment
+        self.n_agents = n_agents
+        # Number of discrete actions each agent can take
+        self.action_dim = 6
+        # Human-readable action names for debugging and visualization
+        self.action_names = ["stay", "up", "down", "left", "right", "shoot"]
+        # Initialize environment state (agent positions, ball, episode flags)
+        self.reset()
+
+    def reset(self):
+        """
+        Reset the environment to initial state.
+
+        Each agent starts in column 0, on different rows (agent i on row i).
+        The ball starts with agent 0.
+        Returns initial observations.
+
+        Returns:
+            list: Observations for each agent (obs_dim floats each).
+        """
+        # Reset step counter to 0
+        self.step_count = 0
+        # Unpack grid dimensions for agent initialization
+        height, width = self.grid_shape
+        # Initialize agent positions: agent i starts at [i % height, 0]
+        # This spreads agents vertically on the leftmost column
+        self.agent_pos = np.array([[i % height, 0] for i in range(self.n_agents)], dtype=np.int32)
+        # Initialize ball at [0, 0] (with first agent)
+        self.ball_pos = np.array([0, 0], dtype=np.int32)
+        # Agent 0 starts with the ball
+        self.ball_holder = 0
+        # Episode is not finished at initialization
+        self.done = False
+        # Return initial observations for all agents
+        return self._get_obs()
+
+    def _get_obs(self):
+        """
+        Construct observation vectors for all agents.
+
+        Each agent receives:
+          1. Own normalized position (2 floats)
+          2. All other agents' normalized positions (2*(n_agents-1) floats)
+          3. Ball normalized position (2 floats)
+          4. Ball possession indicator (1 float: 1.0 if holding, 0.0 otherwise)
+
+        Returns:
+            list: Observations, one per agent. Each obs is a 1D float32 array.
+        """
+        obs = []
+        # Convert grid shape to float32 for normalization (prevents int division)
+        grid_shape_f32 = np.array(self.grid_shape, dtype=np.float32)
+        
+        # Construct observation for each agent
+        for i in range(self.n_agents):
+            # Agent i's own position, normalized to [0, 1] range
+            own = self.agent_pos[i] / grid_shape_f32
+            
+            # All other agents' positions, normalized to [0, 1] range
+            # Concatenate all positions except agent i's own (to avoid observing self twice)
+            all_others = np.concatenate(
+                [self.agent_pos[j] / grid_shape_f32 for j in range(self.n_agents) if j != i],
+                axis=0
+            )
+            
+            # Ball position, normalized to [0, 1] range
+            ball = self.ball_pos / grid_shape_f32
+            
+            # Possession flag: 1.0 if this agent holds ball, 0.0 otherwise
+            has_ball = np.array([1.0 if self.ball_holder == i else 0.0], dtype=np.float32)
+            
+            # Concatenate all observation components and ensure float32 dtype
+            agent_obs = np.concatenate([own, all_others, ball, has_ball], axis=0).astype(np.float32)
+            obs.append(agent_obs)
+        
+        return obs
+
+    def render(self, mode="human"):
+        """
+        Render the current environment state as a text grid.
+
+        Displays a grid where:
+          - '.' is empty cell
+          - '|' is the goal column (rightmost, where agents shoot)
+          - '0', '1', ... are agents without ball
+          - '0*', '1*', ... are agents holding the ball
+          - 'X' indicates collision (multiple entities in one cell)
+
+        Args:
+            mode (str): Rendering mode. Default "human" prints to stdout.
+
+        Returns:
+            str: Text representation of the grid.
+        """
+        # Unpack grid dimensions for rendering
+        height, width = self.grid_shape
+        
+        # Create empty grid filled with empty cells ('.')
+        grid = [["." for _ in range(width)] for _ in range(height)]
+
+        # Mark rightmost column as goal area with '|' symbol
+        for row in range(height):
+            if grid[row][width - 1] == ".":
+                grid[row][width - 1] = "|"
+
+        # Place agents on grid based on their current positions
+        for agent_id, pos in enumerate(self.agent_pos):
+            # Extract row and column coordinates
+            row, col = pos.tolist()
+            # Default symbol is agent ID (0, 1, 2, ...)
+            symbol = f"{agent_id}"
+            
+            # Add '*' suffix if agent currently holds the ball
+            if self.ball_holder == agent_id:
+                symbol = f"{agent_id}*"
+            
+            # Mark collision ('X') if cell already occupied (defensive check)
+            if grid[row][col] != "." and grid[row][col] != "|":
+                symbol = "X"
+            
+            # Place symbol in grid at agent's position
+            grid[row][col] = symbol
+
+        # Format grid rows as right-aligned strings with padding for readability
+        lines = [" ".join(f"{cell:>2}" for cell in row) for row in grid]
+        render_text = "\n".join(lines)
+
+        # Print to stdout if human mode
+        if mode == "human":
+            # Print the grid visualization
+            print("\n" + render_text)
+            # Print current state information
+            print(f"step={self.step_count} ball_holder={self.ball_holder} ball_pos={tuple(self.ball_pos)}")
+            # Print action reference for debugging
+            print(f"actions: {self.action_names}")
+        
+        return render_text
+
+    def step(self, actions):
+        """
+        Execute one environment step with given actions.
+
+        All agents act simultaneously. Ball transfer happens if agent moves to ball location.
+        Reward is +1 for scoring, -0.001 per step (to encourage efficiency), 0 for timeout.
+
+        Args:
+            actions (list): Action index (0-5) for each agent in order.
+
+        Returns:
+            tuple: (observations, rewards, dones, info)
+              - observations: List of observation arrays for each agent
+              - rewards: List of shared reward (same for all agents since cooperative)
+              - dones: List of done flags (same for all agents)
+              - info: Dict with extra info (e.g., 'score': bool indicating if goal scored)
+        """
+        # Safety check: ensure episode is not already finished
+        if self.done:
+            raise RuntimeError("Episode has finished. Call reset() first.")
+
+        # Increment step counter
+        self.step_count += 1
+        # Initialize reward (will be updated based on episode outcome)
+        reward = 0.0
+
+        # Apply all agents' movements simultaneously
+        for agent_id, action in enumerate(actions):
+            self._apply_action(agent_id, action)
+
+        # Update ball position and handle ball possession transfers
+        self._resolve_ball_possession()
+
+        # Check if team scored a goal
+        if self._check_score(actions):
+            reward = 1.0  # Positive reward for scoring
+            self.done = True
+        # Check if episode reached maximum length (timeout)
+        elif self.step_count >= self.max_steps:
+            reward = 0.0  # No reward for timeout
+            self.done = True
+        # Normal step (no goal, not timeout)
+        else:
+            reward = -0.001  # Small negative reward to encourage fast solutions
+
+        # Get next observations for all agents
+        obs = self._get_obs()
+        # All agents share the same reward (cooperative multi-agent learning)
+        rewards = [reward] * self.n_agents
+        # All agents share the same done flag
+        dones = [self.done] * self.n_agents
+        # Extra information about episode outcome
+        info = {"score": reward > 0}
+        
+        return obs, rewards, dones, info
+
+    def _apply_action(self, agent_id, action):
+        """
+        Apply a single agent's action to update its position.
+
+        Actions 1-4 cause movement in cardinal directions; action 5 (shoot) is handled elsewhere.
+        Positions are clamped to grid boundaries to prevent out-of-bounds.
+
+        Args:
+            agent_id (int): Index of agent (0 to n_agents-1)
+            action (int): Action code (0-5, see class docstring)
+        """
+        # Initialize movement vector as zero (no movement by default)
+        move = np.array([0, 0], dtype=np.int32)
+        
+        # Map action index to movement direction
+        if action == 1:
+            # Action 1: move up (row decreases)
+            move = np.array([-1, 0], dtype=np.int32)
+        elif action == 2:
+            # Action 2: move down (row increases)
+            move = np.array([1, 0], dtype=np.int32)
+        elif action == 3:
+            # Action 3: move left (col decreases)
+            move = np.array([0, -1], dtype=np.int32)
+        elif action == 4:
+            # Action 4: move right (col increases)
+            move = np.array([0, 1], dtype=np.int32)
+        elif action == 5:
+            # Action 5: shoot (no movement, handled elsewhere)
+            move = np.array([0, 0], dtype=np.int32)
+
+        # Apply movement for movement actions only (actions 1-4)
+        if action in [1, 2, 3, 4]:
+            # Calculate new position by adding movement vector
+            new_pos = self.agent_pos[agent_id] + move
+            # Define grid boundaries (inclusive)
+            min_coords = np.array([0, 0], dtype=np.int32)
+            max_coords = np.array(self.grid_shape, dtype=np.int32) - 1
+            # Clamp position to grid boundaries (prevent out-of-bounds movement)
+            self.agent_pos[agent_id] = np.minimum(np.maximum(new_pos, min_coords), max_coords)
+
+    def _resolve_ball_possession(self):
+        """
+        Update ball position and transfer possession if needed.
+
+        Ball follows the ball-holder. If another agent moves to ball location,
+        that agent becomes the new ball-holder (steal mechanics).
+        """
+        # Get current ball holder's position
+        holder_pos = self.agent_pos[self.ball_holder]
+        
+        # Update ball position to match holder's current position
+        if not np.array_equal(self.ball_pos, holder_pos):
+            self.ball_pos = holder_pos.copy()
+
+        # Check if another agent is at ball location (ball stealing mechanic)
+        for i in range(self.n_agents):
+            # Skip the current ball holder (can't steal from self)
+            if i != self.ball_holder and np.array_equal(self.agent_pos[i], self.ball_pos):
+                # Transfer ball to agent i
+                self.ball_holder = i
+                # Break to avoid reassigning to multiple agents in same step
+                break
+
+    def _check_score(self, actions):
+        """
+        Check if the team scored a goal.
+
+        Scoring requires:
+          1. Ball holder performs shoot action (action 5)
+          2. Ball holder is in rightmost column (col == width - 1)
+
+        Args:
+            actions (list): Action indices for all agents in order
+
+        Returns:
+            bool: True if goal scored, False otherwise
+        """
+        # If no ball holder, scoring is impossible
+        if self.ball_holder is None:
+            return False
+        
+        # Check if ball holder chose shoot action (action 5)
+        if actions[self.ball_holder] != 5:
+            return False
+        
+        # Get ball holder's current position
+        agent_x, agent_y = self.agent_pos[self.ball_holder]
+        
+        # Score if agent is in rightmost column (goal column)
+        return agent_y == self.grid_shape[1] - 1
