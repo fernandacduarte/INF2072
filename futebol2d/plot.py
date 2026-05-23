@@ -9,8 +9,8 @@ Generates two plots:
   2. Epsilon schedules for comparing exploration decay
 
 Usage:
-  python -m futebol2d.plot iql_training.csv vdn_training.csv qmix_training.csv \\
-    --labels IQL VDN QMIX --window 20 --save comparison.png
+    python -m plot iql_training.csv vdn_training.csv qmix_training.csv \\
+        --labels IQL VDN QMIX --window 20 --save comparison.png
 """
 import argparse
 import csv

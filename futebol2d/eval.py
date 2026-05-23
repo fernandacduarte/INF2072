@@ -5,7 +5,7 @@ Loads a trained model checkpoint and renders gameplay with text-based visualizat
 Useful for debugging agent behavior and understanding learned strategies.
 
 Usage:
-  python -m futebol2d.eval --algo iql --model-path iql_model.pth \\
+    python -m eval --algo iql --model-path iql_model.pth \\
     --n-agents 2 --episodes 3 --delay 0.5
 
 The script renders a text grid showing:
@@ -19,8 +19,8 @@ import time
 
 import torch
 
-from futebol2d.algos import IQLLearner, VDNLearner, QMIXLearner
-from futebol2d.env import SimpleFootballEnv
+from algos import IQLLearner, VDNLearner, QMIXLearner
+from env import SimpleFootballEnv
 
 
 def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):

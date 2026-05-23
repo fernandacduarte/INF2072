@@ -20,8 +20,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from futebol2d.networks import AgentQNetwork, QMIXMixer
-
+from networks import AgentQNetwork, QMIXMixer
 
 class ReplayBuffer:
     """

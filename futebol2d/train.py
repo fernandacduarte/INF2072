@@ -9,7 +9,7 @@ including:
   - CSV logging of rewards and epsilon schedules
   - Model checkpointing
 
-Run with: python -m futebol2d.train --algo iql --episodes 300 --device cuda
+Run with: python -m train --algo iql --episodes 300 --device cuda
 """
 import argparse
 import csv
@@ -19,9 +19,8 @@ import random
 import numpy as np
 import torch
 
-from futebol2d.algos import IQLLearner, VDNLearner, QMIXLearner, ReplayBuffer
-from futebol2d.env import SimpleFootballEnv
-
+from algos import IQLLearner, VDNLearner, QMIXLearner, ReplayBuffer
+from env import SimpleFootballEnv
 
 def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):
     """

@@ -58,25 +58,25 @@ Cons:
 
 ## Running experiments
 
-From the workspace root, run with the package module form:
+```bash
+python train.py --algo iql --episodes 300
+python train.py --algo vdn --episodes 300
+python train.py --algo qmix --episodes 300
+```
+
+Use `--device` to select the compute device (`cpu` or `cuda`). Example:
 
 ```bash
-python3 -m futebol2d.train --algo iql --episodes 300
-python3 -m futebol2d.train --algo vdn --episodes 300
-python3 -m futebol2d.train --algo qmix --episodes 300
+python train.py --algo qmix --episodes 300 --device cuda
+python train.py --algo iql --episodes 300 --device cpu
 ```
+
+If `cuda` is requested but not available, install a CUDA-enabled PyTorch and run on a machine with an NVIDIA GPU, or use `--device cpu` instead.
 
 Each training run now saves:
 
 - a CSV log: `iql_training.csv`, `vdn_training.csv`, or `qmix_training.csv`
 - a model checkpoint: `iql_model.pth`, `vdn_model.pth`, or `qmix_model.pth`
-
-If you prefer to run the script directly, set `PYTHONPATH` to the workspace root first:
-
-```bash
-set PYTHONPATH=.
-python3 futebol2d/train.py --algo iql --episodes 300
-```
 
 Compare average rewards and convergence speed.
 
@@ -85,7 +85,7 @@ Compare average rewards and convergence speed.
 After training, visualize a learned policy with:
 
 ```bash
-python3 -m futebol2d.eval --algo qmix --model-path qmix_model.pth --episodes 1 --delay 0.5
+python3 -m eval --algo qmix --model-path qmix_model.pth --episodes 1 --delay 0.5
 ```
 
 This will print the grid and step-by-step action trace.
@@ -95,13 +95,13 @@ This will print the grid and step-by-step action trace.
 Compare reward curves across algorithms:
 
 ```bash
-python3 -m futebol2d.plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL VDN QMIX --window 20
+python3 -m plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL VDN QMIX --window 20
 ```
 
 Save the plot image with:
 
 ```bash
-python3 -m futebol2d.plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL VDN QMIX --window 20 --save comparison.png
+python3 -m plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL VDN QMIX --window 20 --save comparison.png
 ```
 
 ## Next steps
