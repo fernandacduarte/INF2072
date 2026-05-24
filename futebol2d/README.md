@@ -167,3 +167,32 @@ python3 -m plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL
 - extend observations with velocities and directional features
 - add centralized training with decentralized execution
 - compare IQL, VDN, and QMIX on the same reward curve
+
+## Live (Online) Plotting During Training
+
+You can visualize training progress in real time using the live plotting feature. This is especially useful for multi-seed experiments to monitor mean and standard deviation of rewards as training progresses.
+
+### Requirements
+- `matplotlib` (install with `pip install matplotlib`)
+
+### Usage
+
+To enable live plotting, add the `--live-plot` flag when running multi-seed training:
+
+```bash
+python train.py --algo vdn --episodes 300 --n-seeds 5 --seed 0 --eval-episodes 20 --output-dir runs_vdn --live-plot
+```
+
+- The live plot will update after each episode and each seed, showing the mean and standard deviation of rewards across seeds.
+- The plot window will appear during training and remain open at the end for review.
+- This feature is only available in multi-seed mode (i.e., when `--n-seeds` > 1).
+
+#### Troubleshooting
+- If the plot window does not appear, ensure you have `matplotlib` installed and are not running in a headless environment.
+- For remote servers, use X11 forwarding or a Jupyter notebook for GUI support.
+
+### Implementation
+- The live plotting feature is implemented in `live_plot.py` (see the `LivePlotter` class).
+- Integration is handled in `train.py` and activated with the `--live-plot` flag.
+
+See the code and comments in `live_plot.py` and `train.py` for more details.

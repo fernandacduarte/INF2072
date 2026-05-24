@@ -109,26 +109,22 @@ class SimpleFootballEnv:
         """
         Reset the environment to initial state.
 
-        Each agent starts in column 0, on different rows (agent i on row i).
-        The ball starts with agent 0.
-        Returns initial observations.
+        Agents and ball start at random, non-overlapping positions.
+        The ball is assigned to a random agent, and placed at their position.
 
         Returns:
             list: Observations for each agent (obs_dim floats each).
         """
-        # Reset step counter to 0
         self.step_count = 0
-        # Unpack grid dimensions for agent initialization
         height, width = self.grid_shape
-        # Initialize agent positions: agent i starts at [i % height, 0]
-        # This spreads agents vertically on the leftmost column
-        self.agent_pos = np.array([[i % height, 0] for i in range(self.n_agents)], dtype=np.int32)
-        # New: Randomize which agent starts with the ball (if enabled)
-        # This ensures all agents get to learn the shoot action from the goal column
-        if self.random_start_holder:
-            self.ball_holder = int(np.random.randint(self.n_agents))  # Uniformly sample agent
-        else:
-            self.ball_holder = 0  # Default: agent 0
+
+        # Sample unique random positions for all agents
+        all_cells = [(r, c) for r in range(height) for c in range(width)]
+        chosen = np.random.choice(len(all_cells), self.n_agents, replace=False)
+        self.agent_pos = np.array([all_cells[i] for i in chosen], dtype=np.int32)
+
+        # Randomly select initial ball holder
+        self.ball_holder = int(np.random.randint(self.n_agents))
         # Place ball at the initial holder's position
         self.ball_pos = self.agent_pos[self.ball_holder].copy()
         # Episode is not finished at initialization

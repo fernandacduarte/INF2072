@@ -22,6 +22,35 @@ import torch
 from algos import IQLLearner, VDNLearner, QMIXLearner, ReplayBuffer
 from env import SimpleFootballEnv
 
+# Live plotting (optional)
+try:
+    from live_plot import LivePlotter
+except ImportError:
+    LivePlotter = None
+
+
+ALGORITHM_ORDER = ["iql", "vdn", "qmix"]
+
+
+def get_overlay_algorithms(current_algorithm):
+    """Return algorithms to overlay in live plot up to and including current one."""
+    if current_algorithm not in ALGORITHM_ORDER:
+        return [current_algorithm]
+    idx = ALGORITHM_ORDER.index(current_algorithm)
+    return ALGORITHM_ORDER[: idx + 1]
+
+
+def load_multiseed_summary(path):
+    """Load episode mean/std reward arrays from a multiseed summary CSV."""
+    means = []
+    stds = []
+    with open(path, mode="r", newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            means.append(float(row["mean_reward"]))
+            stds.append(float(row["std_reward"]))
+    return means, stds
+
 
 def set_global_seed(seed):
     """Set Python, NumPy, and PyTorch random seeds for reproducibility."""
@@ -204,7 +233,8 @@ def run_training(algorithm,
                  output_csv=None,
                  output_model=None,
                  seed=0,
-                 eval_episodes=20):
+                 eval_episodes=20,
+                 live_plotter=None):
     """
     Train an agent on the football environment.
 
@@ -306,6 +336,9 @@ def run_training(algorithm,
         # Store episode reward and epsilon for logging
         rewards.append(episode_reward)
         epsilons.append(episode_epsilon)
+        # Live plot update (if enabled)
+        if live_plotter is not None:
+            live_plotter.update(algorithm, episode, rewards, seed=seed)
         # Decay epsilon for next episode (exploration decreases over time)
         epsilon = max(min_epsilon, epsilon * epsilon_decay)
 
@@ -361,14 +394,38 @@ def run_multi_seed_training(
     seeds,
     output_dir,
     eval_episodes,
+    live_plot=False,
 ):
     """
     Run training and evaluation across multiple seeds.
     For each seed, saves per-seed logs and models, then aggregates results.
     """
     os.makedirs(output_dir, exist_ok=True)
+
     all_rewards = []  # List of per-seed reward curves
     seed_results = []  # List of per-seed evaluation metrics
+
+    # Initialize live plotter if requested
+    live_plotter = None
+    if live_plot and LivePlotter is not None:
+        overlay_algorithms = get_overlay_algorithms(algorithm)
+        live_plotter = LivePlotter(algorithms=overlay_algorithms)
+
+        # Preload previously trained algorithms (if their summaries exist).
+        for previous_algorithm in overlay_algorithms:
+            if previous_algorithm == algorithm:
+                continue
+
+            summary_path = os.path.join(output_dir, f"{previous_algorithm}_multiseed_summary.csv")
+            if not os.path.exists(summary_path):
+                print(
+                    f"Live plot overlay: {summary_path} not found; "
+                    f"skipping {previous_algorithm.upper()}."
+                )
+                continue
+
+            mean_rewards, std_rewards = load_multiseed_summary(summary_path)
+            live_plotter.set_reference_curve(previous_algorithm, mean_rewards, std_rewards)
 
     for seed in seeds:
         # Generate unique output file names for each seed
@@ -384,6 +441,7 @@ def run_multi_seed_training(
             output_model=output_model,
             seed=seed,
             eval_episodes=eval_episodes,
+            live_plotter=live_plotter,
         )
         all_rewards.append(result["rewards"])
         seed_results.append(
@@ -406,6 +464,9 @@ def run_multi_seed_training(
     print(f"Saved multiseed reward summary to {summary_curve_path}")
     print(f"Saved multiseed eval summary to {summary_eval_path}")
 
+    # Close live plot at the end to avoid blocking additional CLI runs.
+    if live_plotter is not None:
+        live_plotter.close()
     return summary_curve_path, summary_eval_path
 
 
@@ -443,6 +504,10 @@ def main():
     # Output model path
     parser.add_argument("--save-model", default=None,
                         help="Path to save the trained model checkpoint")
+
+    # Live plot flag
+    parser.add_argument("--live-plot", action="store_true",
+                        help="Enable live plotting of rewards during training (multi-seed only)")
     # Parse command-line arguments
     args = parser.parse_args()
 
@@ -459,6 +524,7 @@ def main():
             output_model=output_model,
             seed=args.seed,
             eval_episodes=args.eval_episodes,
+            live_plotter=None,  # Only enabled for multi-seed
         )
     else:
         # Multi-seed mode: run a sweep of seeds and aggregate results
@@ -473,6 +539,7 @@ def main():
             seeds=seeds,
             output_dir=args.output_dir,
             eval_episodes=args.eval_episodes,
+            live_plot=args.live_plot,
         )
 
 
