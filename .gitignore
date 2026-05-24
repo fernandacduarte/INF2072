@@ -1,9 +1,4 @@
 /comparison.png
 /comparison_epsilon.png
 /futebol2d/__pycache__/*.pyc
-/futebol2d/iql_model.pth
-/futebol2d/iql_training.csv
-/futebol2d/qmix_model.pth
-/futebol2d/qmix_training.csv
-/futebol2d/vdn_model.pth
-/futebol2d/vdn_training.csv
+/futebol2d/runs_*

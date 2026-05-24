@@ -311,30 +311,44 @@ class VDNLearner(IQLLearner):
         """
         obs, actions, rewards, next_obs, dones = batch
         batch_size = obs.shape[0]
-        
-        # Reshape batch for vectorized computation across agents
-        obs_agent = torch.tensor(obs.reshape(batch_size * self.n_agents, -1), device=self.device)
-        next_obs_agent = torch.tensor(next_obs.reshape(batch_size * self.n_agents, -1), device=self.device)
-        actions_agent = torch.tensor(actions.reshape(batch_size * self.n_agents), device=self.device)
 
-        # Forward: compute Q-values for all agents
-        q_values = torch.cat([self.q_networks[i](obs_agent[i::self.n_agents]) for i in range(self.n_agents)], dim=0)
-        # Extract Q-values for taken actions
-        q_taken = q_values.gather(1, actions_agent.unsqueeze(1)).squeeze(1)
+        # Build explicit (batch, n_agents, n_actions) tensors to avoid index misalignment.
+        # obs_tensor: shape (batch, n_agents, obs_dim)
+        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
+        next_obs_tensor = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+        actions_tensor = torch.tensor(actions, dtype=torch.long, device=self.device)
 
-        # Backward: compute target using target networks
+        # Forward: Q-values per agent, then gather each agent's chosen action.
+        # q_values: shape (batch, n_agents, n_actions)
+        # Each agent's Q-network processes its own observations for the whole batch.
+        q_values = torch.stack(
+            [self.q_networks[i](obs_tensor[:, i, :]) for i in range(self.n_agents)],
+            dim=1,  # stack along agent dimension
+        )
+        # q_taken: shape (batch, n_agents), each entry is Q-value for the action taken by that agent
+        q_taken = q_values.gather(2, actions_tensor.unsqueeze(-1)).squeeze(-1)
+        # current_total: shape (batch,), sum Q-values across all agents for each sample
+        current_total = q_taken.sum(dim=1)
+
+        # Backward: Double-Q target to reduce overestimation bias (prevents value spikes/loops)
+        # 1) Select next actions with online Q-networks (greedy action selection)
+        # 2) Evaluate those actions with target networks (no gradient)
         with torch.no_grad():
-            # Get target Q-values from all target networks
-            next_q_values = torch.cat([
-                self.target_networks[i](next_obs_agent[i::self.n_agents]) for i in range(self.n_agents)
-            ], dim=0)
-            # Get max Q-values per agent
-            next_max = next_q_values.view(self.n_agents, batch_size, -1).max(dim=2)[0]
-            # Sum over agents: total = sum_i max_a' Q_target_i
-            next_total = next_max.sum(dim=0)
+            # online_next_q: shape (batch, n_agents, n_actions)
+            # Compute next actions using current (online) Q-networks
+            online_next_q = torch.stack(
+                [self.q_networks[i](next_obs_tensor[:, i, :]) for i in range(self.n_agents)],
+                dim=1,
+            )
+            next_actions = online_next_q.argmax(dim=2, keepdim=True)  # Greedy actions per agent
 
-        # Current total: sum individual Q-values taken
-        current_total = q_taken.view(self.n_agents, batch_size).sum(dim=0)
+            # Evaluate those actions using target Q-networks (Double-Q trick)
+            target_next_q = torch.stack(
+                [self.target_networks[i](next_obs_tensor[:, i, :]) for i in range(self.n_agents)],
+                dim=1,
+            )
+            next_q_taken = target_next_q.gather(2, next_actions).squeeze(-1)  # Q-values at selected actions
+            next_total = next_q_taken.sum(dim=1)  # Sum across agents for joint value
         
         # Compute target with reward and done mask
         reward_tensor = torch.tensor(rewards[:, 0], dtype=torch.float32, device=self.device)
@@ -346,6 +360,8 @@ class VDNLearner(IQLLearner):
         for opt in self.optimizers:
             opt.zero_grad()
         loss.backward()
+        # Clip gradients for stability (prevents large updates that destabilize learning)
+        nn.utils.clip_grad_norm_([p for net in self.q_networks for p in net.parameters()], max_norm=10.0)
         for opt in self.optimizers:
             opt.step()
         
@@ -459,33 +475,39 @@ class QMIXLearner(VDNLearner):
         """
         obs, actions, rewards, next_obs, dones = batch
         batch_size = obs.shape[0]
-        
-        # Reshape observations for vectorized computation
-        obs_tensor = torch.tensor(obs.reshape(batch_size * self.n_agents, -1), device=self.device)
-        next_obs_tensor = torch.tensor(next_obs.reshape(batch_size * self.n_agents, -1), device=self.device)
-        actions_agent = torch.tensor(actions.reshape(batch_size * self.n_agents), device=self.device)
 
-        # Forward: compute individual Q-values for all agents
-        q_values = [self.q_networks[i](obs_tensor[i::self.n_agents]) for i in range(self.n_agents)]
-        # Extract Q-values for taken actions
-        q_taken = torch.stack([
-            q_values[i].gather(1, actions_agent[i::self.n_agents].unsqueeze(1)).squeeze(1)
-            for i in range(self.n_agents)
-        ], dim=1)  # Shape: (batch_size, n_agents)
+        # Keep explicit (batch, n_agents, obs_dim) structure for correct indexing.
+        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
+        next_obs_tensor = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+        actions_tensor = torch.tensor(actions, dtype=torch.long, device=self.device)
 
-        # Mix individual Q-values using mixer
-        state = torch.tensor(obs.reshape(batch_size, -1), device=self.device)
-        total_q = self.mixer(q_taken, state).squeeze(1)  # Shape: (batch_size,)
+        # Forward pass: per-agent Q-values and selected Q(s, a) for the executed actions.
+        q_values = torch.stack(
+            [self.q_networks[i](obs_tensor[:, i, :]) for i in range(self.n_agents)],
+            dim=1,
+        )  # (batch_size, n_agents, n_actions)
+        q_taken = q_values.gather(2, actions_tensor.unsqueeze(-1)).squeeze(-1)  # (batch_size, n_agents)
 
-        # Backward: compute target using target networks and target mixer
+        # Mix per-agent Q-values into joint action-value.
+        state = torch.tensor(obs.reshape(batch_size, -1), dtype=torch.float32, device=self.device)
+        total_q = self.mixer(q_taken, state).squeeze(1)  # (batch_size,)
+
+        # Double-Q target: action selection from online networks, evaluation via target networks.
         with torch.no_grad():
-            # Get target Q-values from target networks
-            next_q_values = [self.target_networks[i](next_obs_tensor[i::self.n_agents]) for i in range(self.n_agents)]
-            # Get max Q-values per agent
-            next_max = torch.stack([q.max(dim=1)[0] for q in next_q_values], dim=1)  # Shape: (batch_size, n_agents)
-            # Mix using target mixer
-            next_state = torch.tensor(next_obs.reshape(batch_size, -1), device=self.device)
-            next_total_q = self.target_mixer(next_max, next_state).squeeze(1)  # Shape: (batch_size,)
+            online_next_q = torch.stack(
+                [self.q_networks[i](next_obs_tensor[:, i, :]) for i in range(self.n_agents)],
+                dim=1,
+            )  # (batch_size, n_agents, n_actions)
+            next_actions = online_next_q.argmax(dim=2, keepdim=True)  # (batch_size, n_agents, 1)
+
+            target_next_q = torch.stack(
+                [self.target_networks[i](next_obs_tensor[:, i, :]) for i in range(self.n_agents)],
+                dim=1,
+            )  # (batch_size, n_agents, n_actions)
+            next_q_taken = target_next_q.gather(2, next_actions).squeeze(-1)  # (batch_size, n_agents)
+
+            next_state = torch.tensor(next_obs.reshape(batch_size, -1), dtype=torch.float32, device=self.device)
+            next_total_q = self.target_mixer(next_q_taken, next_state).squeeze(1)  # (batch_size,)
         
         # Compute target = r + gamma * Q_tot_target * (1 - done)
         reward_tensor = torch.tensor(rewards[:, 0], dtype=torch.float32, device=self.device)
@@ -496,6 +518,11 @@ class QMIXLearner(VDNLearner):
         loss = nn.functional.mse_loss(total_q, target)
         self.optimizer.zero_grad()
         loss.backward()
+        # Clip gradients for stability in joint value optimization.
+        nn.utils.clip_grad_norm_(
+            list(self.mixer.parameters()) + [p for net in self.q_networks for p in net.parameters()],
+            max_norm=10.0,
+        )
         self.optimizer.step()
         
         return loss.item()

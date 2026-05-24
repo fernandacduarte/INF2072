@@ -16,6 +16,9 @@ The script renders a text grid showing:
 """
 import argparse
 import time
+import csv
+import os
+from pathlib import Path
 
 import torch
 
@@ -47,7 +50,72 @@ def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):
     raise ValueError(f"Unknown learner: {name}")
 
 
-def evaluate(algorithm, model_path, device, n_agents=2, episodes=1, delay=0.5):
+def resolve_best_model_path(algorithm, models_dir):
+    models_root = Path(models_dir)
+    eval_csv = models_root / f"{algorithm}_multiseed_eval.csv"
+
+    if eval_csv.exists():
+        rows = []
+        with open(eval_csv, newline="", encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                rows.append(row)
+
+        if not rows:
+            raise ValueError(f"Empty multiseed eval file: {eval_csv}")
+
+        # Best seed selection priority:
+        # 1) higher score_rate
+        # 2) higher eval_mean_reward
+        # 3) higher train_last20_mean
+        def row_key(row):
+            return (
+                float(row.get("score_rate", 0.0)),
+                float(row.get("eval_mean_reward", -1e9)),
+                float(row.get("train_last20_mean", -1e9)),
+            )
+
+        best = max(rows, key=row_key)
+        model_path_raw = best.get("model_path")
+        if not model_path_raw:
+            raise ValueError(f"Missing model_path column value in: {eval_csv}")
+
+        candidate_paths = []
+        raw_path = Path(model_path_raw)
+
+        # If CSV stores relative paths like runs_all\qmix_seed0_model.pth
+        candidate_paths.append(raw_path)
+        candidate_paths.append(models_root / raw_path.name)
+        # If CSV stores path relative to models dir parent
+        candidate_paths.append(models_root.parent / raw_path)
+
+        for p in candidate_paths:
+            if p.exists():
+                print(
+                    f"Selected best seed for {algorithm.upper()}: "
+                    f"seed={best.get('seed')} score_rate={best.get('score_rate')} "
+                    f"eval_mean_reward={best.get('eval_mean_reward')} model={p}"
+                )
+                return str(p)
+
+        raise FileNotFoundError(
+            "Could not resolve model path from multiseed eval CSV. "
+            f"Tried: {[str(p) for p in candidate_paths]}"
+        )
+
+    # Fallback for single-seed runs without multiseed_eval.csv
+    fallback_model = models_root / f"{algorithm}_model.pth"
+    if fallback_model.exists():
+        print(f"Using fallback model: {fallback_model}")
+        return str(fallback_model)
+
+    raise FileNotFoundError(
+        f"Could not find {eval_csv} or fallback model {fallback_model}. "
+        "Run multi-seed training first or place the single model in models_dir."
+    )
+
+
+def evaluate(algorithm, models_dir, device, n_agents=2, episodes=1, delay=0.5):
     """
     Load trained model and evaluate with rendering.
 
@@ -83,14 +151,12 @@ def evaluate(algorithm, model_path, device, n_agents=2, episodes=1, delay=0.5):
     # Calculate state dimension (flattened all agent observations)
     state_dim = obs_dim * n_agents
 
+    # Resolve best model path automatically
+    model_path = resolve_best_model_path(algorithm, models_dir)
+
     # Create learner instance (skeleton for loading)
     learner = make_learner(algorithm, obs_dim, n_actions, n_agents, state_dim, device)
-    # Validate model path is provided
-    if model_path is None:
-        raise ValueError("A model checkpoint path is required for evaluation.")
-
     # Load trained model from checkpoint
-    # Use algorithm-specific class method to ensure proper restoration
     if algorithm == "qmix":
         learner = QMIXLearner.load_from_checkpoint(model_path, obs_dim, n_actions, n_agents, state_dim, device=device)
     else:
@@ -146,9 +212,9 @@ def main():
     # Algorithm selection (required)
     parser.add_argument("--algo", choices=["iql", "vdn", "qmix"], required=True,
                         help="Learning algorithm used to train the model")
-    # Model checkpoint path (required)
-    parser.add_argument("--model-path", required=True,
-                        help="Path to the saved model checkpoint")
+    # Models directory (required)
+    parser.add_argument("--models-dir", required=True,
+                        help="Directory containing trained models and multiseed eval CSV")
     # Computation device
     parser.add_argument("--device", default="cpu",
                         help="Device to evaluate on (cpu or cuda)")
@@ -165,7 +231,7 @@ def main():
     args = parser.parse_args()
 
     # Run evaluation with parsed arguments
-    evaluate(args.algo, args.model_path, args.device, n_agents=args.n_agents,
+    evaluate(args.algo, args.models_dir, args.device, n_agents=args.n_agents,
              episodes=args.episodes, delay=args.delay)
 
 

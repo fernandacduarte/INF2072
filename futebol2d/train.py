@@ -22,7 +22,14 @@ import torch
 from algos import IQLLearner, VDNLearner, QMIXLearner, ReplayBuffer
 from env import SimpleFootballEnv
 
-def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):
+
+def set_global_seed(seed):
+    """Set Python, NumPy, and PyTorch random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device, lr=0.001):
     """
     Factory function to create appropriate learner based on algorithm name.
 
@@ -39,14 +46,41 @@ def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):
     """
     if name == "iql":
         # Independent Q-Learning: simple baseline
-        return IQLLearner(obs_dim, n_actions, n_agents, device=device)
+        return IQLLearner(obs_dim, n_actions, n_agents, lr=lr, device=device)
     if name == "vdn":
         # Value Decomposition Networks: sum-based factorization
-        return VDNLearner(obs_dim, n_actions, n_agents, device=device)
+        return VDNLearner(obs_dim, n_actions, n_agents, lr=lr, device=device)
     if name == "qmix":
         # QMIX: learnable mixing network with monotonicity
-        return QMIXLearner(obs_dim, n_actions, n_agents, state_dim, device=device)
+        return QMIXLearner(obs_dim, n_actions, n_agents, state_dim, lr=lr, device=device)
     raise ValueError(f"Unknown learner: {name}")
+
+
+def get_training_hyperparams(algorithm):
+    """Return algorithm-specific training hyperparameters."""
+    # Defaults used by IQL/VDN.
+    params = {
+        "lr": 0.001,
+        "epsilon_decay": 0.995,
+        "min_epsilon": 0.05,
+        "target_update": 100,
+    }
+
+    # QMIX stability tuning:
+    # 1) slower epsilon decay + higher floor for persistent exploration,
+    # 2) more frequent target synchronization,
+    # 3) lower learning rate to reduce optimization variance.
+    if algorithm == "qmix":
+        params.update(
+            {
+                "lr": 0.0003,
+                "epsilon_decay": 0.998,
+                "min_epsilon": 0.10,
+                "target_update": 50,
+            }
+        )
+
+    return params
 
 
 def save_training_csv(path, rewards, epsilons):
@@ -80,7 +114,97 @@ def save_training_csv(path, rewards, epsilons):
             writer.writerow({"episode": episode, "reward": reward, "epsilon": epsilon})
 
 
-def run_training(algorithm, episodes, device, n_agents=2, output_csv=None, output_model=None):
+def save_multiseed_curve_csv(path, reward_curves):
+    """
+    Save per-episode reward statistics (mean, std, min, max) aggregated across seeds.
+    Each row is one episode, columns are statistics over all seeds.
+    """
+    reward_array = np.array(reward_curves, dtype=np.float32)
+    means = reward_array.mean(axis=0)
+    stds = reward_array.std(axis=0)
+    mins = reward_array.min(axis=0)
+    maxs = reward_array.max(axis=0)
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, mode="w", newline="", encoding="utf-8") as csv_file:
+        fieldnames = ["episode", "mean_reward", "std_reward", "min_reward", "max_reward"]
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for episode in range(1, reward_array.shape[1] + 1):
+            idx = episode - 1
+            writer.writerow(
+                {
+                    "episode": episode,
+                    "mean_reward": float(means[idx]),
+                    "std_reward": float(stds[idx]),
+                    "min_reward": float(mins[idx]),
+                    "max_reward": float(maxs[idx]),
+                }
+            )
+
+
+def save_multiseed_eval_csv(path, seed_results):
+    """
+    Save per-seed evaluation metrics and artifact paths for multi-seed runs.
+    Each row is one seed, columns are metrics and file paths.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, mode="w", newline="", encoding="utf-8") as csv_file:
+        fieldnames = [
+            "seed",
+            "eval_mean_reward",
+            "eval_std_reward",
+            "score_rate",
+            "train_last20_mean",
+            "training_csv",
+            "model_path",
+        ]
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in seed_results:
+            writer.writerow(result)
+
+
+def evaluate_greedy_policy(learner, n_agents, episodes=20):
+    """
+    Evaluate a trained policy with greedy actions (epsilon=0.0).
+    Returns mean/std reward and score rate over multiple episodes.
+    """
+    env = SimpleFootballEnv(n_agents=n_agents)
+    episode_rewards = []
+    score_count = 0
+
+    for _ in range(episodes):
+        obs = env.reset()
+        done = False
+        total_reward = 0.0
+        info = {"score": False}
+
+        while not done:
+            actions = learner.act(obs, epsilon=0.0)
+            obs, rewards, dones, info = env.step(actions)
+            total_reward += rewards[0]
+            done = dones[0]
+
+        episode_rewards.append(total_reward)
+        if info.get("score", False):
+            score_count += 1
+
+    return {
+        "eval_mean_reward": float(np.mean(episode_rewards)),
+        "eval_std_reward": float(np.std(episode_rewards)),
+        "score_rate": float(score_count / episodes) if episodes > 0 else 0.0,
+    }
+
+
+def run_training(algorithm,
+                 episodes,
+                 device,
+                 n_agents=2,
+                 output_csv=None,
+                 output_model=None,
+                 seed=0,
+                 eval_episodes=20):
     """
     Train an agent on the football environment.
 
@@ -108,6 +232,9 @@ def run_training(algorithm, episodes, device, n_agents=2, output_csv=None, outpu
     Returns:
         tuple: (rewards_list, epsilons_list)
     """
+    # Seed all random generators for reproducible runs.
+    set_global_seed(seed)  # Ensure reproducibility for each run
+
     # Initialize environment with specified number of agents
     env = SimpleFootballEnv(n_agents=n_agents)
     # Get observation dimension from environment
@@ -119,17 +246,26 @@ def run_training(algorithm, episodes, device, n_agents=2, output_csv=None, outpu
     # Calculate state dimension (flattened all agent observations)
     state_dim = obs_dim * n_agents
     
+    # Algorithm-specific hyperparameters (QMIX gets dedicated stability settings).
+    hparams = get_training_hyperparams(algorithm)
+
     # Create learner based on algorithm
-    learner = make_learner(algorithm, obs_dim, n_actions, n_agents, state_dim, device)
+    learner = make_learner(algorithm,
+                           obs_dim,
+                           n_actions,
+                           n_agents,
+                           state_dim,
+                           device,
+                           lr=hparams["lr"])
     # Create replay buffer for experience storage
     buffer = ReplayBuffer(capacity=10000, n_agents=n_agents, obs_dim=obs_dim)
 
     # Exploration schedule parameters
     epsilon = 0.5  # Initial exploration probability
-    epsilon_decay = 0.995  # Decay rate per episode
-    min_epsilon = 0.05  # Minimum exploration probability
+    epsilon_decay = hparams["epsilon_decay"]  # Decay rate per episode
+    min_epsilon = hparams["min_epsilon"]  # Minimum exploration probability
     batch_size = 32  # Training batch size
-    target_update = 100  # Update target networks every N episodes
+    target_update = hparams["target_update"]  # Update target networks every N episodes
 
     rewards = []  # Record episode rewards
     epsilons = []  # Record epsilon values
@@ -197,7 +333,80 @@ def run_training(algorithm, episodes, device, n_agents=2, output_csv=None, outpu
     learner.save(output_model)
     print(f"Saved trained model to {output_model}")
 
-    return rewards, epsilons
+    # Evaluate the trained model using greedy policy (no exploration)
+    eval_metrics = evaluate_greedy_policy(learner, n_agents=n_agents, episodes=eval_episodes)
+    print(
+        "Eval "
+        f"mean_reward={eval_metrics['eval_mean_reward']:.3f} "
+        f"std={eval_metrics['eval_std_reward']:.3f} "
+        f"score_rate={eval_metrics['score_rate']:.3f}"
+    )
+
+    # Return all relevant results for aggregation in multi-seed mode
+    return {
+        "rewards": rewards,
+        "epsilons": epsilons,
+        "seed": seed,
+        "output_csv": output_csv,
+        "output_model": output_model,
+        **eval_metrics,
+    }
+
+
+def run_multi_seed_training(
+    algorithm,
+    episodes,
+    device,
+    n_agents,
+    seeds,
+    output_dir,
+    eval_episodes,
+):
+    """
+    Run training and evaluation across multiple seeds.
+    For each seed, saves per-seed logs and models, then aggregates results.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    all_rewards = []  # List of per-seed reward curves
+    seed_results = []  # List of per-seed evaluation metrics
+
+    for seed in seeds:
+        # Generate unique output file names for each seed
+        output_csv = os.path.join(output_dir, f"{algorithm}_seed{seed}_training.csv")
+        output_model = os.path.join(output_dir, f"{algorithm}_seed{seed}_model.pth")
+        # Run training and evaluation for this seed
+        result = run_training(
+            algorithm=algorithm,
+            episodes=episodes,
+            device=device,
+            n_agents=n_agents,
+            output_csv=output_csv,
+            output_model=output_model,
+            seed=seed,
+            eval_episodes=eval_episodes,
+        )
+        all_rewards.append(result["rewards"])
+        seed_results.append(
+            {
+                "seed": result["seed"],
+                "eval_mean_reward": result["eval_mean_reward"],
+                "eval_std_reward": result["eval_std_reward"],
+                "score_rate": result["score_rate"],
+                "train_last20_mean": float(np.mean(result["rewards"][-20:])),
+                "training_csv": result["output_csv"],
+                "model_path": result["output_model"],
+            }
+        )
+
+    # Save aggregate statistics across all seeds
+    summary_curve_path = os.path.join(output_dir, f"{algorithm}_multiseed_summary.csv")
+    summary_eval_path = os.path.join(output_dir, f"{algorithm}_multiseed_eval.csv")
+    save_multiseed_curve_csv(summary_curve_path, all_rewards)
+    save_multiseed_eval_csv(summary_eval_path, seed_results)
+    print(f"Saved multiseed reward summary to {summary_curve_path}")
+    print(f"Saved multiseed eval summary to {summary_eval_path}")
+
+    return summary_curve_path, summary_eval_path
 
 
 def main():
@@ -216,6 +425,18 @@ def main():
     # Number of agents
     parser.add_argument("--n-agents", type=int, default=2,
                         help="Number of agents in the environment")
+    # Base random seed
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Base random seed")
+    # Number of seeds for repeated runs
+    parser.add_argument("--n-seeds", type=int, default=1,
+                        help="Number of sequential seeds to run (starting from --seed)")
+    # Greedy evaluation episodes after each training run
+    parser.add_argument("--eval-episodes", type=int, default=20,
+                        help="Number of greedy evaluation episodes per trained model")
+    # Output directory for run artifacts
+    parser.add_argument("--output-dir", default=".",
+                        help="Directory to store logs, models, and multiseed summaries")
     # Output CSV path
     parser.add_argument("--output-csv", default=None,
                         help="Path to save training results as a CSV file")
@@ -225,14 +446,34 @@ def main():
     # Parse command-line arguments
     args = parser.parse_args()
 
-    # Set random seeds for reproducibility
-    random.seed(0)  # Python random
-    np.random.seed(0)  # NumPy random
-    torch.manual_seed(0)  # PyTorch random
-
-    # Run training with parsed arguments
-    run_training(args.algo, args.episodes, args.device, n_agents=args.n_agents, 
-                 output_csv=args.output_csv, output_model=args.save_model)
+    # If only one seed, run a single experiment (default behavior)
+    if args.n_seeds <= 1:
+        output_csv = args.output_csv or os.path.join(args.output_dir, f"{args.algo}_training.csv")
+        output_model = args.save_model or os.path.join(args.output_dir, f"{args.algo}_model.pth")
+        run_training(
+            args.algo,
+            args.episodes,
+            args.device,
+            n_agents=args.n_agents,
+            output_csv=output_csv,
+            output_model=output_model,
+            seed=args.seed,
+            eval_episodes=args.eval_episodes,
+        )
+    else:
+        # Multi-seed mode: run a sweep of seeds and aggregate results
+        if args.output_csv or args.save_model:
+            print("Ignoring --output-csv and --save-model in multiseed mode; per-seed names are auto-generated.")
+        seeds = list(range(args.seed, args.seed + args.n_seeds))
+        run_multi_seed_training(
+            algorithm=args.algo,
+            episodes=args.episodes,
+            device=args.device,
+            n_agents=args.n_agents,
+            seeds=seeds,
+            output_dir=args.output_dir,
+            eval_episodes=args.eval_episodes,
+        )
 
 
 if __name__ == "__main__":

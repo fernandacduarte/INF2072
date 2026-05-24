@@ -12,8 +12,12 @@ class SimpleFootballEnv:
     Minimal cooperative football-like grid environment.
 
     N agents cooperate to score in the rightmost goal area (goal column).
-    The team earns +1 reward when the ball-holder shoots from the rightmost column,
-    -0.001 per step to encourage fast solutions, and 0 for timeout.
+        The team uses a shaped shared reward to improve sample efficiency:
+            - strong bonus for scoring,
+            - small step penalty,
+            - dense progress bonus as the ball moves right,
+            - pass bonus if possession moves forward,
+            - failed shot and timeout penalties.
 
     Environment State:
       - grid_shape: (height, width) tuple defining grid dimensions
@@ -39,7 +43,8 @@ class SimpleFootballEnv:
       - 5: shoot (score if ball-holder is in rightmost column)
     """
 
-    def __init__(self, grid_shape=(5, 6), n_agents=2, max_steps=50):
+    def __init__(self, grid_shape=(5, 6), n_agents=2, max_steps=50, reward_weights=None,
+                 random_start_holder=True):  # New: randomize initial ball holder for better agent coverage
         """
         Initialize the football environment.
 
@@ -47,6 +52,9 @@ class SimpleFootballEnv:
             grid_shape (tuple): (height, width) of the grid world. Default (5, 6).
             n_agents (int): Number of cooperative agents. Default 2.
             max_steps (int): Maximum steps per episode. Default 50.
+            reward_weights (dict): Optional reward shaping coefficients.
+            random_start_holder (bool): If True, sample the initial ball holder uniformly
+                on reset. This improves role coverage during training.
         """
         # Store grid dimensions (used for normalization and boundary checks)
         self.grid_shape = grid_shape
@@ -56,10 +64,46 @@ class SimpleFootballEnv:
         self.n_agents = n_agents
         # Number of discrete actions each agent can take
         self.action_dim = 6
+        # Whether to randomize which agent starts with the ball each episode
+        # This helps all agents learn ball-holder behavior, not just agent 0
+        self.random_start_holder = random_start_holder
+        # Reward shaping coefficients (kept configurable for ablation studies)
+        default_reward_weights = {
+            "goal": 1.5,
+            "step": -0.005,
+            "progress": 0.15,
+            "shoot_fail": -0.03,
+            "forward_pass": 0.04,
+            "backward_pass": -0.02,
+            "timeout": -0.2,
+        }
+        self.reward_weights = default_reward_weights
+        if reward_weights is not None:
+            self.reward_weights.update(reward_weights)
         # Human-readable action names for debugging and visualization
         self.action_names = ["stay", "up", "down", "left", "right", "shoot"]
         # Initialize environment state (agent positions, ball, episode flags)
         self.reset()
+
+    def _ball_progress(self):
+        """Return normalized horizontal ball progress in [0, 1]."""
+        width = self.grid_shape[1]
+        if width <= 1:
+            return 0.0
+        return float(self.ball_pos[1]) / float(width - 1)
+
+    def _pass_reward(self, previous_holder):
+        """Reward forward possession changes and penalize backward ones."""
+        if previous_holder == self.ball_holder:
+            return 0.0
+
+        previous_col = int(self.agent_pos[previous_holder][1])
+        new_col = int(self.agent_pos[self.ball_holder][1])
+        if new_col > previous_col:
+            return self.reward_weights["forward_pass"]
+        if new_col < previous_col:
+            return self.reward_weights["backward_pass"]
+        return 0.0
 
     def reset(self):
         """
@@ -79,10 +123,14 @@ class SimpleFootballEnv:
         # Initialize agent positions: agent i starts at [i % height, 0]
         # This spreads agents vertically on the leftmost column
         self.agent_pos = np.array([[i % height, 0] for i in range(self.n_agents)], dtype=np.int32)
-        # Initialize ball at [0, 0] (with first agent)
-        self.ball_pos = np.array([0, 0], dtype=np.int32)
-        # Agent 0 starts with the ball
-        self.ball_holder = 0
+        # New: Randomize which agent starts with the ball (if enabled)
+        # This ensures all agents get to learn the shoot action from the goal column
+        if self.random_start_holder:
+            self.ball_holder = int(np.random.randint(self.n_agents))  # Uniformly sample agent
+        else:
+            self.ball_holder = 0  # Default: agent 0
+        # Place ball at the initial holder's position
+        self.ball_pos = self.agent_pos[self.ball_holder].copy()
         # Episode is not finished at initialization
         self.done = False
         # Return initial observations for all agents
@@ -195,7 +243,12 @@ class SimpleFootballEnv:
         Execute one environment step with given actions.
 
         All agents act simultaneously. Ball transfer happens if agent moves to ball location.
-        Reward is +1 for scoring, -0.001 per step (to encourage efficiency), 0 for timeout.
+                Reward is shared and shaped for better credit assignment:
+                    - per-step cost,
+                    - ball progress term,
+                    - pass shaping,
+                    - score bonus,
+                    - failed-shot and timeout penalties.
 
         Args:
             actions (list): Action index (0-5) for each agent in order.
@@ -213,8 +266,11 @@ class SimpleFootballEnv:
 
         # Increment step counter
         self.step_count += 1
-        # Initialize reward (will be updated based on episode outcome)
-        reward = 0.0
+        # Track previous state for dense shaping terms
+        previous_holder = self.ball_holder
+        previous_progress = self._ball_progress()
+        # Start with a small step cost to encourage shorter episodes
+        reward = self.reward_weights["step"]
 
         # Apply all agents' movements simultaneously
         for agent_id, action in enumerate(actions):
@@ -222,18 +278,27 @@ class SimpleFootballEnv:
 
         # Update ball position and handle ball possession transfers
         self._resolve_ball_possession()
+        # Dense shaping term: reward positive progress of the ball to goal column
+        progress_delta = self._ball_progress() - previous_progress
+        reward += self.reward_weights["progress"] * progress_delta
+        # Encourage useful passes that move the ball forward
+        reward += self._pass_reward(previous_holder)
+
+        # Score check is reused for both transition logic and info payload.
+        scored = self._check_score(actions)
 
         # Check if team scored a goal
-        if self._check_score(actions):
-            reward = 1.0  # Positive reward for scoring
+        if scored:
+            reward += self.reward_weights["goal"]
             self.done = True
         # Check if episode reached maximum length (timeout)
         elif self.step_count >= self.max_steps:
-            reward = 0.0  # No reward for timeout
+            reward += self.reward_weights["timeout"]
             self.done = True
-        # Normal step (no goal, not timeout)
         else:
-            reward = -0.001  # Small negative reward to encourage fast solutions
+            # Penalize failed shots to avoid blind shooting from bad positions.
+            if actions[previous_holder] == 5:
+                reward += self.reward_weights["shoot_fail"]
 
         # Get next observations for all agents
         obs = self._get_obs()
@@ -242,7 +307,7 @@ class SimpleFootballEnv:
         # All agents share the same done flag
         dones = [self.done] * self.n_agents
         # Extra information about episode outcome
-        info = {"score": reward > 0}
+        info = {"score": scored}
         
         return obs, rewards, dones, info
 
