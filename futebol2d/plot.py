@@ -55,6 +55,65 @@ def resolve_auto_compare_files(runs_dir, seed=None):
     return [str(path) for path in files], labels, str(default_save_name)
 
 
+def _best_seed_row(eval_csv_path):
+    """Return best-seed row from a multiseed eval CSV using eval-time ranking."""
+    rows = []
+    with open(eval_csv_path, newline="", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            rows.append(row)
+
+    if not rows:
+        raise ValueError(f"Empty multiseed eval file: {eval_csv_path}")
+
+    # Keep same priority used by evaluator to avoid mismatched seed selection.
+    def row_key(row):
+        return (
+            float(row.get("score_rate", 0.0)),
+            float(row.get("eval_mean_reward", -1e9)),
+            float(row.get("train_last20_mean", -1e9)),
+        )
+
+    return max(rows, key=row_key)
+
+
+def resolve_best_seed_training_files(runs_dir):
+    """
+    Resolve best-seed training CSV for IQL/VDN/QMIX from multiseed eval reports.
+
+    Args:
+        runs_dir (str): Folder containing multiseed eval and per-seed training outputs.
+
+    Returns:
+        tuple: (files, labels, seeds)
+    """
+    runs_path = Path(runs_dir)
+    algos = ["iql", "vdn", "qmix"]
+
+    files = []
+    labels = []
+    seeds = []
+
+    for algo in algos:
+        eval_csv = runs_path / f"{algo}_multiseed_eval.csv"
+        if not eval_csv.exists():
+            raise FileNotFoundError(f"Missing multiseed eval CSV: {eval_csv}")
+
+        best = _best_seed_row(eval_csv)
+        seed = int(best["seed"])
+        training_csv = runs_path / f"{algo}_seed{seed}_training.csv"
+        if not training_csv.exists():
+            raise FileNotFoundError(
+                f"Best-seed training CSV not found for {algo.upper()}: {training_csv}"
+            )
+
+        files.append(str(training_csv))
+        labels.append(f"{algo.upper()} (best seed {seed})")
+        seeds.append(seed)
+
+    return files, labels, seeds
+
+
 def detect_csv_type(path):
     """Detect whether CSV is single-seed training or multiseed summary."""
     with open(path, newline="", encoding="utf-8") as csvfile:
@@ -157,6 +216,43 @@ def moving_average(values, window=20):
     # Compute convolution with uniform filter: np.ones(window) / window
     # This is equivalent to sliding average
     return np.convolve(values, np.ones(window) / window, mode="valid")
+
+
+def running_mean(values):
+    """Return per-episode running mean of a 1D array."""
+    values = np.asarray(values, dtype=np.float64)
+    return np.cumsum(values) / np.arange(1, len(values) + 1)
+
+
+def plot_best_seed_mean_reward(runs_dir, save_path=None):
+    """
+    Plot running mean reward curves for the best seed of each algorithm.
+
+    Best seed is selected from each `{algo}_multiseed_eval.csv`.
+
+    Args:
+        runs_dir (str): Folder containing run artifacts.
+        save_path (str | None): Optional output path for figure image.
+    """
+    files, labels, _ = resolve_best_seed_training_files(runs_dir)
+
+    plt.figure(figsize=(10, 5))
+    for path, label in zip(files, labels):
+        episodes, rewards, _ = load_training_csv(path)
+        mean_rewards = running_mean(rewards)
+        plt.plot(episodes, mean_rewards, label=label)
+
+    plt.xlabel("Episode")
+    plt.ylabel("Mean reward")
+    plt.title("Best-seed mean reward comparison")
+    plt.legend()
+    plt.grid(True)
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved best-seed mean-reward figure to {save_path}")
+
+    plt.show()
 
 
 def plot_training(files, labels=None, window=20, save_path=None):
@@ -283,6 +379,13 @@ if __name__ == "__main__":
         files, labels, default_save = resolve_auto_compare_files(args.runs_dir, seed=args.seed)
         save_path = args.save if args.save else default_save
         plot_training(files, labels=labels, window=args.window, save_path=save_path)
+
+        # In multiseed auto mode, also compare running mean reward for best seed per algorithm.
+        if args.seed is None:
+            best_seed_save_path = Path(save_path).with_name(
+                Path(save_path).stem + "_best_seed_mean" + Path(save_path).suffix
+            )
+            plot_best_seed_mean_reward(args.runs_dir, save_path=str(best_seed_save_path))
     else:
         # Manual mode fallback for backwards compatibility.
         if not args.files:

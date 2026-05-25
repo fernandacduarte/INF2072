@@ -125,6 +125,8 @@ class SimpleFootballEnv:
 
         # Randomly select initial ball holder
         self.ball_holder = int(np.random.randint(self.n_agents))
+        # Assist-required scoring: at least one possession change must happen before goals count.
+        self.possession_changed = False
         # Place ball at the initial holder's position
         self.ball_pos = self.agent_pos[self.ball_holder].copy()
         # Episode is not finished at initialization
@@ -141,6 +143,8 @@ class SimpleFootballEnv:
           2. All other agents' normalized positions (2*(n_agents-1) floats)
           3. Ball normalized position (2 floats)
           4. Ball possession indicator (1 float: 1.0 if holding, 0.0 otherwise)
+          5. Possession change flag (1 float: 1.0 if possession changed, 0.0 otherwise)
+          6. Remaining steps normalized (1 float: remaining_steps / max_steps)
 
         Returns:
             list: Observations, one per agent. Each obs is a 1D float32 array.
@@ -148,7 +152,9 @@ class SimpleFootballEnv:
         obs = []
         # Convert grid shape to float32 for normalization (prevents int division)
         grid_shape_f32 = np.array(self.grid_shape, dtype=np.float32)
-        
+        remaining_steps = (self.max_steps - self.step_count) / self.max_steps
+        possession_flag = np.array([1.0 if self.possession_changed else 0.0], dtype=np.float32)
+
         # Construct observation for each agent
         for i in range(self.n_agents):
             # Agent i's own position, normalized to [0, 1] range
@@ -168,7 +174,7 @@ class SimpleFootballEnv:
             has_ball = np.array([1.0 if self.ball_holder == i else 0.0], dtype=np.float32)
             
             # Concatenate all observation components and ensure float32 dtype
-            agent_obs = np.concatenate([own, all_others, ball, has_ball], axis=0).astype(np.float32)
+            agent_obs = np.concatenate([own, all_others, ball, has_ball, possession_flag, [remaining_steps]], axis=0).astype(np.float32)
             obs.append(agent_obs)
         
         return obs
@@ -368,6 +374,7 @@ class SimpleFootballEnv:
             if i != self.ball_holder and np.array_equal(self.agent_pos[i], self.ball_pos):
                 # Transfer ball to agent i
                 self.ball_holder = i
+                self.possession_changed = True
                 # Break to avoid reassigning to multiple agents in same step
                 break
 
@@ -387,6 +394,10 @@ class SimpleFootballEnv:
         """
         # If no ball holder, scoring is impossible
         if self.ball_holder is None:
+            return False
+
+        # Assist-required rule: at least one possession change must have happened this episode.
+        if not self.possession_changed:
             return False
         
         # Check if ball holder chose shoot action (action 5)
