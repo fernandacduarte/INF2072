@@ -32,6 +32,15 @@ except ImportError:
 ALGORITHM_ORDER = ["iql", "vdn", "qmix"]
 
 
+def append_live_progress(path, algorithm, seed, episode, reward):
+    """Append one live training event to shared progress file."""
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, mode="a", encoding="utf-8") as handle:
+        handle.write(f"{algorithm},{seed},{episode},{reward}\n")
+
+
 def get_overlay_algorithms(current_algorithm):
     """Return algorithms to overlay in live plot up to and including current one."""
     if current_algorithm not in ALGORITHM_ORDER:
@@ -234,7 +243,8 @@ def run_training(algorithm,
                  output_model=None,
                  seed=0,
                  eval_episodes=20,
-                 live_plotter=None):
+                 live_plotter=None,
+                 live_progress_path=None):
     """
     Train an agent on the football environment.
 
@@ -336,9 +346,14 @@ def run_training(algorithm,
         # Store episode reward and epsilon for logging
         rewards.append(episode_reward)
         epsilons.append(episode_epsilon)
+        # Always publish progress so a separate live-plot process can visualize all algorithms.
+        append_live_progress(live_progress_path, algorithm, seed, episode, episode_reward)
         # Live plot update (if enabled)
         if live_plotter is not None:
+            # In single-process mode, keep local updates fast.
             live_plotter.update(algorithm, episode, rewards, seed=seed)
+            # In multi-process mode, refresh from shared progress file to include other algorithms.
+            live_plotter.update_from_progress_file(live_progress_path)
         # Decay epsilon for next episode (exploration decreases over time)
         epsilon = max(min_epsilon, epsilon * epsilon_decay)
 
@@ -401,6 +416,7 @@ def run_multi_seed_training(
     For each seed, saves per-seed logs and models, then aggregates results.
     """
     os.makedirs(output_dir, exist_ok=True)
+    live_progress_path = os.path.join(output_dir, "live_progress.csvl")
 
     all_rewards = []  # List of per-seed reward curves
     seed_results = []  # List of per-seed evaluation metrics
@@ -408,11 +424,14 @@ def run_multi_seed_training(
     # Initialize live plotter if requested
     live_plotter = None
     if live_plot and LivePlotter is not None:
-        overlay_algorithms = get_overlay_algorithms(algorithm)
-        live_plotter = LivePlotter(algorithms=overlay_algorithms)
+        # In multi-process mode we want to display all algorithms as they train.
+        live_plotter = LivePlotter(algorithms=ALGORITHM_ORDER)
+        # Plotting owner starts a fresh shared stream for this run.
+        with open(live_progress_path, mode="w", encoding="utf-8") as handle:
+            handle.write("")
 
         # Preload previously trained algorithms (if their summaries exist).
-        for previous_algorithm in overlay_algorithms:
+        for previous_algorithm in ALGORITHM_ORDER:
             if previous_algorithm == algorithm:
                 continue
 
@@ -426,6 +445,9 @@ def run_multi_seed_training(
 
             mean_rewards, std_rewards = load_multiseed_summary(summary_path)
             live_plotter.set_reference_curve(previous_algorithm, mean_rewards, std_rewards)
+
+        # Pull any progress already written by concurrently running processes.
+        live_plotter.update_from_progress_file(live_progress_path)
 
     for seed in seeds:
         # Generate unique output file names for each seed
@@ -442,6 +464,7 @@ def run_multi_seed_training(
             seed=seed,
             eval_episodes=eval_episodes,
             live_plotter=live_plotter,
+            live_progress_path=live_progress_path,
         )
         all_rewards.append(result["rewards"])
         seed_results.append(
@@ -515,6 +538,14 @@ def main():
     if args.n_seeds <= 1:
         output_csv = args.output_csv or os.path.join(args.output_dir, f"{args.algo}_training.csv")
         output_model = args.save_model or os.path.join(args.output_dir, f"{args.algo}_model.pth")
+        live_progress_path = os.path.join(args.output_dir, "live_progress.csvl")
+        live_plotter = None
+        if args.live_plot and LivePlotter is not None:
+            live_plotter = LivePlotter(algorithms=ALGORITHM_ORDER)
+            # Plotting owner starts a fresh shared stream for this run.
+            with open(live_progress_path, mode="w", encoding="utf-8") as handle:
+                handle.write("")
+            live_plotter.update_from_progress_file(live_progress_path)
         run_training(
             args.algo,
             args.episodes,
@@ -524,8 +555,11 @@ def main():
             output_model=output_model,
             seed=args.seed,
             eval_episodes=args.eval_episodes,
-            live_plotter=None,  # Only enabled for multi-seed
+            live_plotter=live_plotter,
+            live_progress_path=live_progress_path,
         )
+        if live_plotter is not None:
+            live_plotter.close()
     else:
         # Multi-seed mode: run a sweep of seeds and aggregate results
         if args.output_csv or args.save_model:

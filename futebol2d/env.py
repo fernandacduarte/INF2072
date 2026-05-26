@@ -23,6 +23,7 @@ class SimpleFootballEnv:
       - grid_shape: (height, width) tuple defining grid dimensions
       - n_agents: number of cooperative agents
       - agent_pos: (n_agents, 2) array of agent [row, col] positions
+      - defender_pos: (2,) array of defender [row, col] position
       - ball_pos: (2,) array of ball [row, col] position
       - ball_holder: index (0 to n_agents-1) of agent currently holding ball
       - step_count: number of steps taken in current episode
@@ -31,8 +32,10 @@ class SimpleFootballEnv:
       - own position (normalized): [row/height, col/width]
       - all other agents' positions (normalized): [(n_agents-1)*2 floats]
       - ball position (normalized): [row/height, col/width]
+      - defender position (normalized): [row/height, col/width]
       - possession flag: 1.0 if agent holds ball, 0.0 otherwise
-      - Total obs_dim = 2 + 2*(n_agents-1) + 2 + 1 = 2*n_agents + 1
+      - possession-changed flag and remaining-steps ratio
+      - Total obs_dim = 2*n_agents + 5
 
     Actions (discrete, 0-5):
       - 0: stay (no movement)
@@ -73,6 +76,7 @@ class SimpleFootballEnv:
             "step": -0.005,
             "progress": 0.15,
             "shoot_fail": -0.03,
+            "defender_contact": -0.05,
             "forward_pass": 0.04,
             "backward_pass": -0.02,
             "timeout": -0.2,
@@ -129,6 +133,10 @@ class SimpleFootballEnv:
         self.possession_changed = False
         # Place ball at the initial holder's position
         self.ball_pos = self.agent_pos[self.ball_holder].copy()
+        # Spawn defender two columns left from goal line (goal is rightmost column).
+        defender_col = max(0, width - 3)
+        defender_row = int(np.random.randint(height))
+        self.defender_pos = np.array([defender_row, defender_col], dtype=np.int32)
         # Episode is not finished at initialization
         self.done = False
         # Return initial observations for all agents
@@ -142,9 +150,10 @@ class SimpleFootballEnv:
           1. Own normalized position (2 floats)
           2. All other agents' normalized positions (2*(n_agents-1) floats)
           3. Ball normalized position (2 floats)
-          4. Ball possession indicator (1 float: 1.0 if holding, 0.0 otherwise)
-          5. Possession change flag (1 float: 1.0 if possession changed, 0.0 otherwise)
-          6. Remaining steps normalized (1 float: remaining_steps / max_steps)
+          4. Defender normalized position (2 floats)
+          5. Ball possession indicator (1 float: 1.0 if holding, 0.0 otherwise)
+          6. Possession change flag (1 float: 1.0 if possession changed, 0.0 otherwise)
+          7. Remaining steps normalized (1 float: remaining_steps / max_steps)
 
         Returns:
             list: Observations, one per agent. Each obs is a 1D float32 array.
@@ -169,12 +178,17 @@ class SimpleFootballEnv:
             
             # Ball position, normalized to [0, 1] range
             ball = self.ball_pos / grid_shape_f32
+            # Defender position, normalized to [0, 1] range
+            defender = self.defender_pos / grid_shape_f32
             
             # Possession flag: 1.0 if this agent holds ball, 0.0 otherwise
             has_ball = np.array([1.0 if self.ball_holder == i else 0.0], dtype=np.float32)
             
             # Concatenate all observation components and ensure float32 dtype
-            agent_obs = np.concatenate([own, all_others, ball, has_ball, possession_flag, [remaining_steps]], axis=0).astype(np.float32)
+            agent_obs = np.concatenate(
+                [own, all_others, ball, defender, has_ball, possession_flag, [remaining_steps]],
+                axis=0,
+            ).astype(np.float32)
             obs.append(agent_obs)
         
         return obs
@@ -186,6 +200,7 @@ class SimpleFootballEnv:
         Displays a grid where:
           - '.' is empty cell
           - '|' is the goal column (rightmost, where agents shoot)
+          - 'D' is the defender
           - '0', '1', ... are agents without ball
           - '0*', '1*', ... are agents holding the ball
           - 'X' indicates collision (multiple entities in one cell)
@@ -225,6 +240,13 @@ class SimpleFootballEnv:
             # Place symbol in grid at agent's position
             grid[row][col] = symbol
 
+        # Place defender (D) on grid.
+        d_row, d_col = self.defender_pos.tolist()
+        if grid[d_row][d_col] != "." and grid[d_row][d_col] != "|":
+            grid[d_row][d_col] = "X"
+        else:
+            grid[d_row][d_col] = "D"
+
         # Format grid rows as right-aligned strings with padding for readability
         lines = [" ".join(f"{cell:>2}" for cell in row) for row in grid]
         render_text = "\n".join(lines)
@@ -234,7 +256,10 @@ class SimpleFootballEnv:
             # Print the grid visualization
             print("\n" + render_text)
             # Print current state information
-            print(f"step={self.step_count} ball_holder={self.ball_holder} ball_pos={tuple(self.ball_pos)}")
+            print(
+                f"step={self.step_count} ball_holder={self.ball_holder} "
+                f"ball_pos={tuple(self.ball_pos)} defender_pos={tuple(self.defender_pos)}"
+            )
             # Print action reference for debugging
             print(f"actions: {self.action_names}")
         
@@ -280,14 +305,18 @@ class SimpleFootballEnv:
 
         # Update ball position and handle ball possession transfers
         self._resolve_ball_possession()
+        # Resolve scoring against current state before defender reaction.
+        # This avoids retroactively blocking a valid shot with same-step defender movement.
+        scored = self._check_score(actions)
+        # Defender chases current ball holder after scoring resolution.
+        self._move_defender()
+        if np.array_equal(self.defender_pos, self.agent_pos[self.ball_holder]):
+            reward += self.reward_weights["defender_contact"]
         # Dense shaping term: reward positive progress of the ball to goal column
         progress_delta = self._ball_progress() - previous_progress
         reward += self.reward_weights["progress"] * progress_delta
         # Encourage useful passes that move the ball forward
         reward += self._pass_reward(previous_holder)
-
-        # Score check is reused for both transition logic and info payload.
-        scored = self._check_score(actions)
 
         # Check if team scored a goal
         if scored:
@@ -378,6 +407,25 @@ class SimpleFootballEnv:
                 # Break to avoid reassigning to multiple agents in same step
                 break
 
+    def _move_defender(self):
+        """Move defender one cell toward the current ball holder (greedy chase)."""
+        holder_pos = self.agent_pos[self.ball_holder]
+        delta = holder_pos - self.defender_pos
+        move = np.array([0, 0], dtype=np.int32)
+
+        # Prioritize the axis with greater distance for a direct chase.
+        if abs(int(delta[1])) > abs(int(delta[0])):
+            move[1] = int(np.sign(delta[1]))
+        elif int(delta[0]) != 0:
+            move[0] = int(np.sign(delta[0]))
+        elif int(delta[1]) != 0:
+            move[1] = int(np.sign(delta[1]))
+
+        min_coords = np.array([0, 0], dtype=np.int32)
+        max_coords = np.array(self.grid_shape, dtype=np.int32) - 1
+        new_pos = self.defender_pos + move
+        self.defender_pos = np.minimum(np.maximum(new_pos, min_coords), max_coords)
+
     def _check_score(self, actions):
         """
         Check if the team scored a goal.
@@ -402,6 +450,10 @@ class SimpleFootballEnv:
         
         # Check if ball holder chose shoot action (action 5)
         if actions[self.ball_holder] != 5:
+            return False
+
+        # Defender blocks shots when on the ball-holder's tile.
+        if np.array_equal(self.defender_pos, self.agent_pos[self.ball_holder]):
             return False
         
         # Get ball holder's current position

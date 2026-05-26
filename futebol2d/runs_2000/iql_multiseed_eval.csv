@@ -1,0 +1,11 @@
+seed,eval_mean_reward,eval_std_reward,score_rate,train_last20_mean,training_csv,model_path
+0,1.4125,0.13389828228920642,1.0,1.3924999999999998,runs_2000\iql_seed0_training.csv,runs_2000\iql_seed0_model.pth
+1,1.3762500000000002,0.09315142242606925,1.0,1.16625,runs_2000\iql_seed1_training.csv,runs_2000\iql_seed1_model.pth
+2,1.4187500000000002,0.10565125413358799,1.0,1.41825,runs_2000\iql_seed2_training.csv,runs_2000\iql_seed2_model.pth
+3,1.3264999999999998,0.21827219245703294,1.0,1.36225,runs_2000\iql_seed3_training.csv,runs_2000\iql_seed3_model.pth
+4,1.31075,0.17017839904053625,1.0,1.342,runs_2000\iql_seed4_training.csv,runs_2000\iql_seed4_model.pth
+5,1.3380000000000003,0.19132694530567307,1.0,1.3895,runs_2000\iql_seed5_training.csv,runs_2000\iql_seed5_model.pth
+6,1.4100000000000004,0.1438141161360734,1.0,1.3655000000000002,runs_2000\iql_seed6_training.csv,runs_2000\iql_seed6_model.pth
+7,1.2002499999999998,0.39413980704820983,1.0,1.4352500000000004,runs_2000\iql_seed7_training.csv,runs_2000\iql_seed7_model.pth
+8,1.4175,0.09080886520599186,1.0,1.3962500000000002,runs_2000\iql_seed8_training.csv,runs_2000\iql_seed8_model.pth
+9,1.36925,0.09397173777258777,1.0,1.3597499999999998,runs_2000\iql_seed9_training.csv,runs_2000\iql_seed9_model.pth

@@ -16,19 +16,30 @@ Reward is now shaped to improve learning stability and speed:
 - dense ball-progress reward (moving ball right)
 - forward-pass bonus and backward-pass penalty
 - failed-shot penalty and timeout penalty
+- defender-contact penalty
 
 These coefficients are configurable through `SimpleFootballEnv(..., reward_weights={...})` in `env.py`.
 
 Observations per agent include:
 - own normalized position
-- teammate normalized position
+- all other agents normalized positions
 - ball normalized position
+- defender normalized position
 - binary possession flag
+- possession-changed flag
+- remaining-steps ratio
 
 The action space includes:
 - stay
 - move up/down/left/right
 - shoot
+
+- A defender (rendered as `D`) now spawns two columns left from the goal line and chases the current ball holder each step.
+- If the defender occupies the same cell as the ball holder, scoring is blocked and a small penalty is applied.
+- The defender's position is included in each agent's observation vector (normalized coordinates).
+- The defender is shown in all grid renderings, including during evaluation.
+
+This change increases the need for coordinated passing and positioning to avoid the defender and successfully score.
 
 ## Algorithms
 
@@ -163,7 +174,7 @@ python3 -m plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL
 
 ## Next steps
 
-- increase environment complexity (defenders, passing, goals)
+- tune defender behavior and contact/shot-block penalties
 - extend observations with velocities and directional features
 - add centralized training with decentralized execution
 - compare IQL, VDN, and QMIX on the same reward curve
@@ -171,6 +182,7 @@ python3 -m plot iql_training.csv vdn_training.csv qmix_training.csv --labels IQL
 ## Live (Online) Plotting During Training
 
 You can visualize training progress in real time using the live plotting feature. This is especially useful for multi-seed experiments to monitor mean and standard deviation of rewards as training progresses.
+The live plotter also supports concurrent training processes that share the same `--output-dir`.
 
 ### Requirements
 - `matplotlib` (install with `pip install matplotlib`)
@@ -183,7 +195,22 @@ To enable live plotting, add the `--live-plot` flag when running multi-seed trai
 python train.py --algo vdn --episodes 300 --n-seeds 5 --seed 0 --eval-episodes 20 --output-dir runs_vdn --live-plot
 ```
 
+For concurrent-process training (one process per algorithm), start one process with `--live-plot`
+and start the others without it, all using the same `--output-dir`:
+
+```bash
+python train.py --algo iql --episodes 1000 --n-seeds 10 --seed 0 --output-dir runs_1000 --live-plot
+python train.py --algo vdn --episodes 1000 --n-seeds 10 --seed 0 --output-dir runs_1000
+python train.py --algo qmix --episodes 1000 --n-seeds 10 --seed 0 --output-dir runs_1000
+```
+
+Notes for concurrent mode:
+- start the plotting owner (`--live-plot`) first
+- all processes must share the same `--output-dir`
+- progress is exchanged through `live_progress.csvl` in the output directory
+
 - The live plot will update after each episode and each seed, showing the mean and standard deviation of rewards across seeds.
+- In concurrent mode, the plot can show all algorithms as they train in separate Python processes.
 - The plot window will appear during training and remain open at the end for review.
 - This feature is only available in multi-seed mode (i.e., when `--n-seeds` > 1).
 
