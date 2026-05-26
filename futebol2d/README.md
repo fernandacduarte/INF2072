@@ -38,6 +38,7 @@ The action space includes:
 - If the defender occupies the same cell as the ball holder, scoring is blocked and a small penalty is applied.
 - The defender's position is included in each agent's observation vector (normalized coordinates).
 - The defender is shown in all grid renderings, including during evaluation.
+- The defender now moves twice in a step with 30% probability, making its speed unpredictable and increasing the need for coordinated play.
 
 This change increases the need for coordinated passing and positioning to avoid the defender and successfully score.
 

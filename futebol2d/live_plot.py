@@ -177,3 +177,23 @@ class LivePlotter:
     def close(self):
         """Close the live plot window without blocking execution."""
         plt.close(self.fig)
+
+if __name__ == "__main__":
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(description="Live plot multi-agent training progress from a shared progress file.")
+    parser.add_argument("--progress-file", type=str, required=True, help="Path to the shared live_progress.csvl file.")
+    parser.add_argument("--algorithms", nargs="*", default=["iql", "vdn", "qmix"], help="Algorithms to plot (default: iql vdn qmix)")
+    parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds (default: 1.0)")
+    args = parser.parse_args()
+
+    plotter = LivePlotter(algorithms=args.algorithms)
+    print(f"[LivePlot] Watching {args.progress_file} for updates...")
+    try:
+        while True:
+            plotter.update_from_progress_file(args.progress_file)
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\n[LivePlot] Exiting on user interrupt.")
+        plotter.close()

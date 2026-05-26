@@ -5,6 +5,7 @@ SimpleFootballEnv is a grid-world where N agents cooperate to move a ball and sc
 Agents share a single reward signal that encourages teamwork.
 """
 import numpy as np
+import random  # Add this import for defender speed randomness
 
 
 class SimpleFootballEnv:
@@ -310,6 +311,9 @@ class SimpleFootballEnv:
         scored = self._check_score(actions)
         # Defender chases current ball holder after scoring resolution.
         self._move_defender()
+        # With probability 0.3, defender moves a second time this step (randomized speed)
+        if random.random() < 0.3:
+            self._move_defender()
         if np.array_equal(self.defender_pos, self.agent_pos[self.ball_holder]):
             reward += self.reward_weights["defender_contact"]
         # Dense shaping term: reward positive progress of the ball to goal column
