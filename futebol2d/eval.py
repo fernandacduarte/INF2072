@@ -26,6 +26,20 @@ from algos import IQLLearner, VDNLearner, QMIXLearner
 from env import SimpleFootballEnv
 
 
+def parse_grid_shape(text):
+    """Parse grid shape from '<height>x<width>' into a tuple."""
+    if text is None:
+        return None
+    lowered = text.lower().replace(" ", "")
+    parts = lowered.split("x")
+    if len(parts) != 2:
+        raise ValueError("grid shape must use format <height>x<width>, e.g. 6x9")
+    height = int(parts[0])
+    width = int(parts[1])
+    if height < 2 or width < 2:
+        raise ValueError("grid shape must have height >= 2 and width >= 2")
+    return (height, width)
+
 def make_learner(name, obs_dim, n_actions, n_agents, state_dim, device):
     """
     Factory function to create learner for loading checkpoint.
@@ -115,7 +129,14 @@ def resolve_best_model_path(algorithm, models_dir):
     )
 
 
-def evaluate(algorithm, models_dir, device, n_agents=2, episodes=1, delay=0.5):
+def evaluate(algorithm,
+             models_dir,
+             device,
+             n_agents=2,
+             n_defenders=1,
+             grid_shape=None,
+             episodes=1,
+             delay=0.5):
     """
     Load trained model and evaluate with rendering.
 
@@ -141,7 +162,7 @@ def evaluate(algorithm, models_dir, device, n_agents=2, episodes=1, delay=0.5):
         delay (float): Seconds to wait between steps. Default 0.5.
     """
     # Initialize environment with specified number of agents
-    env = SimpleFootballEnv(n_agents=n_agents)
+    env = SimpleFootballEnv(n_agents=n_agents, n_defenders=n_defenders, grid_shape=grid_shape)
     # Get observation dimension from environment
     obs_dim = len(env.reset()[0])
     # Get number of actions
@@ -221,6 +242,13 @@ def main():
     # Number of agents
     parser.add_argument("--n-agents", type=int, default=2,
                         help="Number of agents in the environment (must match training config)")
+    # Number of defenders
+    parser.add_argument("--n-defenders", type=int, default=1,
+                        help="Number of defenders in the environment (must match training config)")
+    # Optional custom grid size override
+    parser.add_argument("--grid-shape", default=None,
+                        help="Optional grid size override as <height>x<width>. "
+                             "If omitted, a heuristic based on --n-agents is used")
     # Number of evaluation episodes
     parser.add_argument("--episodes", type=int, default=1,
                         help="Number of episodes to evaluate and render")
@@ -229,10 +257,17 @@ def main():
                         help="Seconds between rendered steps (0 for no delay)")
     # Parse command-line arguments
     args = parser.parse_args()
+    grid_shape = parse_grid_shape(args.grid_shape) if args.grid_shape else None
 
     # Run evaluation with parsed arguments
-    evaluate(args.algo, args.models_dir, args.device, n_agents=args.n_agents,
-             episodes=args.episodes, delay=args.delay)
+    evaluate(args.algo,
+             args.models_dir,
+             args.device,
+             n_agents=args.n_agents,
+             n_defenders=args.n_defenders,
+             grid_shape=grid_shape,
+             episodes=args.episodes,
+             delay=args.delay)
 
 
 if __name__ == "__main__":

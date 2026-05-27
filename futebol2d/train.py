@@ -32,6 +32,21 @@ except ImportError:
 ALGORITHM_ORDER = ["iql", "vdn", "qmix"]
 
 
+def parse_grid_shape(text):
+    """Parse grid shape from '<height>x<width>' into a tuple."""
+    if text is None:
+        return None
+    lowered = text.lower().replace(" ", "")
+    parts = lowered.split("x")
+    if len(parts) != 2:
+        raise ValueError("grid shape must use format <height>x<width>, e.g. 6x9")
+    height = int(parts[0])
+    width = int(parts[1])
+    if height < 2 or width < 2:
+        raise ValueError("grid shape must have height >= 2 and width >= 2")
+    return (height, width)
+
+
 def append_live_progress(path, algorithm, seed, episode, reward):
     """Append one live training event to shared progress file."""
     if not path:
@@ -203,12 +218,12 @@ def save_multiseed_eval_csv(path, seed_results):
             writer.writerow(result)
 
 
-def evaluate_greedy_policy(learner, n_agents, episodes=20):
+def evaluate_greedy_policy(learner, n_agents, n_defenders=1, grid_shape=None, episodes=20):
     """
     Evaluate a trained policy with greedy actions (epsilon=0.0).
     Returns mean/std reward and score rate over multiple episodes.
     """
-    env = SimpleFootballEnv(n_agents=n_agents)
+    env = SimpleFootballEnv(n_agents=n_agents, n_defenders=n_defenders, grid_shape=grid_shape)
     episode_rewards = []
     score_count = 0
 
@@ -239,6 +254,8 @@ def run_training(algorithm,
                  episodes,
                  device,
                  n_agents=2,
+                 n_defenders=1,
+                 grid_shape=None,
                  output_csv=None,
                  output_model=None,
                  seed=0,
@@ -276,7 +293,7 @@ def run_training(algorithm,
     set_global_seed(seed)  # Ensure reproducibility for each run
 
     # Initialize environment with specified number of agents
-    env = SimpleFootballEnv(n_agents=n_agents)
+    env = SimpleFootballEnv(n_agents=n_agents, n_defenders=n_defenders, grid_shape=grid_shape)
     # Get observation dimension from environment
     obs_dim = len(env.reset()[0])
     # Get number of actions
@@ -382,7 +399,11 @@ def run_training(algorithm,
     print(f"Saved trained model to {output_model}")
 
     # Evaluate the trained model using greedy policy (no exploration)
-    eval_metrics = evaluate_greedy_policy(learner, n_agents=n_agents, episodes=eval_episodes)
+    eval_metrics = evaluate_greedy_policy(learner,
+                                          n_agents=n_agents,
+                                          n_defenders=n_defenders,
+                                          grid_shape=grid_shape,
+                                          episodes=eval_episodes)
     print(
         "Eval "
         f"mean_reward={eval_metrics['eval_mean_reward']:.3f} "
@@ -406,6 +427,8 @@ def run_multi_seed_training(
     episodes,
     device,
     n_agents,
+    n_defenders,
+    grid_shape,
     seeds,
     output_dir,
     eval_episodes,
@@ -459,6 +482,8 @@ def run_multi_seed_training(
             episodes=episodes,
             device=device,
             n_agents=n_agents,
+            n_defenders=n_defenders,
+            grid_shape=grid_shape,
             output_csv=output_csv,
             output_model=output_model,
             seed=seed,
@@ -509,6 +534,13 @@ def main():
     # Number of agents
     parser.add_argument("--n-agents", type=int, default=2,
                         help="Number of agents in the environment")
+    # Number of defenders
+    parser.add_argument("--n-defenders", type=int, default=1,
+                        help="Number of defenders in the environment")
+    # Optional custom grid size override
+    parser.add_argument("--grid-shape", default=None,
+                        help="Optional grid size override as <height>x<width>. "
+                             "If omitted, a heuristic based on --n-agents is used")
     # Base random seed
     parser.add_argument("--seed", type=int, default=0,
                         help="Base random seed")
@@ -533,6 +565,7 @@ def main():
                         help="Enable live plotting of rewards during training (multi-seed only)")
     # Parse command-line arguments
     args = parser.parse_args()
+    grid_shape = parse_grid_shape(args.grid_shape) if args.grid_shape else None
 
     # If only one seed, run a single experiment (default behavior)
     if args.n_seeds <= 1:
@@ -551,6 +584,8 @@ def main():
             args.episodes,
             args.device,
             n_agents=args.n_agents,
+            n_defenders=args.n_defenders,
+            grid_shape=grid_shape,
             output_csv=output_csv,
             output_model=output_model,
             seed=args.seed,
@@ -570,6 +605,8 @@ def main():
             episodes=args.episodes,
             device=args.device,
             n_agents=args.n_agents,
+            n_defenders=args.n_defenders,
+            grid_shape=grid_shape,
             seeds=seeds,
             output_dir=args.output_dir,
             eval_episodes=args.eval_episodes,

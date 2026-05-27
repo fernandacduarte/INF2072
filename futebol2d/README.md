@@ -34,6 +34,14 @@ The action space includes:
 - move up/down/left/right
 - shoot
 
+Environment sizing and entities are now configurable from CLI:
+- number of agents: `--n-agents`
+- number of defenders: `--n-defenders`
+- optional grid override: `--grid-shape <height>x<width>`
+
+If `--grid-shape` is not provided, the environment computes an automatic grid size
+from `--n-agents` using a built-in heuristic.
+
 - A defender (rendered as `D`) now spawns two columns left from the goal line and chases the current ball holder each step.
 - If the defender occupies the same cell as the ball holder, scoring is blocked and a small penalty is applied.
 - The defender's position is included in each agent's observation vector (normalized coordinates).
@@ -41,6 +49,12 @@ The action space includes:
 - The defender now moves twice in a step with 30% probability, making its speed unpredictable and increasing the need for coordinated play.
 
 This change increases the need for coordinated passing and positioning to avoid the defender and successfully score.
+
+## Defender: Randomly Block Lanes
+
+- On each step, with probability 0.2, the defender will block its current column for one step. While blocking, agents cannot enter or cross the defender's column (their movement is canceled if it would cross the blocked lane).
+- This increases unpredictability and coordination demand, as agents must plan around the possibility of a blocked lane.
+- The defender still moves as before (with randomized speed), but the lane-blocking is independent and can occur before or after movement.
 
 ## Algorithms
 
@@ -83,6 +97,12 @@ Cons:
 python train.py --algo iql --episodes 300
 python train.py --algo vdn --episodes 300
 python train.py --algo qmix --episodes 300
+
+# Example with custom team/defender sizes and automatic grid heuristic
+python train.py --algo qmix --episodes 300 --n-agents 4 --n-defenders 2
+
+# Example with explicit grid override
+python train.py --algo qmix --episodes 300 --n-agents 4 --n-defenders 2 --grid-shape 7x10
 ```
 
 Use `--device` to select the compute device (`cpu` or `cuda`). Example:
@@ -140,6 +160,9 @@ After training, visualize a learned policy with:
 
 ```bash
 python3 -m eval --algo qmix --models-dir runs_all --episodes 1 --delay 0.5
+
+# Match environment config used in training
+python3 -m eval --algo qmix --models-dir runs_all --n-agents 4 --n-defenders 2 --grid-shape 7x10
 ```
 
 The evaluator automatically picks the best seed using `{algo}_multiseed_eval.csv` in the models directory.

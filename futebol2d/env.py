@@ -47,25 +47,48 @@ class SimpleFootballEnv:
       - 5: shoot (score if ball-holder is in rightmost column)
     """
 
-    def __init__(self, grid_shape=(5, 6), n_agents=2, max_steps=50, reward_weights=None,
+    @staticmethod
+    def compute_grid_shape(n_agents):
+        """
+        Compute a heuristic grid size from number of agents.
+
+        The heuristic keeps 2-agent behavior close to the original (5x6),
+        while growing height/width as teams get larger.
+        """
+        if n_agents < 1:
+            raise ValueError("n_agents must be >= 1")
+
+        height = max(5, int(np.ceil(np.sqrt(4 * n_agents + 8))))
+        width = max(6, height + 1, int(np.ceil(1.5 * n_agents + 3)))
+        return (height, width)
+
+    def __init__(self, grid_shape=None, n_agents=2, n_defenders=1, max_steps=50, reward_weights=None,
                  random_start_holder=True):  # New: randomize initial ball holder for better agent coverage
         """
         Initialize the football environment.
 
         Args:
-            grid_shape (tuple): (height, width) of the grid world. Default (5, 6).
+            grid_shape (tuple|None): (height, width) of the grid world. If None,
+                uses a heuristic based on n_agents.
             n_agents (int): Number of cooperative agents. Default 2.
+            n_defenders (int): Number of defender entities. Default 1.
             max_steps (int): Maximum steps per episode. Default 50.
             reward_weights (dict): Optional reward shaping coefficients.
             random_start_holder (bool): If True, sample the initial ball holder uniformly
                 on reset. This improves role coverage during training.
         """
+        if n_agents < 1:
+            raise ValueError("n_agents must be >= 1")
+        if n_defenders < 0:
+            raise ValueError("n_defenders must be >= 0")
         # Store grid dimensions (used for normalization and boundary checks)
-        self.grid_shape = grid_shape
+        self.grid_shape = grid_shape if grid_shape is not None else self.compute_grid_shape(n_agents)
         # Maximum episode length (episode ends after this many steps)
         self.max_steps = max_steps
         # Number of agents in the environment
         self.n_agents = n_agents
+        # Number of defenders in the environment
+        self.n_defenders = n_defenders
         # Number of discrete actions each agent can take
         self.action_dim = 6
         # Whether to randomize which agent starts with the ball each episode
@@ -123,10 +146,18 @@ class SimpleFootballEnv:
         self.step_count = 0
         height, width = self.grid_shape
 
-        # Sample unique random positions for all agents
+        total_entities = self.n_agents + self.n_defenders
+        if total_entities > height * width:
+            raise ValueError(
+                f"grid_shape={self.grid_shape} does not have enough cells for "
+                f"n_agents={self.n_agents} and n_defenders={self.n_defenders}"
+            )
+
+        # Sample unique random positions for all agents and defenders.
         all_cells = [(r, c) for r in range(height) for c in range(width)]
-        chosen = np.random.choice(len(all_cells), self.n_agents, replace=False)
-        self.agent_pos = np.array([all_cells[i] for i in chosen], dtype=np.int32)
+        chosen = np.random.choice(len(all_cells), total_entities, replace=False)
+        self.agent_pos = np.array([all_cells[i] for i in chosen[: self.n_agents]], dtype=np.int32)
+        self.defender_pos = np.array([all_cells[i] for i in chosen[self.n_agents :]], dtype=np.int32)
 
         # Randomly select initial ball holder
         self.ball_holder = int(np.random.randint(self.n_agents))
@@ -134,10 +165,10 @@ class SimpleFootballEnv:
         self.possession_changed = False
         # Place ball at the initial holder's position
         self.ball_pos = self.agent_pos[self.ball_holder].copy()
-        # Spawn defender two columns left from goal line (goal is rightmost column).
-        defender_col = max(0, width - 3)
-        defender_row = int(np.random.randint(height))
-        self.defender_pos = np.array([defender_row, defender_col], dtype=np.int32)
+        # Lane-block state for rendering and movement constraints.
+        self.defender_blocking = False
+        self.defender_blocked_col = None
+        self.blocking_defender = None
         # Episode is not finished at initialization
         self.done = False
         # Return initial observations for all agents
@@ -172,22 +203,26 @@ class SimpleFootballEnv:
             
             # All other agents' positions, normalized to [0, 1] range
             # Concatenate all positions except agent i's own (to avoid observing self twice)
-            all_others = np.concatenate(
-                [self.agent_pos[j] / grid_shape_f32 for j in range(self.n_agents) if j != i],
-                axis=0
-            )
+            other_positions = [self.agent_pos[j] / grid_shape_f32 for j in range(self.n_agents) if j != i]
+            if other_positions:
+                all_others = np.concatenate(other_positions, axis=0)
+            else:
+                all_others = np.array([], dtype=np.float32)
             
             # Ball position, normalized to [0, 1] range
             ball = self.ball_pos / grid_shape_f32
-            # Defender position, normalized to [0, 1] range
-            defender = self.defender_pos / grid_shape_f32
+            # Defender positions (all defenders), normalized to [0, 1] range
+            if self.n_defenders > 0:
+                defenders = (self.defender_pos / grid_shape_f32).reshape(-1)
+            else:
+                defenders = np.array([], dtype=np.float32)
             
             # Possession flag: 1.0 if this agent holds ball, 0.0 otherwise
             has_ball = np.array([1.0 if self.ball_holder == i else 0.0], dtype=np.float32)
             
             # Concatenate all observation components and ensure float32 dtype
             agent_obs = np.concatenate(
-                [own, all_others, ball, defender, has_ball, possession_flag, [remaining_steps]],
+                [own, all_others, ball, defenders, has_ball, possession_flag, [remaining_steps]],
                 axis=0,
             ).astype(np.float32)
             obs.append(agent_obs)
@@ -223,6 +258,13 @@ class SimpleFootballEnv:
             if grid[row][width - 1] == ".":
                 grid[row][width - 1] = "|"
 
+        # Draw active blocked lane across the full column.
+        if self.defender_blocking and self.defender_blocked_col is not None:
+            block_col = int(self.defender_blocked_col)
+            for row in range(height):
+                if grid[row][block_col] == ".":
+                    grid[row][block_col] = "#"
+
         # Place agents on grid based on their current positions
         for agent_id, pos in enumerate(self.agent_pos):
             # Extract row and column coordinates
@@ -234,19 +276,20 @@ class SimpleFootballEnv:
             if self.ball_holder == agent_id:
                 symbol = f"{agent_id}*"
             
-            # Mark collision ('X') if cell already occupied (defensive check)
-            if grid[row][col] != "." and grid[row][col] != "|":
+            # Mark collision ('X') only when another entity is already present.
+            # Background markers ('.', '|', '#') are not entities.
+            if grid[row][col] not in {".", "|", "#"}:
                 symbol = "X"
             
             # Place symbol in grid at agent's position
             grid[row][col] = symbol
 
-        # Place defender (D) on grid.
-        d_row, d_col = self.defender_pos.tolist()
-        if grid[d_row][d_col] != "." and grid[d_row][d_col] != "|":
-            grid[d_row][d_col] = "X"
-        else:
-            grid[d_row][d_col] = "D"
+        # Place defenders (D) on grid.
+        for d_row, d_col in self.defender_pos.tolist():
+            if grid[d_row][d_col] not in {".", "|", "#"}:
+                grid[d_row][d_col] = "X"
+            else:
+                grid[d_row][d_col] = "D"
 
         # Format grid rows as right-aligned strings with padding for readability
         lines = [" ".join(f"{cell:>2}" for cell in row) for row in grid]
@@ -259,8 +302,10 @@ class SimpleFootballEnv:
             # Print current state information
             print(
                 f"step={self.step_count} ball_holder={self.ball_holder} "
-                f"ball_pos={tuple(self.ball_pos)} defender_pos={tuple(self.defender_pos)}"
+                f"ball_pos={tuple(self.ball_pos)} defender_pos={self.defender_pos.tolist()}"
             )
+            if self.defender_blocking and self.defender_blocked_col is not None:
+                print(f"blocked_col={int(self.defender_blocked_col)}")
             # Print action reference for debugging
             print(f"actions: {self.action_names}")
         
@@ -300,21 +345,30 @@ class SimpleFootballEnv:
         # Start with a small step cost to encourage shorter episodes
         reward = self.reward_weights["step"]
 
+        # Random lane block for this step (active while agents move).
+        self.defender_blocking = self.n_defenders > 0 and random.random() < 0.2
+        if self.defender_blocking:
+            self.blocking_defender = int(np.random.randint(self.n_defenders))
+            self.defender_blocked_col = int(self.defender_pos[self.blocking_defender][1])
+        else:
+            self.blocking_defender = None
+            self.defender_blocked_col = None
+
         # Apply all agents' movements simultaneously
         for agent_id, action in enumerate(actions):
             self._apply_action(agent_id, action)
 
         # Update ball position and handle ball possession transfers
         self._resolve_ball_possession()
-        # Resolve scoring against current state before defender reaction.
-        # This avoids retroactively blocking a valid shot with same-step defender movement.
         scored = self._check_score(actions)
-        # Defender chases current ball holder after scoring resolution.
-        self._move_defender()
-        # With probability 0.3, defender moves a second time this step (randomized speed)
-        if random.random() < 0.3:
-            self._move_defender()
-        if np.array_equal(self.defender_pos, self.agent_pos[self.ball_holder]):
+
+        # Defender moves as before, now for each defender.
+        for defender_id in range(self.n_defenders):
+            self._move_defender(defender_id)
+            if random.random() < 0.3:
+                self._move_defender(defender_id)
+
+        if self._holder_touched_by_any_defender():
             reward += self.reward_weights["defender_contact"]
         # Dense shaping term: reward positive progress of the ball to goal column
         progress_delta = self._ball_progress() - previous_progress
@@ -384,7 +438,14 @@ class SimpleFootballEnv:
             # Define grid boundaries (inclusive)
             min_coords = np.array([0, 0], dtype=np.int32)
             max_coords = np.array(self.grid_shape, dtype=np.int32) - 1
-            # Clamp position to grid boundaries (prevent out-of-bounds movement)
+            # Defender lane block: prevent entering/crossing defender's column if blocking
+            if hasattr(self, 'defender_blocking') and self.defender_blocking and self.defender_blocked_col is not None:
+                old_col = self.agent_pos[agent_id][1]
+                new_col = new_pos[1]
+                block_col = self.defender_blocked_col
+                # If agent would enter or cross the blocked column, cancel movement
+                if (old_col != block_col and new_col == block_col) or (old_col == block_col and new_col != block_col):
+                    return  # skip movement
             self.agent_pos[agent_id] = np.minimum(np.maximum(new_pos, min_coords), max_coords)
 
     def _resolve_ball_possession(self):
@@ -411,10 +472,13 @@ class SimpleFootballEnv:
                 # Break to avoid reassigning to multiple agents in same step
                 break
 
-    def _move_defender(self):
-        """Move defender one cell toward the current ball holder (greedy chase)."""
+    def _move_defender(self, defender_id):
+        """Move one defender one cell toward the current ball holder (greedy chase)."""
+        if self.n_defenders == 0:
+            return
+
         holder_pos = self.agent_pos[self.ball_holder]
-        delta = holder_pos - self.defender_pos
+        delta = holder_pos - self.defender_pos[defender_id]
         move = np.array([0, 0], dtype=np.int32)
 
         # Prioritize the axis with greater distance for a direct chase.
@@ -427,8 +491,15 @@ class SimpleFootballEnv:
 
         min_coords = np.array([0, 0], dtype=np.int32)
         max_coords = np.array(self.grid_shape, dtype=np.int32) - 1
-        new_pos = self.defender_pos + move
-        self.defender_pos = np.minimum(np.maximum(new_pos, min_coords), max_coords)
+        new_pos = self.defender_pos[defender_id] + move
+        self.defender_pos[defender_id] = np.minimum(np.maximum(new_pos, min_coords), max_coords)
+
+    def _holder_touched_by_any_defender(self):
+        """Return True if any defender is on the ball-holder tile."""
+        if self.n_defenders == 0:
+            return False
+        holder_tile = self.agent_pos[self.ball_holder]
+        return bool(np.any(np.all(self.defender_pos == holder_tile, axis=1)))
 
     def _check_score(self, actions):
         """
@@ -456,8 +527,8 @@ class SimpleFootballEnv:
         if actions[self.ball_holder] != 5:
             return False
 
-        # Defender blocks shots when on the ball-holder's tile.
-        if np.array_equal(self.defender_pos, self.agent_pos[self.ball_holder]):
+        # Any defender blocks shots when on the ball-holder's tile.
+        if self._holder_touched_by_any_defender():
             return False
         
         # Get ball holder's current position

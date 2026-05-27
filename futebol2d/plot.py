@@ -255,6 +255,78 @@ def plot_best_seed_mean_reward(runs_dir, save_path=None):
     plt.show()
 
 
+def plot_average_eval_metrics_table(runs_dir, save_path=None):
+    """
+    Generate a table image with average evaluation metrics across seeds.
+
+    Reads each `{algo}_multiseed_eval.csv` and computes algorithm-level means for:
+      - eval_mean_reward
+      - eval_std_reward
+      - score_rate
+
+    Args:
+        runs_dir (str): Folder containing multiseed eval CSV files.
+        save_path (str | None): Optional output path for table image.
+    """
+    runs_path = Path(runs_dir)
+    algos = ["iql", "vdn", "qmix"]
+    rows = []
+
+    for algo in algos:
+        eval_csv = runs_path / f"{algo}_multiseed_eval.csv"
+        if not eval_csv.exists():
+            raise FileNotFoundError(f"Missing multiseed eval CSV: {eval_csv}")
+
+        eval_means = []
+        eval_stds = []
+        score_rates = []
+
+        with open(eval_csv, newline="", encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                eval_means.append(float(row["eval_mean_reward"]))
+                eval_stds.append(float(row["eval_std_reward"]))
+                score_rates.append(float(row["score_rate"]))
+
+        if not eval_means:
+            raise ValueError(f"Empty multiseed eval file: {eval_csv}")
+
+        rows.append([
+            algo.upper(),
+            f"{np.mean(eval_means):.3f}",
+            f"{np.mean(eval_stds):.3f}",
+            f"{np.mean(score_rates):.3f}",
+        ])
+
+    col_labels = [
+        "Algorithm",
+        "Mean Reward (avg)",
+        "Std Reward (avg)",
+        "Score Rate (avg)",
+    ]
+
+    fig, ax = plt.subplots(figsize=(9, 2.7))
+    ax.axis("off")
+    ax.set_title("Average Evaluation Metrics (across 10 seeds)", pad=12)
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=col_labels,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.35)
+
+    if save_path is None:
+        save_path = runs_path / "average_eval_metrics_table.png"
+
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"Saved average evaluation metrics table to {save_path}")
+    plt.show()
+
+
 def plot_training(files, labels=None, window=20, save_path=None):
     """
     Plot training curves comparing multiple algorithms.
@@ -379,6 +451,9 @@ if __name__ == "__main__":
         files, labels, default_save = resolve_auto_compare_files(args.runs_dir, seed=args.seed)
         save_path = args.save if args.save else default_save
         plot_training(files, labels=labels, window=args.window, save_path=save_path)
+
+        table_save_path = Path(args.runs_dir) / "average_eval_metrics_table.png"
+        plot_average_eval_metrics_table(args.runs_dir, save_path=str(table_save_path))
 
         # In multiseed auto mode, also compare running mean reward for best seed per algorithm.
         if args.seed is None:
