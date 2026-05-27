@@ -169,6 +169,7 @@ class SimpleFootballEnv:
         self.defender_blocking = False
         self.defender_blocked_col = None
         self.blocking_defender = None
+        self.last_info = None
         # Episode is not finished at initialization
         self.done = False
         # Return initial observations for all agents
@@ -250,62 +251,83 @@ class SimpleFootballEnv:
         # Unpack grid dimensions for rendering
         height, width = self.grid_shape
         
-        # Create empty grid filled with empty cells ('.')
-        grid = [["." for _ in range(width)] for _ in range(height)]
+        # Build per-cell entity tokens so collisions remain interpretable.
+        cell_entities = [[[] for _ in range(width)] for _ in range(height)]
 
-        # Mark rightmost column as goal area with '|' symbol
-        for row in range(height):
-            if grid[row][width - 1] == ".":
-                grid[row][width - 1] = "|"
-
-        # Draw active blocked lane across the full column.
-        if self.defender_blocking and self.defender_blocked_col is not None:
-            block_col = int(self.defender_blocked_col)
-            for row in range(height):
-                if grid[row][block_col] == ".":
-                    grid[row][block_col] = "#"
-
-        # Place agents on grid based on their current positions
         for agent_id, pos in enumerate(self.agent_pos):
-            # Extract row and column coordinates
             row, col = pos.tolist()
-            # Default symbol is agent ID (0, 1, 2, ...)
-            symbol = f"{agent_id}"
-            
-            # Add '*' suffix if agent currently holds the ball
-            if self.ball_holder == agent_id:
-                symbol = f"{agent_id}*"
-            
-            # Mark collision ('X') only when another entity is already present.
-            # Background markers ('.', '|', '#') are not entities.
-            if grid[row][col] not in {".", "|", "#"}:
-                symbol = "X"
-            
-            # Place symbol in grid at agent's position
-            grid[row][col] = symbol
+            token = f"A{agent_id}{'*' if self.ball_holder == agent_id else ''}"
+            cell_entities[row][col].append(token)
 
-        # Place defenders (D) on grid.
-        for d_row, d_col in self.defender_pos.tolist():
-            if grid[d_row][d_col] not in {".", "|", "#"}:
-                grid[d_row][d_col] = "X"
-            else:
-                grid[d_row][d_col] = "D"
+        for defender_id, d_pos in enumerate(self.defender_pos):
+            d_row, d_col = d_pos.tolist()
+            cell_entities[d_row][d_col].append(f"D{defender_id}")
 
-        # Format grid rows as right-aligned strings with padding for readability
-        lines = [" ".join(f"{cell:>2}" for cell in row) for row in grid]
+        lines = []
+        for row in range(height):
+            rendered_cells = []
+            for col in range(width):
+                entities = cell_entities[row][col]
+                if entities:
+                    entities_sorted = sorted(entities)
+                    if len(entities_sorted) == 1:
+                        cell_text = entities_sorted[0]
+                    else:
+                        cell_text = "+".join(entities_sorted)
+                elif self.defender_blocking and self.defender_blocked_col is not None and col == int(self.defender_blocked_col):
+                    cell_text = "#"
+                elif col == width - 1:
+                    cell_text = "|"
+                else:
+                    cell_text = "."
+                rendered_cells.append(f"{cell_text:>7}")
+            lines.append(" ".join(rendered_cells))
         render_text = "\n".join(lines)
 
         # Print to stdout if human mode
         if mode == "human":
-            # Print the grid visualization
-            print("\n" + render_text)
+            # Print legend for grid symbols
+            legend = (
+                "Legend: A*=holder  Ak=agent k  Dk=defender k  #=blocked lane  |=goal col  + = multi-occupant"
+            )
+            print("\n" + legend)
+            print(render_text)
             # Print current state information
             print(
                 f"step={self.step_count} ball_holder={self.ball_holder} "
                 f"ball_pos={tuple(self.ball_pos)} defender_pos={self.defender_pos.tolist()}"
             )
+            remaining_steps = self.max_steps - self.step_count
+            print(
+                f"possession_changed={self.possession_changed} "
+                f"remaining_steps={remaining_steps}/{self.max_steps}"
+            )
             if self.defender_blocking and self.defender_blocked_col is not None:
-                print(f"blocked_col={int(self.defender_blocked_col)}")
+                print(
+                    f"blocked_col={int(self.defender_blocked_col)} "
+                    f"blocking_defender=D{self.blocking_defender}"
+                )
+            if self.last_info is not None:
+                rb = self.last_info.get("reward_breakdown", {})
+                print(
+                    "reward_components: "
+                    f"base={rb.get('step', 0.0):+.3f} "
+                    f"progress={rb.get('progress', 0.0):+.3f} "
+                    f"pass={rb.get('pass', 0.0):+.3f} "
+                    f"contact={rb.get('defender_contact', 0.0):+.3f} "
+                    f"shoot_fail={rb.get('shoot_fail', 0.0):+.3f} "
+                    f"timeout={rb.get('timeout', 0.0):+.3f} "
+                    f"goal={rb.get('goal', 0.0):+.3f} "
+                    f"total={rb.get('total', 0.0):+.3f}"
+                )
+                print(
+                    "events: "
+                    f"shot_attempted={self.last_info.get('shot_attempted', False)} "
+                    f"shot_blocked_by_defender={self.last_info.get('shot_blocked_by_defender', False)} "
+                    f"shot_denied_no_assist={self.last_info.get('shot_denied_no_assist', False)} "
+                    f"scored={self.last_info.get('score', False)} "
+                    f"timed_out={self.last_info.get('timed_out', False)}"
+                )
             # Print action reference for debugging
             print(f"actions: {self.action_names}")
         
@@ -342,8 +364,21 @@ class SimpleFootballEnv:
         # Track previous state for dense shaping terms
         previous_holder = self.ball_holder
         previous_progress = self._ball_progress()
+        holder_shot_attempt = False
+        shot_denied_no_assist = False
+        shot_blocked_by_defender = False
+
+        reward_components = {
+            "step": float(self.reward_weights["step"]),
+            "progress": 0.0,
+            "pass": 0.0,
+            "defender_contact": 0.0,
+            "shoot_fail": 0.0,
+            "timeout": 0.0,
+            "goal": 0.0,
+        }
         # Start with a small step cost to encourage shorter episodes
-        reward = self.reward_weights["step"]
+        reward = reward_components["step"]
 
         # Random lane block for this step (active while agents move).
         self.defender_blocking = self.n_defenders > 0 and random.random() < 0.2
@@ -360,6 +395,14 @@ class SimpleFootballEnv:
 
         # Update ball position and handle ball possession transfers
         self._resolve_ball_possession()
+
+        holder_col = int(self.agent_pos[self.ball_holder][1])
+        holder_shot_attempt = actions[self.ball_holder] == 5
+        if holder_shot_attempt and holder_col == self.grid_shape[1] - 1 and not self.possession_changed:
+            shot_denied_no_assist = True
+        if holder_shot_attempt and holder_col == self.grid_shape[1] - 1 and self._holder_touched_by_any_defender():
+            shot_blocked_by_defender = True
+
         scored = self._check_score(actions)
 
         # Defender moves as before, now for each defender.
@@ -369,25 +412,33 @@ class SimpleFootballEnv:
                 self._move_defender(defender_id)
 
         if self._holder_touched_by_any_defender():
-            reward += self.reward_weights["defender_contact"]
+            reward_components["defender_contact"] = float(self.reward_weights["defender_contact"])
+            reward += reward_components["defender_contact"]
         # Dense shaping term: reward positive progress of the ball to goal column
         progress_delta = self._ball_progress() - previous_progress
-        reward += self.reward_weights["progress"] * progress_delta
+        reward_components["progress"] = float(self.reward_weights["progress"] * progress_delta)
+        reward += reward_components["progress"]
         # Encourage useful passes that move the ball forward
-        reward += self._pass_reward(previous_holder)
+        reward_components["pass"] = float(self._pass_reward(previous_holder))
+        reward += reward_components["pass"]
 
         # Check if team scored a goal
         if scored:
-            reward += self.reward_weights["goal"]
+            reward_components["goal"] = float(self.reward_weights["goal"])
+            reward += reward_components["goal"]
             self.done = True
         # Check if episode reached maximum length (timeout)
         elif self.step_count >= self.max_steps:
-            reward += self.reward_weights["timeout"]
+            reward_components["timeout"] = float(self.reward_weights["timeout"])
+            reward += reward_components["timeout"]
             self.done = True
         else:
             # Penalize failed shots to avoid blind shooting from bad positions.
             if actions[previous_holder] == 5:
-                reward += self.reward_weights["shoot_fail"]
+                reward_components["shoot_fail"] = float(self.reward_weights["shoot_fail"])
+                reward += reward_components["shoot_fail"]
+
+        reward_components["total"] = float(reward)
 
         # Get next observations for all agents
         obs = self._get_obs()
@@ -396,7 +447,17 @@ class SimpleFootballEnv:
         # All agents share the same done flag
         dones = [self.done] * self.n_agents
         # Extra information about episode outcome
-        info = {"score": scored}
+        info = {
+            "score": scored,
+            "shot_attempted": bool(holder_shot_attempt),
+            "shot_blocked_by_defender": bool(shot_blocked_by_defender),
+            "shot_denied_no_assist": bool(shot_denied_no_assist),
+            "timed_out": bool(self.done and not scored and self.step_count >= self.max_steps),
+            "possession_changed": bool(self.possession_changed),
+            "remaining_steps": int(self.max_steps - self.step_count),
+            "reward_breakdown": reward_components,
+        }
+        self.last_info = info
         
         return obs, rewards, dones, info
 

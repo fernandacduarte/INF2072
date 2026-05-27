@@ -129,11 +129,52 @@ def resolve_best_model_path(algorithm, models_dir):
     )
 
 
+def infer_model_config_from_checkpoint(model_path, device="cpu"):
+    """
+    Infer observation and team configuration from a saved checkpoint.
+
+    Returns:
+        dict: {"obs_dim", "n_agents", "n_defenders"}
+    """
+    state = torch.load(model_path, map_location=device)
+
+    q_network_states = state.get("q_networks")
+    if not isinstance(q_network_states, list) or not q_network_states:
+        raise ValueError(
+            f"Checkpoint does not contain valid q_networks list: {model_path}"
+        )
+
+    n_agents = len(q_network_states)
+    first_net_state = q_network_states[0]
+
+    first_layer_weight = first_net_state.get("net.model.0.weight")
+    if first_layer_weight is None or len(first_layer_weight.shape) != 2:
+        raise ValueError(
+            f"Could not infer observation dimension from checkpoint: {model_path}"
+        )
+
+    obs_dim = int(first_layer_weight.shape[1])
+    # Observation formula in env: obs_dim = 2*n_agents + 2*n_defenders + 5
+    remaining = obs_dim - (2 * n_agents + 5)
+    if remaining < 0 or remaining % 2 != 0:
+        raise ValueError(
+            "Checkpoint observation dimension is incompatible with environment formula. "
+            f"obs_dim={obs_dim}, inferred_n_agents={n_agents}"
+        )
+    n_defenders = remaining // 2
+
+    return {
+        "obs_dim": obs_dim,
+        "n_agents": n_agents,
+        "n_defenders": int(n_defenders),
+    }
+
+
 def evaluate(algorithm,
              models_dir,
              device,
-             n_agents=2,
-             n_defenders=1,
+             n_agents=None,
+             n_defenders=None,
              grid_shape=None,
              episodes=1,
              delay=0.5):
@@ -161,7 +202,34 @@ def evaluate(algorithm,
         episodes (int): Number of episodes to evaluate. Default 1.
         delay (float): Seconds to wait between steps. Default 0.5.
     """
-    # Initialize environment with specified number of agents
+    # Resolve best model path automatically
+    model_path = resolve_best_model_path(algorithm, models_dir)
+
+    inferred = infer_model_config_from_checkpoint(model_path, device=device)
+    inferred_n_agents = inferred["n_agents"]
+    inferred_n_defenders = inferred["n_defenders"]
+
+    if n_agents is None:
+        n_agents = inferred_n_agents
+    if n_defenders is None:
+        n_defenders = inferred_n_defenders
+
+    # Validate explicit CLI overrides against checkpoint dimensions.
+    expected_obs_dim = 2 * n_agents + 2 * n_defenders + 5
+    if expected_obs_dim != inferred["obs_dim"]:
+        raise ValueError(
+            "Environment config does not match checkpoint observation size. "
+            f"Provided n_agents={n_agents}, n_defenders={n_defenders} -> obs_dim={expected_obs_dim}, "
+            f"but model expects obs_dim={inferred['obs_dim']} "
+            f"(likely n_agents={inferred_n_agents}, n_defenders={inferred_n_defenders})."
+        )
+
+    print(
+        f"Using environment config from checkpoint compatibility: "
+        f"n_agents={n_agents}, n_defenders={n_defenders}, grid_shape={grid_shape}"
+    )
+
+    # Initialize environment with compatible dimensions
     env = SimpleFootballEnv(n_agents=n_agents, n_defenders=n_defenders, grid_shape=grid_shape)
     # Get observation dimension from environment
     obs_dim = len(env.reset()[0])
@@ -171,9 +239,6 @@ def evaluate(algorithm,
     n_agents = env.n_agents
     # Calculate state dimension (flattened all agent observations)
     state_dim = obs_dim * n_agents
-
-    # Resolve best model path automatically
-    model_path = resolve_best_model_path(algorithm, models_dir)
 
     # Create learner instance (skeleton for loading)
     learner = make_learner(algorithm, obs_dim, n_actions, n_agents, state_dim, device)
@@ -216,7 +281,22 @@ def evaluate(algorithm,
             # Render updated environment state
             env.render()
             # Print action and reward information for this step
-            print(f"step={step} actions={actions} reward={rewards[0]:.3f} done={done}")
+            rb = info.get("reward_breakdown", {})
+            print(
+                f"step={step} actions={actions} reward={rewards[0]:.3f} done={done} "
+                f"events={{shot_attempted:{info.get('shot_attempted', False)}, "
+                f"shot_blocked_by_defender:{info.get('shot_blocked_by_defender', False)}, "
+                f"shot_denied_no_assist:{info.get('shot_denied_no_assist', False)}, "
+                f"scored:{info.get('score', False)}, "
+                f"timed_out:{info.get('timed_out', False)}}} "
+                f"reward_parts={{base:{rb.get('step', 0.0):+.3f}, "
+                f"progress:{rb.get('progress', 0.0):+.3f}, "
+                f"pass:{rb.get('pass', 0.0):+.3f}, "
+                f"contact:{rb.get('defender_contact', 0.0):+.3f}, "
+                f"shoot_fail:{rb.get('shoot_fail', 0.0):+.3f}, "
+                f"timeout:{rb.get('timeout', 0.0):+.3f}, "
+                f"goal:{rb.get('goal', 0.0):+.3f}}}"
+            )
             # Wait for specified delay (visual pacing for human observation)
             if delay > 0:
                 time.sleep(delay)
@@ -240,11 +320,11 @@ def main():
     parser.add_argument("--device", default="cpu",
                         help="Device to evaluate on (cpu or cuda)")
     # Number of agents
-    parser.add_argument("--n-agents", type=int, default=2,
-                        help="Number of agents in the environment (must match training config)")
+    parser.add_argument("--n-agents", type=int, default=None,
+                        help="Number of agents in the environment. If omitted, inferred from checkpoint")
     # Number of defenders
-    parser.add_argument("--n-defenders", type=int, default=1,
-                        help="Number of defenders in the environment (must match training config)")
+    parser.add_argument("--n-defenders", type=int, default=None,
+                        help="Number of defenders in the environment. If omitted, inferred from checkpoint")
     # Optional custom grid size override
     parser.add_argument("--grid-shape", default=None,
                         help="Optional grid size override as <height>x<width>. "
