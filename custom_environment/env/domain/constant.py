@@ -17,7 +17,7 @@ class Action(Enum):
 
     @classmethod
     def choose_random(cls) -> 'Action':
-        """Retorna uma ação aleatória"""
+        """Get a random action"""
         return random.choice(list(cls))
 
 class Reward(Enum):

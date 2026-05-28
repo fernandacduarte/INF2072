@@ -1,3 +1,4 @@
+import functools
 import numpy as np
 
 from copy import copy
@@ -24,7 +25,7 @@ class PacManEnvironment(ParallelEnv):
         number_ghosts: int = 2
     ):
         # Petting zoo uses string identifiers for agents
-        self.possible_agents = [f"ghost_{ghost}" for ghost in range(number_ghosts)]
+        self.possible_agents = [f"ghost_{ghost+1}" for ghost in range(number_ghosts)]
         self.global_view =  global_view
 
         self.ghosts = []
@@ -32,11 +33,18 @@ class PacManEnvironment(ParallelEnv):
 
     def reset(self, seed: int = None, options: dict = None):
         self.agents = copy(self.possible_agents)
+
+        # TODO: make the initial positions of the agents configurable and not hardcoded
         self.ghosts = [
-            Ghost(id="ghost_1", current_position=(2,2)),
-            Ghost(id="ghost_2", current_position=(2,19))
+            Ghost(id="ghost_1", current_position=(1,1)),
+            Ghost(id="ghost_2", current_position=(1,18))
         ]
-        self.pacman = PacMan(id="pacman", current_position=(19,10))
+        for ghost in self.ghosts:
+            x, y = ghost.current_position
+            self.global_view[x, y] = Observation.GHOST.value
+
+        self.pacman = PacMan(id="pacman", current_position=(18,9))
+        self.global_view[*self.pacman.current_position] = Observation.PAC_MAN.value
 
         observations = {ghost.id: self._get_observation(ghost) for ghost in self.ghosts}
         infos = {ghost.id: {} for ghost in self.ghosts}
@@ -61,11 +69,14 @@ class PacManEnvironment(ParallelEnv):
 
         self._execute_action(self.pacman, Action.choose_random())
 
-        for ghost, action in actions.items():
-            self._execute_action(ghost, action)
+        # Actions must be executed previously
+        for index, (_, action) in enumerate(actions.items()):
+            self._execute_action(self.ghosts[index], action)
 
         # New insights are only obtained after all actions are done
-        for ghost in self.ghosts:
+        for index, _ in enumerate(self.ghosts):
+            ghost = self.ghosts[index]
+
             observations[ghost.id] = self._get_observation(ghost)
             rewards[ghost.id] = self._get_reward(ghost, self.pacman).value
             terminations[ghost.id] = self._get_termination(ghost)
@@ -80,6 +91,7 @@ class PacManEnvironment(ParallelEnv):
     def close(self):
         pass
 
+    @functools.lru_cache(maxsize=None)
     def observation_space(self, agent: AgentID):
         """
         Returns the partial information available for the given agent.
@@ -94,6 +106,7 @@ class PacManEnvironment(ParallelEnv):
         #low and high are the possible values in the grid encoding
         return Box(low=1, high=5, shape=(3, 3), dtype=np.uint8)
 
+    @functools.lru_cache(maxsize=None)
     def action_space(self, agent: AgentID):
         """
         Returns four different possible actions for a given agent:
@@ -133,7 +146,7 @@ class PacManEnvironment(ParallelEnv):
     def _get_observation(self, ghost: Ghost) -> np.ndarray:
         x, y = ghost.current_position
         # Boundaries are ok since they are walls and the ghosts won't be able to move there
-        ghost.view = self.global_view[x - 1 : x + 2, y - 1 : y + 2]
+        ghost.view = self.global_view[(x-1):(x+2), (y-1):(y+2)]
         return ghost.view
 
     @staticmethod
