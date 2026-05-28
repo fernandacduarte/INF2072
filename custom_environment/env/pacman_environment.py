@@ -6,7 +6,7 @@ from pettingzoo.utils.env import AgentID
 from gymnasium.spaces import Box, Discrete
 
 from custom_environment.env.domain.agent import Agent
-from custom_environment.env.domain.enum import Action, Observation, Reward
+from custom_environment.env.domain.constant import Action, Observation, Reward
 from custom_environment.env.domain.ghost import Ghost
 from custom_environment.env.domain.pacman import PacMan
 from custom_environment.utils import Graph
