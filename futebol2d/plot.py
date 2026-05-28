@@ -257,12 +257,13 @@ def plot_best_seed_mean_reward(runs_dir, save_path=None):
 
 def plot_average_eval_metrics_table(runs_dir, save_path=None):
     """
-    Generate a table image with average evaluation metrics across seeds.
+    Generate a table image with evaluation metrics across seeds.
 
-    Reads each `{algo}_multiseed_eval.csv` and computes algorithm-level means for:
+    Reads each `{algo}_multiseed_eval.csv` and computes algorithm-level aggregates for:
       - eval_mean_reward
       - eval_std_reward
       - score_rate
+      - robust statistics to reduce outlier sensitivity
 
     Args:
         runs_dir (str): Folder containing multiseed eval CSV files.
@@ -291,23 +292,48 @@ def plot_average_eval_metrics_table(runs_dir, save_path=None):
         if not eval_means:
             raise ValueError(f"Empty multiseed eval file: {eval_csv}")
 
+        eval_means_arr = np.array(eval_means, dtype=np.float64)
+        eval_stds_arr = np.array(eval_stds, dtype=np.float64)
+        score_rates_arr = np.array(score_rates, dtype=np.float64)
+
+        # Trim one best and one worst seed when possible for a robust center estimate.
+        if len(eval_means_arr) >= 3:
+            sorted_vals = np.sort(eval_means_arr)
+            trimmed_mean = float(np.mean(sorted_vals[1:-1]))
+        else:
+            trimmed_mean = float(np.mean(eval_means_arr))
+
+        q1 = float(np.percentile(eval_means_arr, 25))
+        q3 = float(np.percentile(eval_means_arr, 75))
+        iqr = q3 - q1
+        failure_rate = float(np.mean(eval_means_arr < 0.0))
+        median_eval = float(np.median(eval_means_arr))
+
         rows.append([
             algo.upper(),
-            f"{np.mean(eval_means):.3f}",
-            f"{np.mean(eval_stds):.3f}",
-            f"{np.mean(score_rates):.3f}",
+            f"{float(np.mean(eval_means_arr)):.3f}",
+            f"{median_eval:.3f}",
+            f"{trimmed_mean:.3f}",
+            f"{iqr:.3f}",
+            f"{failure_rate:.3f}",
+            f"{float(np.mean(eval_stds_arr)):.3f}",
+            f"{float(np.mean(score_rates_arr)):.3f}",
         ])
 
     col_labels = [
         "Algorithm",
         "Mean Reward (avg)",
+        "Mean Reward (median)",
+        "Mean Reward (trimmed)",
+        "IQR",
+        "Failure Rate (<0)",
         "Std Reward (avg)",
         "Score Rate (avg)",
     ]
 
-    fig, ax = plt.subplots(figsize=(9, 2.7))
+    fig, ax = plt.subplots(figsize=(15, 3.2))
     ax.axis("off")
-    ax.set_title("Average Evaluation Metrics (across 10 seeds)", pad=12)
+    ax.set_title("Evaluation Metrics Across Seeds (mean + robust stats)", pad=12)
 
     table = ax.table(
         cellText=rows,
@@ -316,8 +342,8 @@ def plot_average_eval_metrics_table(runs_dir, save_path=None):
         cellLoc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 1.35)
+    table.set_fontsize(9)
+    table.scale(1, 1.45)
 
     if save_path is None:
         save_path = runs_path / "average_eval_metrics_table.png"
