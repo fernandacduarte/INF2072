@@ -26,7 +26,7 @@ class PacManEnvironment(ParallelEnv):
     ):
         # Petting zoo uses string identifiers for agents
         self.possible_agents = [f"ghost_{ghost+1}" for ghost in range(number_ghosts)]
-        self.global_view =  global_view
+        self.global_view = global_view
 
         self.ghosts = []
         self.pacman = None
@@ -71,6 +71,14 @@ class PacManEnvironment(ParallelEnv):
 
         # Actions must be executed previously
         for index, (_, action) in enumerate(actions.items()):
+            if not isinstance(action, Action):
+                action_int = int(action)
+                if 0 <= action_int < len(Action):
+                    action = list(Action)[action_int]
+                elif any(action_int == item.value for item in Action):
+                    action = Action(action_int)
+                else:
+                    raise ValueError(f"Invalid action token for ghost policy: {action}")
             self._execute_action(self.ghosts[index], action)
 
         # New insights are only obtained after all actions are done
@@ -118,30 +126,51 @@ class PacManEnvironment(ParallelEnv):
         return Discrete(4)
 
     def _execute_action(self, agent: Agent, action: Action):
+        action_value = action.value
+
         x, y = agent.current_position
         new_x = x
         new_y = y
 
-        if action == Action.MOVE_RIGHT.value:
+        if action_value == Action.MOVE_RIGHT.value:
             new_x = x + 1
-        elif action == Action.MOVE_LEFT.value:
+        elif action_value == Action.MOVE_LEFT.value:
             new_x = x - 1
-        elif action == Action.MOVE_UP.value:
+        elif action_value == Action.MOVE_UP.value:
             new_y = y + 1
         else:
             new_y = y - 1
 
-        if (
-            self.global_view[new_x, new_y] == Observation.EMPTY.value
-            or self.global_view[new_x, new_y] == Observation.PAC_MAN.value
-        ):
+        target_cell = self.global_view[new_x, new_y]
+
+        if isinstance(agent, Ghost):
+            can_move = target_cell in (
+                Observation.EMPTY.value,
+                Observation.PAC_MAN.value,
+            )
+        elif isinstance(agent, PacMan):
+            can_move = target_cell in (
+                Observation.EMPTY.value,
+                Observation.GHOST.value,
+            )
+        else:
+            raise TypeError(f"Unsupported agent type in _execute_action: {type(agent)}")
+
+        if can_move:
             agent.current_position = (new_x, new_y)
             self.global_view[x, y] = Observation.EMPTY.value
 
-            if self.global_view[new_x, new_y] == Observation.PAC_MAN.value:
+            if isinstance(agent, Ghost) and target_cell == Observation.PAC_MAN.value:
+                self.global_view[new_x, new_y] = Observation.CAPUTRED.value
+            elif isinstance(agent, PacMan) and target_cell == Observation.GHOST.value:
                 self.global_view[new_x, new_y] = Observation.CAPUTRED.value
             else:
-                self.global_view[new_x, new_y] = Observation.GHOST.value
+                if isinstance(agent, Ghost):
+                    self.global_view[new_x, new_y] = Observation.GHOST.value
+                elif isinstance(agent, PacMan):
+                    self.global_view[new_x, new_y] = Observation.PAC_MAN.value
+                else:
+                    raise TypeError(f"Unsupported agent type in _execute_action: {type(agent)}")
 
     def _get_observation(self, ghost: Ghost) -> np.ndarray:
         x, y = ghost.current_position
