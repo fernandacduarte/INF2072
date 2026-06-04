@@ -29,3 +29,13 @@
 - Antes de finalizar uma mudanca, verificar erros de sintaxe/import nos arquivos alterados.
 - Se possivel, validar com um ciclo curto de treino/eval ou ao menos conferir caminhos e argumentos.
 - Ao criar novos scripts utilitarios, documentar uso no `README.md` com exemplos de comando.
+
+## Commit message (commit.txt)
+- Sempre que o usuario pedir para preparar ou reescrever `commit.txt`, comparar com `git status` atual e cobrir todos os arquivos alterados.
+- Estrutura obrigatoria de `commit.txt`:
+	1) titulo curto no topo,
+	2) secao "Resumo de resultados" primeiro,
+	3) secao com diferencas por arquivo (ou por grupo de artefatos quando houver muitos arquivos gerados).
+- No detalhamento por arquivo, explicar o que mudou e por que mudou.
+- Se houver muitos artefatos gerados (checkpoints, CSVs, imagens), listar os grupos de arquivos e explicitar que sao artefatos de execucao.
+- Não incluir arquivos não adicionados ou ignorados.

@@ -7,6 +7,7 @@ __pycache__/
 *.pyd
 /.vscode
 /benchmarl_setup/runs/iql_pacman_*
+/benchmarl_setup/runs/vdn_pacman_*
 /output.txt
 /progress.txt
 /commit.txt

@@ -85,6 +85,66 @@ You can also pass an explicit checkpoint to eval:
 
 Outputs are saved under `benchmarl_setup/runs` by default.
 
+### IQL vs VDN Benchmark (Multi-Seed)
+
+You can now run a full benchmark with one command using:
+
+- `benchmarl_setup/run_benchmark.py`
+
+Example (5 seeds, shared training config):
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2,3,4 --max-frames 50000
+```
+
+Useful optional parameters:
+
+```bash
+--algorithms iql,vdn --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+```
+
+This command now trains and then automatically writes a benchmark summary CSV.
+
+The summary CSV includes, per run:
+
+- `algorithm`
+- `seed`
+- `run_dir`
+- `n_points`
+- `final_reward`
+- `tail_mean_reward`
+- `best_reward`
+- `checkpoint_path`
+
+### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX)
+
+Use:
+
+- `benchmarl_setup/plot_benchmarl_reward.py`
+
+This script can aggregate runs from multiple algorithms and plot all of them in the same figure:
+
+- Mean reward curve per algorithm
+- Standard deviation band per algorithm
+
+Examples:
+
+```bash
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmix --show-runs
+```
+
+Optional parameters:
+
+```bash
+--window 5 --out benchmarl_setup\runs\benchmark_iql_vdn.png --no-open
+```
+
+If no `--out` is provided, the default output is:
+
+- `benchmarl_setup/runs/benchmark_reward_multiseed_mean_std.png` (when plotting multiple algorithms)
+- `benchmarl_setup/runs/<algorithm>_reward_multiseed_mean_std.png` (when plotting one algorithm)
+
 ### Plot de Reward IQL (Passo a Passo)
 
 Use o script `benchmarl_setup/plot_iql_reward.py` para gerar um gráfico da média de recompensa com banda de desvio padrão rolante.
