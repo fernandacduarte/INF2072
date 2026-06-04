@@ -1,0 +1,4 @@
+benchmarl
+pettingzoo
+gymnasium
+numpy

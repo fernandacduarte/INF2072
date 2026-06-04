@@ -1,0 +1,338 @@
+import argparse
+import csv
+import time
+from pathlib import Path
+import sys
+
+import torch
+
+from benchmarl.experiment import Experiment
+from torchrl.envs.utils import ExplorationType, set_exploration_type, step_mdp
+
+# Ensure workspace root is importable when running this file by path.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from custom_environment.env.domain.constant import Observation
+
+
+SYMBOLS = {
+    Observation.CAPUTRED.value: "X",
+    Observation.EMPTY.value: " ",
+    Observation.GHOST.value: "G",
+    Observation.PAC_MAN.value: "P",
+    Observation.WALL.value: "#",
+}
+
+# Environment action-space indices (0..3) map to Action enum order.
+ACTION_NAME = {
+    0: "RIGHT",
+    1: "LEFT",
+    2: "UP",
+    3: "DOWN",
+}
+
+
+def render_ascii(grid) -> str:
+    lines = []
+    for row in grid:
+        lines.append("".join(SYMBOLS.get(int(cell), "?") for cell in row))
+    return "\n".join(lines)
+
+
+def _read_scalar_values(csv_path: Path) -> list[float]:
+    values = []
+    with csv_path.open("r", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            values.append(float(row[1]))
+    return values
+
+
+def _scalars_dir_for_run(run_dir: Path) -> Path | None:
+    nested = run_dir / run_dir.name / "scalars"
+    if nested.exists():
+        return nested
+    direct = run_dir / "scalars"
+    if direct.exists():
+        return direct
+    return None
+
+
+def _latest_checkpoint_in_run(run_dir: Path) -> Path | None:
+    checkpoints_dir = run_dir / "checkpoints"
+    if not checkpoints_dir.exists():
+        return None
+    checkpoint_files = sorted(
+        checkpoints_dir.glob("checkpoint_*.pt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return checkpoint_files[0] if checkpoint_files else None
+
+
+def _score_run_for_selection(run_dir: Path) -> tuple[float, float, float]:
+    scalars_dir = _scalars_dir_for_run(run_dir)
+    if scalars_dir is None:
+        return (-float("inf"), -float("inf"), run_dir.stat().st_mtime)
+
+    reward_file = scalars_dir / "collection_reward_reward_mean.csv"
+    if not reward_file.exists():
+        return (-float("inf"), -float("inf"), run_dir.stat().st_mtime)
+
+    rewards = _read_scalar_values(reward_file)
+    if not rewards:
+        return (-float("inf"), -float("inf"), run_dir.stat().st_mtime)
+
+    window = min(20, len(rewards))
+    tail_mean = sum(rewards[-window:]) / float(window)
+    best_single = max(rewards)
+    recency = run_dir.stat().st_mtime
+    return (tail_mean, best_single, recency)
+
+
+def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
+    return [
+        p
+        for p in runs_root.iterdir()
+        if p.is_dir() and p.name.startswith(f"{learner}_pacman_")
+    ]
+
+
+def _latest_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
+    run_dirs = _candidate_run_dirs(learner, runs_root)
+    if not run_dirs:
+        raise FileNotFoundError(
+            f"No run folders found for learner '{learner}' in {runs_root}."
+        )
+
+    run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    for run_dir in run_dirs:
+        checkpoint = _latest_checkpoint_in_run(run_dir)
+        if checkpoint is not None:
+            return checkpoint
+
+    raise FileNotFoundError(
+        "No checkpoint files found. Run training with checkpoint saving enabled, for example:\n"
+        f"py -3.11 benchmarl_setup\\run_pacman_benchmarl.py --algorithm {learner} --checkpoint-at-end"
+    )
+
+
+def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
+    run_dirs = _candidate_run_dirs(learner, runs_root)
+    if not run_dirs:
+        raise FileNotFoundError(
+            f"No run folders found for learner '{learner}' in {runs_root}."
+        )
+
+    scored_runs = []
+    for run_dir in run_dirs:
+        checkpoint = _latest_checkpoint_in_run(run_dir)
+        if checkpoint is None:
+            continue
+        score = _score_run_for_selection(run_dir)
+        scored_runs.append((score, checkpoint, run_dir))
+
+    if not scored_runs:
+        raise FileNotFoundError(
+            "No checkpoint files found. Run training with checkpoint saving enabled, for example:\n"
+            f"py -3.11 benchmarl_setup\\run_pacman_benchmarl.py --algorithm {learner} --checkpoint-at-end"
+        )
+
+    scored_runs.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_checkpoint, best_run_dir = scored_runs[0]
+    print(
+        "Best-run selection: "
+        f"run={best_run_dir.name} tail_mean={best_score[0]:.4f} best_single={best_score[1]:.4f}"
+    )
+    return best_checkpoint
+
+
+def _unwrap_pacman_env(env):
+    current = env
+    for _ in range(12):
+        if hasattr(current, "_env"):
+            return current._env
+        if hasattr(current, "base_env"):
+            current = current.base_env
+            continue
+        break
+    return current
+
+
+def _tensor_to_int_list(tensor: torch.Tensor) -> list[int]:
+    flat = tensor.detach().cpu().reshape(-1)
+    return [int(x) for x in flat.tolist()]
+
+
+def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
+    flat = tensor.detach().cpu().reshape(-1)
+    return [float(x) for x in flat.tolist()]
+
+
+def run_episode(
+    learner: str,
+    delay: float,
+    max_steps: int,
+    checkpoint: Path | None,
+    runs_root: Path,
+    checkpoint_select: str,
+    show_reward_breakdown: bool,
+) -> None:
+    if checkpoint is not None:
+        checkpoint_path = checkpoint
+    elif checkpoint_select == "best":
+        checkpoint_path = _best_checkpoint_for_learner(learner, runs_root)
+    else:
+        checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root)
+    print(f"Using checkpoint: {checkpoint_path}")
+
+    experiment = Experiment.reload_from_file(
+        str(checkpoint_path),
+        experiment_patch={
+            "evaluation": False,
+            "render": False,
+            "loggers": [],
+        },
+    )
+
+    env = experiment.test_env
+    raw_env = _unwrap_pacman_env(env)
+    agent_ids = list(getattr(raw_env, "possible_agents", []))
+
+    print("Pacman Environment (episode start):")
+    print(render_ascii(raw_env.global_view))
+    print()
+    print("Legend: #=Wall, G=Ghost, P=Pacman, X=Captured, <space>=Empty")
+
+    total_reward = 0.0
+    done = False
+    step = 0
+
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+        tensordict = env.reset()
+        while not done and step < max_steps:
+            step += 1
+
+            tensordict = experiment.policy(tensordict)
+            action_tensor = tensordict.get(("ghost", "action"))
+            action_values = _tensor_to_int_list(action_tensor)
+
+            transition = env.step(tensordict)
+            next_td = transition.get("next")
+
+            reward_tensor = next_td.get(("ghost", "reward"))
+            reward_values = _tensor_to_float_list(reward_tensor)
+            total_reward += float(sum(reward_values))
+
+            action_info = {
+                agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": ACTION_NAME.get(action_values[i], str(action_values[i]))
+                for i in range(len(action_values))
+            }
+            reward_info = {
+                agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": reward_values[i]
+                for i in range(len(reward_values))
+            }
+
+            done = bool(next_td.get("done").item())
+
+            print()
+            print(f"Step {step} | learner={learner} | actions={action_info}")
+            print(render_ascii(raw_env.global_view))
+            print(f"rewards={reward_info} done={done}")
+            if show_reward_breakdown:
+                breakdown = getattr(raw_env, "last_team_reward_breakdown", None)
+                if breakdown is not None:
+                    print(f"reward_breakdown={breakdown}")
+
+            if delay > 0:
+                time.sleep(delay)
+
+            tensordict = step_mdp(
+                transition,
+                reward_keys=env.reward_keys,
+                action_keys=env.action_keys,
+                done_keys=env.done_keys,
+            )
+
+    print()
+    print(
+        f"Episode finished | learner={learner} | steps={step} "
+        f"| total_reward={total_reward:.3f} | done={done}"
+    )
+
+    experiment.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Render one full Pacman episode using a trained learner checkpoint."
+    )
+    parser.add_argument(
+        "--learner",
+        "--algo",
+        dest="learner",
+        choices=["iql", "vdn", "qmix"],
+        required=True,
+        help="Learner whose trained checkpoint should control the ghosts.",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.25,
+        help="Seconds between rendered steps.",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=200,
+        help="Maximum number of environment steps for the episode.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Deprecated placeholder (kept for CLI compatibility).",
+    )
+    parser.add_argument(
+        "--runs-root",
+        type=Path,
+        default=PROJECT_ROOT / "benchmarl_setup" / "runs",
+        help="Root folder containing learner run directories.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Optional explicit checkpoint path (.pt). If omitted, latest for learner is used.",
+    )
+    parser.add_argument(
+        "--checkpoint-select",
+        choices=["best", "latest"],
+        default="best",
+        help="How to select checkpoint when --checkpoint is not provided.",
+    )
+    parser.add_argument(
+        "--show-reward-breakdown",
+        action="store_true",
+        help="Print per-step team reward term breakdown from the environment.",
+    )
+    args = parser.parse_args()
+
+    run_episode(
+        learner=args.learner,
+        delay=args.delay,
+        max_steps=args.max_steps,
+        checkpoint=args.checkpoint,
+        runs_root=args.runs_root,
+        checkpoint_select=args.checkpoint_select,
+        show_reward_breakdown=args.show_reward_breakdown,
+    )
+
+
+if __name__ == "__main__":
+    main()

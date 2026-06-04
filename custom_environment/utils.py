@@ -38,8 +38,10 @@ class Graph:
         for direction in DIRECTIONS:
             new_coord_x = state[0] + direction[0]
             new_coord_y = state[1] + direction[1]
-            if self._map[new_coord_x][new_coord_y] != Observation.WALL:
-                neighbors.append((new_coord_x, new_coord_y))
+            # Limita vizinhos ao patch local 3x3
+            if 0 <= new_coord_x < 3 and 0 <= new_coord_y < 3:
+                if self._map[new_coord_x][new_coord_y] != Observation.WALL.value:
+                    neighbors.append((new_coord_x, new_coord_y))
 
         return neighbors
 
