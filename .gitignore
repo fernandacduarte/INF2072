@@ -8,6 +8,8 @@ __pycache__/
 /.vscode
 /benchmarl_setup/runs/iql_pacman_*
 /benchmarl_setup/runs/vdn_pacman_*
+/benchmarl_setup/runs/benchmark_reward_multiseed_mean_std.png
+/benchmarl_setup/runs/benchmark_summary.csv
 /output.txt
 /progress.txt
 /commit.txt

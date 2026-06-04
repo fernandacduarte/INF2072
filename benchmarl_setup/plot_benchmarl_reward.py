@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import webbrowser
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -48,13 +49,50 @@ def _resolve_scalars_dir(run_dir: Path) -> Path | None:
 
 
 def _open_file(path: Path) -> None:
+    resolved = path.resolve()
+    if not resolved.exists():
+        print(f"Warning: output file does not exist, cannot open automatically: {resolved}")
+        return
+
     try:
         if sys.platform.startswith("win"):
-            os.startfile(path)  # type: ignore[attr-defined]
+            escaped_path = str(resolved).replace("'", "''")
+
+            # Prefer a deterministic open path in Windows.
+            ps_cmd = (
+                "$p = Start-Process -FilePath '"
+                + escaped_path
+                + "' -PassThru -ErrorAction Stop; "
+                "if ($p -and $p.Id) { exit 0 } else { exit 1 }"
+            )
+            rc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                check=False,
+            ).returncode
+            if rc == 0:
+                print("Opened plot using: powershell Start-Process")
+                return
+
+            # Fallback for restricted environments.
+            if webbrowser.open(resolved.as_uri(), new=0, autoraise=True):
+                print("Opened plot using: webbrowser")
+                return
+
+            # Last fallback: open parent folder and select the generated file.
+            subprocess.run(["explorer", "/select,", str(resolved)], check=False)
+            print("Warning: could not open file directly; opened containing folder instead.")
         elif sys.platform == "darwin":
-            subprocess.run(["open", str(path)], check=False)
+            rc = subprocess.run(["open", str(resolved)], check=False).returncode
+            if rc == 0:
+                print("Opened plot using: open")
+            else:
+                print(f"Warning: could not open image automatically (open returncode={rc}).")
         else:
-            subprocess.run(["xdg-open", str(path)], check=False)
+            rc = subprocess.run(["xdg-open", str(resolved)], check=False).returncode
+            if rc == 0:
+                print("Opened plot using: xdg-open")
+            else:
+                print(f"Warning: could not open image automatically (xdg-open returncode={rc}).")
     except Exception as exc:
         print(f"Warning: could not open image automatically: {exc}")
 
