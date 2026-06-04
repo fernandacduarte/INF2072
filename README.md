@@ -68,7 +68,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 
 ```bash
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
---init-random-frames 1000 --print-epsilon --epsilon-log-interval-frames 1000
+--init-random-frames 1000
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):

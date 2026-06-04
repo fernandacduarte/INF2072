@@ -1,6 +1,9 @@
 import argparse
 import csv
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,6 +50,18 @@ def _resolve_scalars_dir(run_dir: Path) -> Path:
     raise FileNotFoundError(f"Could not find scalars directory inside {run_dir}")
 
 
+def _open_file(path: Path) -> None:
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except Exception as exc:
+        print(f"Warning: could not open image automatically: {exc}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot reward mean and stddev from BenchMARL logs.")
     parser.add_argument(
@@ -72,6 +87,11 @@ def main() -> None:
         type=Path,
         default=Path("benchmarl_setup") / "runs" / "iql_reward_mean_stddev.png",
         help="Output PNG path.",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not open the generated PNG automatically.",
     )
     args = parser.parse_args()
 
@@ -117,6 +137,9 @@ def main() -> None:
     print(f"Saved: {args.out}")
     print(f"Reward mean min/max: {reward_mean.min():.3f}/{reward_mean.max():.3f}")
     print(f"Reward stddev min/max: {reward_std.min():.3f}/{reward_std.max():.3f}")
+
+    if not args.no_open:
+        _open_file(args.out)
 
 
 if __name__ == "__main__":
