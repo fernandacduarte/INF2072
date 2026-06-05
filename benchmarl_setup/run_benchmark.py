@@ -1,6 +1,10 @@
 import argparse
+import csv
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from summarize_benchmark_runs import summarize_runs
@@ -85,6 +89,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip summary generation after training.",
     )
+    parser.add_argument(
+        "--live-progress-file",
+        type=str,
+        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "live_progress.csvl").resolve()),
+        help="Path to live progress CSVL consumed by benchmarl_setup/liveplot.py.",
+    )
+    parser.add_argument(
+        "--report-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Polling interval used to export live progress while training is running.",
+    )
+    parser.add_argument(
+        "--no-liveplot-report",
+        action="store_true",
+        help="Disable writing live progress updates for liveplot.py.",
+    )
     return parser.parse_args()
 
 
@@ -126,6 +147,151 @@ def _build_command(args: argparse.Namespace, algorithm: str, seed: int) -> list[
     return command
 
 
+def _candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
+    prefix = f"{algorithm}_pacman_"
+    if not runs_root.exists():
+        return []
+    return [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
+
+
+def _resolve_scalars_dir(run_dir: Path) -> Path | None:
+    nested = run_dir / run_dir.name / "scalars"
+    if nested.exists():
+        return nested
+    direct = run_dir / "scalars"
+    if direct.exists():
+        return direct
+    return None
+
+
+def _load_two_col_csv(path: Path) -> tuple[list[float], list[float]]:
+    x_vals: list[float] = []
+    y_vals: list[float] = []
+    if not path.exists():
+        return x_vals, y_vals
+
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            try:
+                x_vals.append(float(row[0]))
+                y_vals.append(float(row[1]))
+            except ValueError:
+                continue
+    return x_vals, y_vals
+
+
+class ProgressReporter:
+    def __init__(
+        self,
+        runs_root: Path,
+        algorithms: list[str],
+        output_file: Path,
+        interval_seconds: float,
+    ) -> None:
+        self.runs_root = runs_root
+        self.algorithms = algorithms
+        self.output_file = output_file
+        self.interval_seconds = max(0.2, interval_seconds)
+        self._last_step_by_run: dict[tuple[str, str], int] = {}
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._existing_run_ids: set[tuple[str, str]] = set()
+        self._tracked_run_ids: set[tuple[str, str]] = set()
+
+    def start(self) -> None:
+        for algorithm in self.algorithms:
+            for run_dir in _candidate_run_dirs(self.runs_root, algorithm):
+                self._existing_run_ids.add((algorithm, run_dir.name))
+
+        self.output_file.parent.mkdir(parents=True, exist_ok=True)
+        # Truncate at the beginning of a new benchmark session.
+        self.output_file.write_text("", encoding="utf-8")
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+        self.poll_once()
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self.poll_once()
+            time.sleep(self.interval_seconds)
+
+    def poll_once(self) -> None:
+        lines: list[str] = []
+        for algorithm in self.algorithms:
+            for run_dir in _candidate_run_dirs(self.runs_root, algorithm):
+                scalars_dir = _resolve_scalars_dir(run_dir)
+                if scalars_dir is None:
+                    continue
+
+                frames_path = scalars_dir / "counters_total_frames.csv"
+                reward_path = scalars_dir / "collection_reward_reward_mean.csv"
+                _, frames = _load_two_col_csv(frames_path)
+                _, rewards = _load_two_col_csv(reward_path)
+
+                n = min(len(frames), len(rewards))
+                if n <= 0:
+                    continue
+
+                run_key = (algorithm, run_dir.name)
+
+                # Ignore pre-existing runs and only track runs created in this session.
+                if run_key not in self._tracked_run_ids:
+                    if run_key in self._existing_run_ids:
+                        continue
+                    self._tracked_run_ids.add(run_key)
+
+                last_step = self._last_step_by_run.get(run_key, 0)
+
+                for step in range(last_step + 1, n + 1):
+                    frame_value = frames[step - 1]
+                    reward_value = rewards[step - 1]
+                    lines.append(
+                        f"{algorithm},{run_dir.name},{step},{frame_value},{reward_value}\n"
+                    )
+
+                self._last_step_by_run[run_key] = n
+
+        if lines:
+            with self.output_file.open("a", encoding="utf-8") as f:
+                f.writelines(lines)
+
+
+def _run_algorithm_serial_seeds(
+    args: argparse.Namespace,
+    algorithm: str,
+    seeds: list[int],
+    stop_event: threading.Event,
+) -> list[tuple[str, int, int]]:
+    failures: list[tuple[str, int, int]] = []
+    for seed in seeds:
+        if args.stop_on_error and stop_event.is_set():
+            break
+
+        cmd = _build_command(args, algorithm, seed)
+        print(f"[algorithm={algorithm}] seed={seed}")
+        print(" ".join(cmd))
+
+        completed = subprocess.run(cmd, check=False)
+        if completed.returncode != 0:
+            print(
+                f"Job failed: algorithm={algorithm} seed={seed} returncode={completed.returncode}"
+            )
+            failures.append((algorithm, seed, completed.returncode))
+            if args.stop_on_error:
+                stop_event.set()
+                break
+
+    return failures
+
+
 def main() -> None:
     args = parse_args()
 
@@ -140,27 +306,50 @@ def main() -> None:
 
     seeds = _parse_seeds(args.seeds)
 
-    total = len(algorithms) * len(seeds)
-    index = 0
     failures: list[tuple[str, int, int]] = []
 
-    print(f"Running {total} benchmark jobs.")
-    for algorithm in algorithms:
-        for seed in seeds:
-            index += 1
-            cmd = _build_command(args, algorithm, seed)
-            print(f"[{index}/{total}] algorithm={algorithm} seed={seed}")
-            print(" ".join(cmd))
-            completed = subprocess.run(cmd, check=False)
-            if completed.returncode != 0:
-                print(
-                    f"Job failed: algorithm={algorithm} seed={seed} returncode={completed.returncode}"
-                )
-                failures.append((algorithm, seed, completed.returncode))
-                if args.stop_on_error:
-                    break
-        if failures and args.stop_on_error:
-            break
+    reporter: ProgressReporter | None = None
+    if not args.no_liveplot_report:
+        reporter = ProgressReporter(
+            runs_root=Path(args.save_folder),
+            algorithms=algorithms,
+            output_file=Path(args.live_progress_file),
+            interval_seconds=args.report_interval_seconds,
+        )
+        reporter.start()
+        print(f"Live progress enabled: {args.live_progress_file}")
+
+    total = len(algorithms) * len(seeds)
+    print(
+        "Running benchmark jobs with parallel algorithms and serial seeds per algorithm. "
+        f"Total jobs: {total}"
+    )
+
+    stop_event = threading.Event()
+    try:
+        with ThreadPoolExecutor(max_workers=len(algorithms)) as executor:
+            future_map = {
+                executor.submit(
+                    _run_algorithm_serial_seeds,
+                    args,
+                    algorithm,
+                    seeds,
+                    stop_event,
+                ): algorithm
+                for algorithm in algorithms
+            }
+
+            for future, algorithm in future_map.items():
+                try:
+                    failures.extend(future.result())
+                except Exception as exc:
+                    print(f"Worker crashed: algorithm={algorithm} error={exc}")
+                    failures.append((algorithm, -1, 1))
+                    if args.stop_on_error:
+                        stop_event.set()
+    finally:
+        if reporter is not None:
+            reporter.stop()
 
     print()
     if failures:

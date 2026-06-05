@@ -85,7 +85,7 @@ You can also pass an explicit checkpoint to eval:
 
 Outputs are saved under `benchmarl_setup/runs` by default.
 
-### IQL vs VDN Benchmark (Multi-Seed)
+### Benchmark (Multi-Seed, Parallel by Algorithm)
 
 You can now run a full benchmark with one command using:
 
@@ -96,6 +96,11 @@ Example (5 seeds, shared training config):
 ```bash
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2,3,4 --max-frames 50000
 ```
+
+Execution strategy:
+
+- Algorithms run in parallel (for example IQL and VDN at the same time).
+- Seeds run serially inside each algorithm worker.
 
 Useful optional parameters:
 
@@ -115,6 +120,33 @@ The summary CSV includes, per run:
 - `tail_mean_reward`
 - `best_reward`
 - `checkpoint_path`
+
+### Live Plot During Training
+
+Training now reports live progress to:
+
+- `benchmarl_setup/runs/live_progress.csvl`
+
+Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with mean ± std curves per algorithm.
+
+Start live monitor:
+
+```bash
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn,qmix
+```
+
+Then run benchmark normally:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmix --seeds 0,1,2,3,4
+```
+
+Useful options:
+
+```bash
+py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 3
+py -3.11 benchmarl_setup\run_benchmark.py --live-progress-file benchmarl_setup\runs\live_progress.csvl --report-interval-seconds 1.0
+```
 
 ### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX)
 
