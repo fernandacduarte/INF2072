@@ -4,10 +4,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-
-def _candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
-    prefix = f"{algorithm}_pacman_"
-    return [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
+from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
 
 
 def _resolve_scalars_dir(run_dir: Path) -> Path | None:
@@ -73,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         type=str,
-        default="iql,vdn",
+        default="iql,vdn,qmixlocal,qmixglobal",
         help="Comma-separated algorithms to include.",
     )
     parser.add_argument(
@@ -100,13 +97,17 @@ def summarize_runs(
     if not algorithms:
         raise ValueError("At least one algorithm must be provided.")
 
-    normalized_algorithms = [item.strip().lower() for item in algorithms if item.strip()]
+    normalized_algorithms = [normalize_algorithm(item) for item in algorithms if item.strip()]
     if not normalized_algorithms:
         raise ValueError("At least one algorithm must be provided.")
 
+    invalid = [name for name in normalized_algorithms if name not in SUPPORTED_ALGORITHMS]
+    if invalid:
+        raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
+
     rows = []
     for algorithm in normalized_algorithms:
-        run_dirs = _candidate_run_dirs(runs_root, algorithm)
+        run_dirs = candidate_run_dirs(runs_root, algorithm)
         for run_dir in run_dirs:
             scalars_dir = _resolve_scalars_dir(run_dir)
             if scalars_dir is None:
@@ -183,7 +184,7 @@ def summarize_runs(
 
 def main() -> None:
     args = parse_args()
-    algorithms = [item.strip().lower() for item in args.algorithms.split(",") if item.strip()]
+    algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     summarize_runs(
         runs_root=args.runs_root,
         algorithms=algorithms,
