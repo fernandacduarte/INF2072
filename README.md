@@ -4,14 +4,10 @@ Repositório para a disciplina TOP INTELIGENCIA ARTIFIC III - 2026.1
 ## BenchMARL Setup
 
 ### Installation
-1. Navigate to the `benchmarl_setup` directory:
-   ```bash
-   cd benchmarl_setup
-   ```
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Install the required dependencies:
+```bash
+py -3.11 -m pip install -r requirements.txt
+```
 
 ### Pacman + BenchMARL Compatibility Check
 BenchMARL 1.5.x does **not** provide a runtime `register_env` function.
