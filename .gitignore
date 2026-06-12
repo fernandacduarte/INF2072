@@ -1,4 +1,19 @@
-/futebol2d/__pycache__/*.pyc
-/futebol2d/*.un~
-/futebol2d/*.swp
-/futebol2d/runs_2000/live_progress.csvl
+.idea/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+/.vscode
+/benchmarl_setup/runs/iql_pacman_*
+/benchmarl_setup/runs/vdn_pacman_*
+/benchmarl_setup/runs/qmix_pacman_*
+/benchmarl_setup/runs/live_progress.csvl
+/benchmarl_setup/runs/benchmark_summary.csv
+/output.txt
+/progress.txt
+/commit.txt
+/custom_environment/env/.pacman_environment.py.un~
+/custom_environment/env/domain/.constant.py.un~
+/..gitignore.un~
