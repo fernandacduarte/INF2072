@@ -55,6 +55,26 @@ py -3.11 custom_environment\eval.py --learner vdn
 py -3.11 custom_environment\eval.py --learner qmix
 ```
 
+By default, evaluation preserves the original ASCII terminal rendering. To open
+the human-view Pygame renderer, use:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --render-mode human --delay 0.08
+```
+
+You can test the renderer before training any checkpoint with a random-policy
+episode:
+
+```bash
+py -3.11 custom_environment\render_demo.py --render-mode human --fps 12 --max-steps 200
+```
+
+For headless smoke tests or screenshots, use `rgb_array`:
+
+```bash
+py -3.11 custom_environment\render_demo.py --render-mode rgb_array --max-steps 3 --screenshot-out benchmarl_setup\runs\pacman_render.png
+```
+
 `custom_environment/eval.py` loads the latest checkpoint for the selected learner from `benchmarl_setup/runs`.
 It now supports futebol2d-style best-run selection across multiple runs:
 
@@ -75,6 +95,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 
 ```bash
 --delay 0.25 --max-steps 200 --checkpoint-select best --show-reward-breakdown
+--render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 ```
 
 You can also pass an explicit checkpoint to eval:
