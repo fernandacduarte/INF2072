@@ -21,8 +21,17 @@ class Action(Enum):
         return random.choice(list(cls))
 
 class Reward(Enum):
-    GET_PACMAN = 50
-    MOVE_TOWARDS_PACMAN = 10
-    MOVE_AWAY_PACMAN = -10
-    PACMAN_GOT_COIN = -5
-    UNSEEN_PACMAN = -5
+    GET_PACMAN                     =  20.0  # Terminal reward to encourage successful Pacman capture
+    PACMAN_TIMEOUT_WIN             = -20.0  # Penalizes the team if it fails to capture before timeout
+    NEWLY_SPOTTED                  =   1.0  # Bonus for regaining visual contact after an unseen period
+    DISTANCE_DECREASE              =   0.3  # Encourages reducing the team's minimum distance to the known target
+    DISTANCE_INCREASE              =  -0.3  # Discourages moves that increase distance from the target
+    CURRENTLY_VISIBLE              =   0.2  # Rewards keeping Pacman visible to sustain tracking
+    ENTER_RECENTLY_UNVISITED_TILE  =   0.08 # Encourages spatial exploration outside recently visited paths
+    REVEAL_UNSEEN_LOCAL_CELLS      =   0.05 # Encourages revealing new cells in local field of view
+    VALID_MOVE                     =   0.01 # Small bonus to favor valid movement and avoid inertia
+    INVALID_MOVE                   =  -0.08 # Penalizes blocked movement attempts (wall/occupied cell)
+    STAY_STILL                     =  -0.03 # Penalizes staying still to reduce stagnation
+    REPEATED_DIRECTION_REVERSAL    =  -0.02 # Penalizes repeated reversals to prevent ping-pong loops
+    GHOST_OVERLAP_OR_SAME_CORRIDOR =  -0.05 # Discourages overlap and redundant corridor following
+    TIMESTEP_PENALTY               =  -0.01 # Per-step cost to encourage faster captures
