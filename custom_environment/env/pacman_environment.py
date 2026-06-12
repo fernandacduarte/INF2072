@@ -116,11 +116,6 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         ]
         # Reset per-ghost exploration and movement memory at episode start.
         for ghost in self.ghosts:
-            ghost.prev_position = None
-            ghost.invalid_move = False
-            ghost.last_move_direction = None
-            ghost.reverse_streak = 0
-            ghost.seen_local_cells = set()
             ghost.last_tile_visit_step = {ghost.current_position: 0}
         # Place ghosts on the grid
         for ghost in self.ghosts:
