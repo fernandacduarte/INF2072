@@ -67,3 +67,4 @@ def test_capture_frame_returns_rgb_array_without_changing_render_mode() -> None:
 if __name__ == "__main__":
     test_rgb_array_render_smoke()
     test_capture_frame_returns_rgb_array_without_changing_render_mode()
+    print("Passed rendering smoke test")
