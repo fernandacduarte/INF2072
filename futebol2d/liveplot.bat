@@ -1,1 +1,0 @@
-%USERPROFILE%\AppData\Local\Programs\Python\Python312\python -m live_plot --progress-file runs_%1/live_progress.csvl 
