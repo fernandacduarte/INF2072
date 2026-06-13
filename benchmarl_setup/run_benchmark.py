@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
 from summarize_benchmark_runs import summarize_runs
 
 
@@ -33,8 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         type=str,
-        default="iql,vdn",
-        help="Comma-separated algorithms to run (for example: iql,vdn).",
+        default="iql,vdn,qmixlocal,qmixglobal",
+        help="Comma-separated algorithms to run (for example: iql,vdn,qmixlocal,qmixglobal).",
     )
     parser.add_argument(
         "--seeds",
@@ -147,13 +148,6 @@ def _build_command(args: argparse.Namespace, algorithm: str, seed: int) -> list[
     return command
 
 
-def _candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
-    prefix = f"{algorithm}_pacman_"
-    if not runs_root.exists():
-        return []
-    return [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
-
-
 def _resolve_scalars_dir(run_dir: Path) -> Path | None:
     nested = run_dir / run_dir.name / "scalars"
     if nested.exists():
@@ -203,7 +197,7 @@ class ProgressReporter:
 
     def start(self) -> None:
         for algorithm in self.algorithms:
-            for run_dir in _candidate_run_dirs(self.runs_root, algorithm):
+            for run_dir in candidate_run_dirs(self.runs_root, algorithm):
                 self._existing_run_ids.add((algorithm, run_dir.name))
 
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +220,7 @@ class ProgressReporter:
     def poll_once(self) -> None:
         lines: list[str] = []
         for algorithm in self.algorithms:
-            for run_dir in _candidate_run_dirs(self.runs_root, algorithm):
+            for run_dir in candidate_run_dirs(self.runs_root, algorithm):
                 scalars_dir = _resolve_scalars_dir(run_dir)
                 if scalars_dir is None:
                     continue
@@ -295,11 +289,11 @@ def _run_algorithm_serial_seeds(
 def main() -> None:
     args = parse_args()
 
-    algorithms = [item.strip().lower() for item in args.algorithms.split(",") if item.strip()]
+    algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
         raise ValueError("At least one algorithm must be provided.")
 
-    allowed = {"iql", "vdn", "qmix"}
+    allowed = set(SUPPORTED_ALGORITHMS)
     invalid = [name for name in algorithms if name not in allowed]
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")

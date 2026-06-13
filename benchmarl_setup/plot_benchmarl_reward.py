@@ -9,6 +9,8 @@ import webbrowser
 import matplotlib.pyplot as plt
 import numpy as np
 
+from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+
 
 def _load_two_col_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
     x_vals = []
@@ -31,11 +33,6 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
         start = max(0, i - window + 1)
         out[i] = float(np.mean(values[start : i + 1]))
     return out
-
-
-def _candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
-    prefix = f"{algorithm}_pacman_"
-    return [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
 
 
 def _resolve_scalars_dir(run_dir: Path) -> Path | None:
@@ -103,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--algorithm",
-        choices=["iql", "vdn", "qmix"],
+        choices=["iql", "vdn", "qmix", "qmixlocal", "qmixglobal"],
         default=None,
         help="Single algorithm to aggregate (backward-compatible alias).",
     )
@@ -111,7 +108,7 @@ def parse_args() -> argparse.Namespace:
         "--algorithms",
         type=str,
         default=None,
-        help="Comma-separated algorithms to aggregate together (for example: iql,vdn,qmix).",
+        help="Comma-separated algorithms to aggregate together (for example: iql,vdn,qmixlocal,qmixglobal).",
     )
     parser.add_argument(
         "--runs-root",
@@ -159,13 +156,13 @@ def main() -> None:
 
     algorithms: list[str]
     if args.algorithms:
-        algorithms = [item.strip().lower() for item in args.algorithms.split(",") if item.strip()]
+        algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     elif args.algorithm:
-        algorithms = [args.algorithm]
+        algorithms = [normalize_algorithm(args.algorithm)]
     else:
-        algorithms = ["iql", "vdn", "qmix"]
+        algorithms = ["iql", "vdn", "qmixlocal", "qmixglobal"]
 
-    allowed = {"iql", "vdn", "qmix"}
+    allowed = set(SUPPORTED_ALGORITHMS)
     invalid = [name for name in algorithms if name not in allowed]
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
@@ -183,7 +180,8 @@ def main() -> None:
     color_map = {
         "iql": "#1f77b4",
         "vdn": "#d62728",
-        "qmix": "#2ca02c",
+        "qmixlocal": "#2ca02c",
+        "qmixglobal": "#9467bd",
     }
 
     per_algorithm: dict[str, dict[str, object]] = {}
@@ -192,7 +190,7 @@ def main() -> None:
         if args.run_dir:
             run_dirs = args.run_dir
         else:
-            run_dirs = _candidate_run_dirs(args.runs_root, algorithm)
+            run_dirs = candidate_run_dirs(args.runs_root, algorithm)
 
         if not run_dirs:
             print(f"Warning: no run directories found for algorithm={algorithm} in {args.runs_root}")

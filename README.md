@@ -28,13 +28,19 @@ This repository now includes a custom BenchMARL Task/TaskClass adapter for Pacma
 
 - `benchmarl_setup/pacman_benchmarl_task.py`
 
-Use the runner below to train ghosts with IQL, VDN, or QMIX:
+Use the runner below to train ghosts with IQL, VDN, QMIX local, or QMIX global:
 
 ```bash
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn
-py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmix
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixlocal
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal
 ```
+
+Algorithm variants:
+
+- `qmixlocal`: uses per-agent Q-values for mixing without centralized global state.
+- `qmixglobal`: canonical QMIX variant that uses per-agent Q-values plus centralized global state for the mixer.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
@@ -48,7 +54,8 @@ To render one full episode controlled by the trained learner policy:
 ```bash
 py -3.11 custom_environment\eval.py --learner iql
 py -3.11 custom_environment\eval.py --learner vdn
-py -3.11 custom_environment\eval.py --learner qmix
+py -3.11 custom_environment\eval.py --learner qmixlocal
+py -3.11 custom_environment\eval.py --learner qmixglobal
 ```
 
 `custom_environment/eval.py` loads the latest checkpoint for the selected learner from `benchmarl_setup/runs`.
@@ -101,7 +108,7 @@ Execution strategy:
 Useful optional parameters:
 
 ```bash
---algorithms iql,vdn --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+--algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
@@ -128,13 +135,13 @@ Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benc
 Start live monitor:
 
 ```bash
-py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn,qmix
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn,qmixlocal,qmixglobal
 ```
 
 Then run benchmark normally:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmix --seeds 0,1,2,3,4
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4
 ```
 
 Useful options:
@@ -144,7 +151,7 @@ py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 3
 py -3.11 benchmarl_setup\run_benchmark.py --live-progress-file benchmarl_setup\runs\live_progress.csvl --report-interval-seconds 1.0
 ```
 
-### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX)
+### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX Local, QMIX Global)
 
 Use:
 
@@ -159,8 +166,33 @@ Examples:
 
 ```bash
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
-py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmix --show-runs
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixlocal,qmixglobal --show-runs
 ```
+
+### QMIX Global Mixer State Schema
+
+For `qmixglobal`, the mixer receives a centralized state vector at each step.
+
+For grid size `H x W` and `N` ghosts, the state dimension is:
+
+- `H * W + 3 * N + 7`
+
+State vector order:
+
+1. `wall_map_flat` (`H*W`): binary static wall map flattened.
+2. `ghost_positions_norm` (`2*N`): each ghost position normalized to `[0, 1]`.
+3. `team_pacman_memory` (4):
+   - `pacman_visible_now` (`0/1`)
+   - `target_x_norm`
+   - `target_y_norm`
+   - `steps_since_last_seen_norm`
+4. `ghost_to_target_dist_norm` (`N`): normalized BFS distance from each ghost to target memory.
+5. `team_min_dist_norm` (1): minimum normalized ghost-to-target distance.
+6. `episode_progress` (2):
+   - `step_fraction`
+   - `remaining_fraction`
+
+Policy observations remain local 3x3 for all algorithms; only `qmixglobal` mixer uses this centralized state.
 
 Optional parameters:
 

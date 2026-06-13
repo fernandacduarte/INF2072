@@ -58,6 +58,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Keep an immutable base map and reset from it every episode.
         self._base_grid = np.array(global_view, copy=True)
         self.global_view = np.array(global_view, copy=True)
+        self._wall_map = (self._base_grid == Observation.WALL.value).astype(np.float32)
 
         # List of Ghost objects (populated on reset)
         self.ghosts = []
@@ -75,6 +76,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_team_reward_breakdown = {}
         self.newly_spotted_min_unseen_steps = 6
         self.unseen_steps = 0
+
+        rows, cols = self.global_view.shape
+        self._state_dim = (rows * cols) + (3 * len(self.possible_agents)) + 7
+        self._state_space = Box(low=-1.0, high=1.0, shape=(self._state_dim,), dtype=np.float32)
 
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
@@ -214,6 +219,15 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             (4) Move down.
         """
         return Discrete(4)
+
+    # Return centralized state for value factorization methods (for example qmixglobal).
+    def state(self) -> np.ndarray:
+        return self._build_global_state()
+
+    # Define state space for PettingZoo wrappers that request return_state=True.
+    @property
+    def state_space(self):
+        return self._state_space
 
     # Apply a single movement action to either a ghost or Pacman.
     def _execute_action(self, agent: Agent, action: Action):
@@ -490,5 +504,74 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                     return True
 
         return False
+
+    def _build_global_state(self) -> np.ndarray:
+        rows, cols = self.global_view.shape
+        max_steps = max(1, int(self.max_steps))
+        grid_norm = float(max(rows + cols, 1))
+
+        # 1) Static wall map.
+        wall_map_flat = self._wall_map.reshape(-1).astype(np.float32)
+
+        # 2) Normalized ghost positions.
+        ghost_positions_norm = []
+        row_den = float(max(rows - 1, 1))
+        col_den = float(max(cols - 1, 1))
+        for ghost in self.ghosts:
+            gx, gy = ghost.current_position
+            ghost_positions_norm.extend([float(gx) / row_den, float(gy) / col_den])
+
+        # 3) Team-level pacman memory target.
+        any_visible, seen_positions = self._collect_visible_pacman_positions()
+        target_position = seen_positions[0] if any_visible else self.last_pacman_sighting_position
+
+        pacman_visible_now = 1.0 if any_visible else 0.0
+        if target_position is None:
+            target_x_norm = -1.0
+            target_y_norm = -1.0
+            steps_since_last_seen_norm = 1.0
+        else:
+            target_x_norm = float(target_position[0]) / row_den
+            target_y_norm = float(target_position[1]) / col_den
+            if any_visible or self.last_pacman_sighting_step is None:
+                steps_since_last_seen_norm = 0.0
+            else:
+                since_last_seen = max(0, self.step_count - int(self.last_pacman_sighting_step))
+                steps_since_last_seen_norm = min(float(since_last_seen) / float(max_steps), 1.0)
+
+        # 4) Per-ghost distance to current target memory.
+        ghost_to_target_dist_norm = []
+        if target_position is None:
+            ghost_to_target_dist_norm = [1.0 for _ in self.ghosts]
+        else:
+            for ghost in self.ghosts:
+                dist = self._bfs_distance(ghost.current_position, target_position)
+                if dist is None:
+                    ghost_to_target_dist_norm.append(1.0)
+                else:
+                    ghost_to_target_dist_norm.append(min(float(dist) / grid_norm, 1.0))
+
+        # 5) Team min distance summary.
+        team_min_dist_norm = min(ghost_to_target_dist_norm) if ghost_to_target_dist_norm else 1.0
+
+        # 6) Episode progress features.
+        step_fraction = min(float(self.step_count) / float(max_steps), 1.0)
+        remaining_fraction = 1.0 - step_fraction
+
+        state_vector = np.asarray(
+            wall_map_flat.tolist()
+            + ghost_positions_norm
+            + [
+                pacman_visible_now,
+                target_x_norm,
+                target_y_norm,
+                steps_since_last_seen_norm,
+            ]
+            + ghost_to_target_dist_norm
+            + [team_min_dist_norm, step_fraction, remaining_fraction],
+            dtype=np.float32,
+        )
+
+        return state_vector
 
     # Termination is handled centrally in step() to support capture and timeout.

@@ -14,6 +14,9 @@ from custom_environment.utils import create_grid
 
 
 class PacmanTaskClass(TaskClass):
+    def _include_global_state(self) -> bool:
+        return bool(self.config.get("include_global_state", False))
+
     def get_env_fun(
         self,
         num_envs: int,
@@ -27,6 +30,7 @@ class PacmanTaskClass(TaskClass):
         config = copy.deepcopy(self.config)
         grid_size = int(config.get("grid_size", 20))
         number_ghosts = int(config.get("number_ghosts", 2))
+        include_global_state = bool(config.get("include_global_state", False))
 
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
@@ -38,7 +42,7 @@ class PacmanTaskClass(TaskClass):
                 categorical_actions=True,
                 device=device,
                 seed=seed,
-                return_state=False,
+                return_state=include_global_state,
                 use_mask=False,
                 done_on_any=True,
             )
@@ -88,7 +92,11 @@ class PacmanTaskClass(TaskClass):
         return observation_spec
 
     def state_spec(self, env: EnvBase) -> Optional[Composite]:
-        return None
+        if not self._include_global_state():
+            return None
+        if "state" not in env.observation_spec.keys():
+            return None
+        return Composite(state=env.observation_spec["state"].clone())
 
     def action_spec(self, env: EnvBase) -> Composite:
         return env.full_action_spec
