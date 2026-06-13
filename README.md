@@ -118,7 +118,7 @@ You can now run a full benchmark with one command using:
 Example (5 seeds, shared training config):
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2,3,4 --max-frames 50000
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
 ```
 
 Execution strategy:
