@@ -1,0 +1,183 @@
+[
+  {
+    "script": "check_api_auth_decorators.py",
+    "name": "API Auth Decorators",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": []
+    },
+    "scope": "auth",
+    "critical": true
+  },
+  {
+    "script": "check_api_contract_sync.py",
+    "name": "API Contract Sync",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": ["react"]
+    },
+    "scope": "api",
+    "critical": true
+  },
+  {
+    "script": "check_backend_test_coverage.py",
+    "name": "Backend Test Coverage",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": []
+    },
+    "scope": "coverage",
+    "critical": false
+  },
+  {
+    "script": "check_conventions.py",
+    "name": "Conventions",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "conventions",
+    "critical": false
+  },
+  {
+    "script": "check_frontend_test_coverage.py",
+    "name": "Frontend Test Coverage",
+    "stack": {
+      "backend": [],
+      "frontend": ["react"]
+    },
+    "scope": "coverage",
+    "critical": false
+  },
+  {
+    "script": "check_i18n_keys.py",
+    "name": "i18n Keys",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": ["react"]
+    },
+    "scope": "i18n",
+    "critical": false
+  },
+  {
+    "script": "check_migration_chain.py",
+    "name": "Migration Chain",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": []
+    },
+    "scope": "database",
+    "critical": true
+  },
+  {
+    "script": "check_po_parity.py",
+    "name": "PO Parity",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": []
+    },
+    "scope": "i18n",
+    "critical": false
+  },
+  {
+    "script": "check_route_coverage.py",
+    "name": "Route Coverage",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": ["react"]
+    },
+    "scope": "api",
+    "critical": false
+  },
+  {
+    "script": "check_secrets.py",
+    "name": "Secrets Scanner",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "security",
+    "critical": true
+  },
+  {
+    "script": "check_skill_system.py",
+    "name": "Skill System",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "harness",
+    "critical": false
+  },
+  {
+    "script": "check_spec_conformance.py",
+    "name": "Spec Conformance",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "spec",
+    "critical": false
+  },
+  {
+    "script": "check_telemetry.py",
+    "name": "Telemetry",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "telemetry",
+    "critical": false
+  },
+  {
+    "script": "check_unused_files.py",
+    "name": "Unused Files",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "hygiene",
+    "critical": false
+  },
+  {
+    "script": "check_validation_constants_sync.py",
+    "name": "Validation Constants Sync",
+    "stack": {
+      "backend": ["flask"],
+      "frontend": ["react"]
+    },
+    "scope": "validation",
+    "critical": true
+  },
+  {
+    "script": "check_docs.py",
+    "name": "Documentation Consistency",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "docs",
+    "critical": false,
+    "sub_plugins": [
+      "harness-integrity",
+      "path-liveness",
+      "env-vars",
+      "command-refs",
+      "terminology",
+      "structural-completeness",
+      "harness-reference-coverage",
+      "lifecycle-fact-uniqueness",
+      "docs-frontmatter"
+    ]
+  },
+  {
+    "script": "check_harness_drift.py",
+    "name": "Harness Drift",
+    "stack": {
+      "backend": ["any"],
+      "frontend": ["any"]
+    },
+    "scope": "harness",
+    "critical": false
+  }
+]

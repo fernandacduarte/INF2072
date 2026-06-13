@@ -1,0 +1,51 @@
+# SEJA Validation Checks -- GitHub Actions Workflow
+#
+# Runs all SEJA check scripts via run_all_checks.py and publishes
+# JUnit XML results. Copy this file into .github/workflows/ and
+# replace {{placeholders}} with project-specific values.
+#
+# Placeholders:
+#   {{PYTHON_VERSION}}  -- Python version to use (e.g. "3.12")
+#   {{BRANCH_PATTERN}}  -- Branch pattern to trigger on (e.g. "main")
+#   {{STACK_FILTER}}    -- Optional stack filter (e.g. "flask"); remove
+#                          the --filter flag if not needed
+
+name: SEJA Checks
+
+on:
+  push:
+    branches: ["{{BRANCH_PATTERN}}"]
+  pull_request:
+    branches: ["{{BRANCH_PATTERN}}"]
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "{{PYTHON_VERSION}}"
+
+      - name: Run SEJA checks
+        run: |
+          python .claude/skills/scripts/run_all_checks.py \
+            --root . \
+            --junit results.xml \
+            --verbose
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: SEJA Check Results
+          path: results.xml
+          reporter: java-junit
+          fail-on-error: true

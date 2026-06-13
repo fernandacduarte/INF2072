@@ -1,0 +1,76 @@
+%%{init: {'theme': 'default', 'themeVariables': {'fontFamily': 'system-ui, -apple-system, Segoe UI, sans-serif'}}}%%
+flowchart TD
+
+    %% Planning
+    implement["/implement"]
+    plan["/plan"]
+
+    %% Analysis
+    check["/check"]
+    explain["/explain"]
+    research["/research"]
+
+    %% Code
+
+    %% Utility
+    communicate["/communicate"]
+    document["/document"]
+    help["/help"]
+    onboard["/onboard"]
+    pending["/pending"]
+    qa_log["/qa-log"]
+    reflect["/reflect"]
+    docs/how_to/plan_and_execute.md["docs/how-to/plan-and-execute.md"]
+    general/getting_started.md["general/getting-started.md"]
+
+    %% Setup
+    design["/design"]
+    seja_setup["/seja-setup"]
+
+    %% Relationships
+    plan -->|Ready to implement this plan| implement
+    implement -->|Runs automatically via post-skill step 2b for F...| document
+    implement -->|Review pending actions created by this implemen...| pending
+    implement -->|Surface patterns across recent skill runs - non...| reflect
+    explain -->|Specs analyzed -- ready to plan next steps| plan
+    explain -->|Drift indicates intent has evolved -- update th...| design
+    explain -->|Decision proposal drafted -- after you apply th...| explain
+    explain -->|Address pending actions surfaced by the drift c...| pending
+    pending -->|Next logical step after addressing pending cura...| explain
+    pending -->|Next logical step after reviewing pending revie...| implement
+    research -->|Recommendations indicate the design intent shou...| design
+    research -->|Want a deeper explanation of any of these| explain
+    explain -->|Have questions about what you just learned| research
+    check -->|Want to plan fixes for the review findings| plan
+    check -->|Also check harness health| check
+    check -->|Check and address outstanding pending actions| pending
+    check -->|After quality checks, surface patterns across r...| reflect
+    check -->|Want to discuss usage patterns| research
+    reflect -->|Want an assessment and recommendations on any p...| research
+    reflect -->|Want to turn a surfaced pattern into new design...| design
+    reflect -->|Want to turn a surfaced pattern into new work| plan
+    check -->|Share the test plan with stakeholders| communicate
+    check -->|Need to onboard someone to the project| onboard
+    seja_setup -->|Verify harness health after upgrading| check
+    seja_setup -->|Re-run spec drift after harness upgrade to ca...| explain
+    document -->|Validate documentation consistency| check
+    communicate -->|Need to onboard someone to the project| onboard
+    onboard -->|Want to generate stakeholder material as well| communicate
+    help -->|Browse all available skills| help
+    help -->|See quick-reference workflow sequences in the h...| docs/how_to/plan_and_execute.md
+    seja_setup -->|New project: configure project design - stack, ...| design
+    seja_setup -->|New to SEJA? Follow the getting-started guide| general/getting_started.md
+    design -->|Project configured -- generate a development ro...| plan
+    qa_log -->|Have more questions to explore| research
+
+    %% Styles
+    classDef planning fill:#b8d5f2,stroke:#6da3d4,color:#1e3a5f
+    classDef analysis fill:#d4efd4,stroke:#74b874,color:#2d5a2d
+    classDef code fill:#fce6c8,stroke:#d9a66b,color:#6b3f1e
+    classDef utility fill:#e6e6e6,stroke:#a8a8a8,color:#404040
+    classDef setup fill:#e3d6f0,stroke:#9b7fc7,color:#4a2f6b
+
+    class implement,plan planning
+    class check,explain,research analysis
+    class communicate,document,help,onboard,pending,qa_log,reflect,docs/how_to/plan_and_execute.md,general/getting_started.md utility
+    class design,seja_setup setup

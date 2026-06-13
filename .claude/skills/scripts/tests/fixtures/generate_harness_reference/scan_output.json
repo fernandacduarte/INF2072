@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "harness_root": "fixture",
+  "public_docs_root": "fixture-docs",
+  "harness_files": {
+    ".claude/skills/demo/SKILL.md": {
+      "basename": "SKILL.md",
+      "mentioned_in": ["quickstart.md"]
+    },
+    ".claude/skills/scripts/alpha.py": {
+      "basename": "alpha.py",
+      "mentioned_in": ["how-to/advanced.md", "quickstart.md"]
+    },
+    ".claude/references/general/coding-standards.md": {
+      "basename": "coding-standards.md",
+      "mentioned_in": ["concepts.md"]
+    }
+  }
+}

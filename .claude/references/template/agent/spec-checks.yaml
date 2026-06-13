@@ -1,0 +1,149 @@
+# Agent-facing spec conformance checks -- verifiable assertions
+# Template: provides harness-level integrity checks out of the box.
+# Projects should add project-specific checks after running /design.
+# Used by check_spec_conformance.py for automated validation.
+#
+# How to use: Each check defines an assertion that can be automatically
+# verified against the codebase. Types:
+#   file_exists  -- verify a file or glob pattern exists
+#   grep_match   -- verify a regex pattern IS found in target files
+#   grep_absent  -- verify a regex pattern is NOT found in target files
+#   model_field  -- verify a model file contains a specific field definition
+#   route_exists -- verify an API route is registered
+#
+# Severity: error (blocks commit) or warning (advisory only)
+
+version: 1
+
+checks:
+  # ==========================================================================
+  # Harness integrity checks (applicable to all SEJA-based repos)
+  # ==========================================================================
+
+  # -- Core files must exist --
+  - id: fw-001
+    description: "CLAUDE.md must exist at repo root"
+    type: "file_exists"
+    target: "CLAUDE.md"
+    pattern: null
+    severity: "error"
+    message: "Missing CLAUDE.md -- required for Claude Code agent integration"
+
+  - id: fw-002
+    description: "Review perspectives reference must exist"
+    type: "file_exists"
+    target: ".claude/references/general/review-perspectives.md"
+    pattern: null
+    severity: "error"
+    message: "Missing review-perspectives.md -- required for plan and code reviews"
+
+  - id: fw-003
+    description: "Constraints reference must exist"
+    type: "file_exists"
+    target: ".claude/references/general/constraints.md"
+    pattern: null
+    severity: "error"
+    message: "Missing constraints.md -- required for agent behavior boundaries"
+
+  - id: fw-004
+    description: "Permissions reference must exist"
+    type: "file_exists"
+    target: ".claude/references/general/permissions.md"
+    pattern: null
+    severity: "error"
+    message: "Missing permissions.md -- required for agent authorization rules"
+
+  - id: fw-005
+    description: "Conventions template must exist"
+    type: "file_exists"
+    target: ".claude/references/template/conventions.md"
+    pattern: null
+    severity: "error"
+    message: "Missing template/conventions.md -- required for project configuration"
+
+  - id: fw-006
+    description: "At least one skill must be defined"
+    type: "file_exists"
+    target: ".claude/skills/*/SKILL.md"
+    pattern: null
+    severity: "error"
+    message: "No skills found -- .claude/skills/*/SKILL.md must exist"
+
+  # -- Skill quality checks --
+  - id: fw-010
+    description: "All skills must have a Quick Guide section"
+    type: "grep_match"
+    target: ".claude/skills/*/SKILL.md"
+    pattern: "## Quick Guide"
+    severity: "error"
+    message: "Skill missing ## Quick Guide section -- required for discoverability"
+
+  - id: fw-011
+    description: "All skills must have YAML frontmatter"
+    type: "grep_match"
+    target: ".claude/skills/*/SKILL.md"
+    pattern: "^---"
+    severity: "error"
+    message: "Skill missing YAML frontmatter (--- delimiter) -- required for metadata"
+
+  # -- Content hygiene checks --
+  - id: fw-020
+    description: "No ANSI escape codes in skill files"
+    type: "grep_absent"
+    target: ".claude/skills/*/SKILL.md"
+    pattern: "\\x1b\\["
+    severity: "error"
+    message: "ANSI escape codes found in skill file -- these corrupt Markdown readability"
+
+  - id: fw-021
+    description: "No ANSI escape codes in output files"
+    type: "grep_absent"
+    target: "_output/**/*.md"
+    pattern: "\\x1b\\["
+    severity: "error"
+    message: "ANSI escape codes found in output file -- strip before writing"
+
+  - id: fw-022
+    description: "No ANSI escape codes in reference files"
+    type: "grep_absent"
+    target: ".claude/references/**/*.md"
+    pattern: "\\x1b\\["
+    severity: "error"
+    message: "ANSI escape codes found in reference file -- these corrupt Markdown readability"
+
+  # ==========================================================================
+  # Project-specific checks (add after /design)
+  # ==========================================================================
+  # Uncomment and customize these for your project:
+  #
+  # - id: proj-001
+  #   description: "Every API resource has a test file"
+  #   type: "file_exists"
+  #   target: "tests/api/test_*.py"
+  #   pattern: null
+  #   severity: "warning"
+  #   message: "Missing test file for API resource"
+  #
+  # - id: proj-002
+  #   description: "All API route files use auth decorators"
+  #   type: "grep_match"
+  #   target: "backend/app/api/**/*.py"
+  #   pattern: "@login_required|@public_endpoint"
+  #   severity: "error"
+  #   message: "Route file missing auth decorator -- all endpoints must declare auth"
+  #
+  # - id: proj-003
+  #   description: "No hardcoded secrets in source code"
+  #   type: "grep_absent"
+  #   target: "**/*.py"
+  #   pattern: "(password|secret|api_key)\\s*=\\s*['\"][^{]"
+  #   severity: "error"
+  #   message: "Possible hardcoded secret -- use environment variables"
+  #
+  # - id: proj-004
+  #   description: "No direct DB access from API routes"
+  #   type: "grep_absent"
+  #   target: "backend/app/api/**/*.py"
+  #   pattern: "db\\.session\\.(add|delete|commit)"
+  #   severity: "error"
+  #   message: "Direct DB access in API route -- use the service layer"
