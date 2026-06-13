@@ -24,3 +24,7 @@ __pycache__/
 /custom_environment/env/.pacman_environment.py.un~
 /custom_environment/env/domain/.constant.py.un~
 /..gitignore.un~
+/futebol2d/__pycache__/*.pyc
+/futebol2d/*.un~
+/futebol2d/*.swp
+/futebol2d/runs_2000/live_progress.csvl
