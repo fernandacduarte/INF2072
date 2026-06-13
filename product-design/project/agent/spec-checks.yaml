@@ -1,0 +1,30 @@
+version: 1
+
+# Automated spec checks for check_spec_conformance.py
+# Validates that implementation aligns with design intent
+
+checks:
+  - id: check-001
+    description: "Seed is a CLI argument in training scripts"
+    file_pattern: "benchmarl_setup/run_*.py"
+    grep_match: "--seed"
+
+  - id: check-002
+    description: "Output goes to benchmarl_setup/runs/"
+    file_pattern: "benchmarl_setup/run_*.py"
+    grep_match: "runs/"
+
+  - id: check-003
+    description: "PacmanEnv is defined in custom_environment/"
+    file_pattern: "custom_environment/*.py"
+    grep_match: "class PacmanEnv"
+
+  - id: check-004
+    description: "Tests exist for the environment"
+    file_exists: "test/"
+    min_files: 1
+
+  - id: check-005
+    description: "No credentials in source code"
+    file_pattern: "**/*.py"
+    grep_absent: "(api_key|password|secret|token)\\s*=\\s*['\"][^'\"]{8,}"

@@ -52,3 +52,12 @@ See `product-design/conventions.md` for the full directory layout and path varia
 
 @.claude/rules/
 @product-design/conventions.md
+
+## Project design
+
+@product-design/project/product-design-as-intended.md
+@product-design/project/ux-research-results.md
+@product-design/project/standards.md
+@product-design/project/design-standards.md
+@product-design/project/security-checklists.md
+@product-design/project/constitution.md
