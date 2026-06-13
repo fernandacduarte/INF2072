@@ -6,6 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from algorithm_utils import SUPPORTED_ALGORITHMS, normalize_algorithm
+
 
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
@@ -102,7 +104,8 @@ class LiveComparisonPlotter:
         self.color_map = {
             "iql": "#1f77b4",
             "vdn": "#d62728",
-            "qmix": "#2ca02c",
+            "qmixlocal": "#2ca02c",
+            "qmixglobal": "#9467bd",
         }
 
         self._init_plot()
@@ -175,7 +178,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         type=str,
-        default="iql,vdn,qmix",
+        default="iql,vdn,qmixlocal,qmixglobal",
         help="Comma-separated algorithms to display.",
     )
     parser.add_argument(
@@ -195,9 +198,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    algorithms = [item.strip().lower() for item in args.algorithms.split(",") if item.strip()]
+    algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
         raise ValueError("At least one algorithm must be provided.")
+    invalid = [name for name in algorithms if name not in SUPPORTED_ALGORITHMS]
+    if invalid:
+        raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
 
     print(f"[LivePlot] Watching: {args.progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")

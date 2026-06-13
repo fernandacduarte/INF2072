@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from custom_environment.env.domain.constant import Observation
+from benchmarl_setup.algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
 
 
 SYMBOLS = {
@@ -110,11 +111,7 @@ def _score_run_for_selection(run_dir: Path) -> tuple[float, float, float]:
 
 
 def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
-    return [
-        p
-        for p in runs_root.iterdir()
-        if p.is_dir() and p.name.startswith(f"{learner}_pacman_")
-    ]
+    return candidate_run_dirs(runs_root, learner)
 
 
 def _latest_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
@@ -202,6 +199,8 @@ def run_episode(
     fps: int,
     screenshot_out: Path | None,
 ) -> None:
+    learner = normalize_algorithm(learner)
+
     if checkpoint is not None:
         checkpoint_path = checkpoint
     elif checkpoint_select == "best":
@@ -346,7 +345,7 @@ def main() -> None:
         "--learner",
         "--algo",
         dest="learner",
-        choices=["iql", "vdn", "qmix"],
+        choices=["iql", "vdn", "qmix", "qmixlocal", "qmixglobal"],
         required=True,
         help="Learner whose trained checkpoint should control the ghosts.",
     )
@@ -419,9 +418,14 @@ def main() -> None:
         help="Optional PNG path for the last rendered frame.",
     )
     args = parser.parse_args()
+    normalized_learner = normalize_algorithm(args.learner)
+    if normalized_learner not in SUPPORTED_ALGORITHMS:
+        raise ValueError(
+            f"Unsupported learner: {args.learner}. Allowed: {list(SUPPORTED_ALGORITHMS)}"
+        )
 
     run_episode(
-        learner=args.learner,
+        learner=normalized_learner,
         delay=args.delay,
         max_steps=args.max_steps,
         checkpoint=args.checkpoint,

@@ -12,14 +12,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarl_setup.pacman_benchmarl_task import PacmanTask, register_pacman_task
+from benchmarl_setup.algorithm_utils import normalize_algorithm, qmix_uses_global_state
 
 
 def _algorithm_config(name: str):
-    if name == "iql":
+    algorithm = normalize_algorithm(name)
+    if algorithm == "iql":
         return IqlConfig.get_from_yaml()
-    if name == "vdn":
+    if algorithm == "vdn":
         return VdnConfig.get_from_yaml()
-    if name == "qmix":
+    if algorithm in ("qmixlocal", "qmixglobal"):
         return QmixConfig.get_from_yaml()
     raise ValueError(f"Unsupported algorithm: {name}")
 
@@ -30,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--algorithm",
         type=str,
         default="iql",
-        choices=["iql", "vdn", "qmix"],
+        choices=["iql", "vdn", "qmix", "qmixlocal", "qmixglobal"],
         help="MARL algorithm to run.",
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -69,6 +71,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    algorithm = normalize_algorithm(args.algorithm)
 
     save_root = Path(args.save_folder)
     save_root.mkdir(parents=True, exist_ok=True)
@@ -81,10 +84,11 @@ def main() -> None:
             "max_cycles": 200,
             "number_ghosts": args.number_ghosts,
             "grid_size": args.grid_size,
+            "include_global_state": qmix_uses_global_state(algorithm),
         }
     )
 
-    algorithm_config = _algorithm_config(args.algorithm)
+    algorithm_config = _algorithm_config(algorithm)
     model_config = MlpConfig.get_from_yaml()
     model_config.num_feature_dims = 2
     experiment_config = ExperimentConfig.get_from_yaml()
