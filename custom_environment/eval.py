@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 import sys
 
+import numpy as np
 import torch
 
 from benchmarl.experiment import Experiment
@@ -39,6 +40,20 @@ def render_ascii(grid) -> str:
     for row in grid:
         lines.append("".join(SYMBOLS.get(int(cell), "?") for cell in row))
     return "\n".join(lines)
+
+
+def save_rgb_frame(frame: np.ndarray, output_path: Path) -> None:
+    try:
+        import pygame
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Pygame is required to save render screenshots. Install dependencies with "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    surface = pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2)))
+    pygame.image.save(surface, str(output_path))
 
 
 def _read_scalar_values(csv_path: Path) -> list[float]:
@@ -182,6 +197,10 @@ def run_episode(
     runs_root: Path,
     checkpoint_select: str,
     show_reward_breakdown: bool,
+    render_mode: str,
+    tile_size: int,
+    fps: int,
+    screenshot_out: Path | None,
 ) -> None:
     if checkpoint is not None:
         checkpoint_path = checkpoint
@@ -202,70 +221,121 @@ def run_episode(
 
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
+    raw_env.render_mode = None if render_mode == "ascii" else render_mode
+    raw_env.tile_size = tile_size
+    raw_env.fps = fps
     agent_ids = list(getattr(raw_env, "possible_agents", []))
-
-    print("Pacman Environment (episode start):")
-    print(render_ascii(raw_env.global_view))
-    print()
-    print("Legend: #=Wall, G=Ghost, P=Pacman, X=Captured, <space>=Empty")
 
     total_reward = 0.0
     done = False
     step = 0
+    last_frame = None
 
-    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
-        tensordict = env.reset()
-        while not done and step < max_steps:
-            step += 1
+    try:
+        try:
+            with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+                tensordict = env.reset()
 
-            tensordict = experiment.policy(tensordict)
-            action_tensor = tensordict.get(("ghost", "action"))
-            action_values = _tensor_to_int_list(action_tensor)
+                if render_mode == "ascii":
+                    print("Pacman Environment (episode start):")
+                    print(render_ascii(raw_env.global_view))
+                    print()
+                    print("Legend: #=Wall, G=Ghost, P=Pacman, X=Captured, <space>=Empty")
+                else:
+                    frame = raw_env.render(
+                        learner=learner,
+                        total_reward=total_reward,
+                        done=done,
+                    )
+                    if render_mode == "rgb_array":
+                        last_frame = frame
+                    if screenshot_out is not None and render_mode != "rgb_array":
+                        last_frame = raw_env.capture_frame(
+                            learner=learner,
+                            total_reward=total_reward,
+                            done=done,
+                        )
 
-            transition = env.step(tensordict)
-            next_td = transition.get("next")
+                while not done and step < max_steps:
+                    step += 1
 
-            reward_tensor = next_td.get(("ghost", "reward"))
-            reward_values = _tensor_to_float_list(reward_tensor)
-            total_reward += float(sum(reward_values))
+                    tensordict = experiment.policy(tensordict)
+                    action_tensor = tensordict.get(("ghost", "action"))
+                    action_values = _tensor_to_int_list(action_tensor)
 
-            action_info = {
-                agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": ACTION_NAME.get(action_values[i], str(action_values[i]))
-                for i in range(len(action_values))
-            }
-            reward_info = {
-                agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": reward_values[i]
-                for i in range(len(reward_values))
-            }
+                    transition = env.step(tensordict)
+                    next_td = transition.get("next")
 
-            done = bool(next_td.get("done").item())
+                    reward_tensor = next_td.get(("ghost", "reward"))
+                    reward_values = _tensor_to_float_list(reward_tensor)
+                    total_reward += float(sum(reward_values))
 
-            print()
-            print(f"Step {step} | learner={learner} | actions={action_info}")
-            print(render_ascii(raw_env.global_view))
-            print(f"rewards={reward_info} done={done}")
-            if show_reward_breakdown:
-                breakdown = getattr(raw_env, "last_team_reward_breakdown", None)
-                if breakdown is not None:
-                    print(f"reward_breakdown={breakdown}")
+                    action_info = {
+                        agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": ACTION_NAME.get(action_values[i], str(action_values[i]))
+                        for i in range(len(action_values))
+                    }
+                    reward_info = {
+                        agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": reward_values[i]
+                        for i in range(len(reward_values))
+                    }
 
-            if delay > 0:
-                time.sleep(delay)
+                    done = bool(next_td.get("done").item())
 
-            tensordict = step_mdp(
-                transition,
-                reward_keys=env.reward_keys,
-                action_keys=env.action_keys,
-                done_keys=env.done_keys,
-            )
+                    if render_mode == "ascii":
+                        print()
+                        print(f"Step {step} | learner={learner} | actions={action_info}")
+                        print(render_ascii(raw_env.global_view))
+                        print(f"rewards={reward_info} done={done}")
+                    else:
+                        frame = raw_env.render(
+                            learner=learner,
+                            total_reward=total_reward,
+                            done=done,
+                            last_action_by_agent=action_info,
+                            last_reward_by_agent=reward_info,
+                        )
+                        if render_mode == "rgb_array":
+                            last_frame = frame
+                        print(
+                            f"Step {step} | learner={learner} | actions={action_info} "
+                            f"| rewards={reward_info} | done={done}"
+                        )
+                        if screenshot_out is not None and render_mode != "rgb_array":
+                            last_frame = raw_env.capture_frame(
+                                learner=learner,
+                                total_reward=total_reward,
+                                done=done,
+                                last_action_by_agent=action_info,
+                                last_reward_by_agent=reward_info,
+                            )
+
+                    if show_reward_breakdown:
+                        breakdown = getattr(raw_env, "last_team_reward_breakdown", None)
+                        if breakdown is not None:
+                            print(f"reward_breakdown={breakdown}")
+
+                    if delay > 0:
+                        time.sleep(delay)
+
+                    tensordict = step_mdp(
+                        transition,
+                        reward_keys=env.reward_keys,
+                        action_keys=env.action_keys,
+                        done_keys=env.done_keys,
+                    )
+        finally:
+            if screenshot_out is not None and last_frame is not None:
+                save_rgb_frame(last_frame, screenshot_out)
+                print(f"Saved screenshot: {screenshot_out}")
+    finally:
+        raw_env.close()
+        experiment.close()
 
     print()
     print(
         f"Episode finished | learner={learner} | steps={step} "
         f"| total_reward={total_reward:.3f} | done={done}"
     )
-
-    experiment.close()
 
 
 def main() -> None:
@@ -321,6 +391,33 @@ def main() -> None:
         action="store_true",
         help="Print per-step team reward term breakdown from the environment.",
     )
+    parser.add_argument(
+        "--render-mode",
+        choices=["ascii", "human", "rgb_array"],
+        default="ascii",
+        help=(
+            "Render output mode: ascii is a simple terminal grid, "
+            "human opens the Pygame window, rgb_array returns image frames."
+        ),
+    )
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=28,
+        help="Tile size in pixels for Pygame rendering.",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=12,
+        help="Target frames per second for human Pygame rendering.",
+    )
+    parser.add_argument(
+        "--screenshot-out",
+        type=Path,
+        default=None,
+        help="Optional PNG path for the last rendered frame.",
+    )
     args = parser.parse_args()
 
     run_episode(
@@ -331,6 +428,10 @@ def main() -> None:
         runs_root=args.runs_root,
         checkpoint_select=args.checkpoint_select,
         show_reward_breakdown=args.show_reward_breakdown,
+        render_mode=args.render_mode,
+        tile_size=args.tile_size,
+        fps=args.fps,
+        screenshot_out=args.screenshot_out,
     )
 
 

@@ -43,7 +43,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     metadata = {
         # Canonical name for the environment (used by PettingZoo)
         "name": "pacman_environment_v0",
-        # Supported render modes (not used, but required by API)
+        # Supported render modes.
         "render_modes": ["human", "rgb_array"],
     }
 
@@ -51,8 +51,17 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     def __init__(
         self,  # The environment instance
         global_view: np.ndarray,  # The grid (walls, empty, ghosts, pacman)
-        number_ghosts: int = 2  # Number of ghost agents
+        number_ghosts: int = 2,  # Number of ghost agents
+        render_mode: str | None = None,  # Optional visual render mode
+        tile_size: int = 28,  # Tile size in pixels for Pygame rendering
+        fps: int = 12,  # Target frames per second for human rendering
     ):
+        if render_mode is not None and render_mode not in self.metadata["render_modes"]:
+            raise ValueError(
+                f"Unsupported render_mode={render_mode!r}. "
+                f"Expected one of {self.metadata['render_modes']} or None."
+            )
+
         # List of agent IDs (ghost_1, ghost_2, ...)
         self.possible_agents = [f"ghost_{ghost+1}" for ghost in range(number_ghosts)]
         # Keep an immutable base map and reset from it every episode.
@@ -75,6 +84,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_team_reward_breakdown = {}
         self.newly_spotted_min_unseen_steps = 6
         self.unseen_steps = 0
+
+        # Rendering configuration. The Pygame renderer is imported lazily so
+        # headless training does not initialize graphics.
+        self.render_mode = render_mode
+        self.tile_size = int(tile_size)
+        self.fps = int(fps)
+        self._renderer = None
+        self._pellet_mask = self._build_initial_pellet_mask()
 
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
@@ -108,6 +125,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # --- Spawn Pacman at fixed position (could be parameterized) ---
         self.pacman = PacMan(id="pacman", current_position=(18, 9))  # Bottom center
         self.global_view[*self.pacman.current_position] = Observation.PAC_MAN.value
+        self._reset_visual_pellets()
 
         # --- Build initial observations and info dicts for all ghosts ---
         observations = {ghost.id: self._get_observation(ghost) for ghost in self.ghosts}
@@ -180,10 +198,82 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Return full transition tuple expected by ParallelEnv step API.
         return observations, rewards, terminations, truncations, infos
 
-    # Close hook (no external resources to release currently).
+    # Close hook for optional renderer resources.
     def close(self):
-        # Intentionally empty.
-        pass
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+
+    def render(
+        self,
+        *,
+        learner: str | None = None,
+        total_reward: float | None = None,
+        done: bool = False,
+        last_action_by_agent: dict[str, str] | None = None,
+        last_reward_by_agent: dict[str, float] | None = None,
+    ):
+        if self.render_mode is None:
+            return None
+
+        return self._render_scene(
+            render_mode=self.render_mode,
+            learner=learner,
+            total_reward=total_reward,
+            done=done,
+            last_action_by_agent=last_action_by_agent,
+            last_reward_by_agent=last_reward_by_agent,
+        )
+
+    def capture_frame(
+        self,
+        *,
+        learner: str | None = None,
+        total_reward: float | None = None,
+        done: bool = False,
+        last_action_by_agent: dict[str, str] | None = None,
+        last_reward_by_agent: dict[str, float] | None = None,
+    ):
+        return self._render_scene(
+            render_mode="rgb_array",
+            learner=learner,
+            total_reward=total_reward,
+            done=done,
+            last_action_by_agent=last_action_by_agent,
+            last_reward_by_agent=last_reward_by_agent,
+        )
+
+    def _render_scene(
+        self,
+        *,
+        render_mode: str,
+        learner: str | None,
+        total_reward: float | None,
+        done: bool,
+        last_action_by_agent: dict[str, str] | None,
+        last_reward_by_agent: dict[str, float] | None,
+    ):
+        if render_mode not in self.metadata["render_modes"]:
+            raise ValueError(
+                f"Unsupported render_mode={render_mode!r}. "
+                f"Expected one of {self.metadata['render_modes']}."
+            )
+
+        renderer = self._get_renderer()
+        return renderer.render(
+            self.global_view,
+            self._pellet_mask,
+            render_mode=render_mode,
+            ghosts=self.ghosts,
+            pacman=self.pacman,
+            step_count=self.step_count,
+            max_steps=self.max_steps,
+            learner=learner,
+            total_reward=total_reward,
+            done=done,
+            last_action_by_agent=last_action_by_agent,
+            last_reward_by_agent=last_reward_by_agent,
+        )
 
     # Cache observation spaces because they are static by agent ID.
     @functools.lru_cache(maxsize=None)
@@ -264,6 +354,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             agent.current_position = (new_x, new_y)
             # Clear old position on the grid.
             self.global_view[x, y] = Observation.EMPTY.value
+            if isinstance(agent, PacMan):
+                self._consume_visual_pellet(agent.current_position)
 
             # Ghost reached Pacman, mark capture.
             if isinstance(agent, Ghost) and target_cell == Observation.PAC_MAN.value:
@@ -281,6 +373,41 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             if isinstance(agent, Ghost):
                 agent.invalid_move = True
             return
+
+    def _get_renderer(self):
+        if self._renderer is None:
+            from custom_environment.env.rendering import PacmanRenderer
+
+            self._renderer = PacmanRenderer(
+                tile_size=self.tile_size,
+                fps=self.fps,
+                caption="Pacman MARL",
+            )
+        return self._renderer
+
+    def _build_initial_pellet_mask(self) -> np.ndarray | None:
+        if self._base_grid.ndim != 2:
+            return None
+        return self._base_grid == Observation.EMPTY.value
+
+    def _reset_visual_pellets(self) -> None:
+        self._pellet_mask = self._build_initial_pellet_mask()
+        if self._pellet_mask is None:
+            return
+
+        for ghost in self.ghosts:
+            self._consume_visual_pellet(ghost.current_position)
+        if self.pacman is not None:
+            self._consume_visual_pellet(self.pacman.current_position)
+
+    def _consume_visual_pellet(self, position: tuple[int, int]) -> None:
+        if self._pellet_mask is None:
+            return
+
+        row, col = position
+        rows, cols = self._pellet_mask.shape
+        if 0 <= row < rows and 0 <= col < cols:
+            self._pellet_mask[row, col] = False
 
     # Normalize action tokens to Action enum.
     @staticmethod

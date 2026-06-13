@@ -1,4 +1,5 @@
 .idea/
+.DS_Store
 
 # Python cache files
 __pycache__/
@@ -11,6 +12,12 @@ __pycache__/
 /benchmarl_setup/runs/qmix_pacman_*
 /benchmarl_setup/runs/live_progress.csvl
 /benchmarl_setup/runs/benchmark_summary.csv
+
+# Render screenshots
+/benchmarl_setup/runs/pacman_render*.png
+/benchmarl_setupruns*.png
+/pacman_render*.png
+
 /output.txt
 /progress.txt
 /commit.txt
