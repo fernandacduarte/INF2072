@@ -90,6 +90,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._state_dim = (rows * cols) + (3 * len(self.possible_agents)) + 7
         self._state_space = Box(low=-1.0, high=1.0, shape=(self._state_dim,), dtype=np.float32)
 
+        # Rendering configuration. The Pygame renderer is imported lazily so
+        # headless training does not initialize graphics.
+        self.render_mode = render_mode
+        self.tile_size = int(tile_size)
+        self.fps = int(fps)
+        self._renderer = None
+        self._pellet_mask = self._build_initial_pellet_mask()
+
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
         # Copy agent list for PettingZoo's active agent tracking
