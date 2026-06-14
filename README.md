@@ -65,6 +65,11 @@ the human-view Pygame renderer, use:
 py -3.11 custom_environment\eval.py --learner iql --render-mode human --delay 0.08
 ```
 
+The Pygame renderer highlights each ghost's current 3x3 local observation with
+a translucent ghost-colored overlay. When the episode ends, the window shows the
+final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
+reward, and elapsed time; in `human` mode it stays open until you close it.
+
 You can test the renderer before training any checkpoint with a random-policy
 episode:
 
@@ -99,12 +104,21 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 ```bash
 --delay 0.25 --max-steps 200 --checkpoint-select best --show-reward-breakdown
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
+--hide-observations
 ```
 
 You can also pass an explicit checkpoint to eval:
 
 ```bash
 --checkpoint path\to\checkpoint_5000.pt
+```
+
+Useful optional rendering parameters for the random-policy demo
+(`custom_environment\render_demo.py`):
+
+```bash
+--render-mode ascii|human|rgb_array --max-steps 200 --delay 0.0 --tile-size 28 --fps 12
+--grid-size 20 --number-ghosts 2 --seed 0 --screenshot-out path\to\frame.png --hide-observations
 ```
 
 Outputs are saved under `benchmarl_setup/runs` by default.
