@@ -55,6 +55,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         render_mode: str | None = None,  # Optional visual render mode
         tile_size: int = 28,  # Tile size in pixels for Pygame rendering
         fps: int = 12,  # Target frames per second for human rendering
+        show_observations: bool = True,  # Whether to tint each ghost's local view in visual renders
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -95,6 +96,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.render_mode = render_mode
         self.tile_size = int(tile_size)
         self.fps = int(fps)
+        self.show_observations = bool(show_observations)
         self._renderer = None
         self._pellet_mask = self._build_initial_pellet_mask()
 
@@ -217,6 +219,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         done: bool = False,
         last_action_by_agent: dict[str, str] | None = None,
         last_reward_by_agent: dict[str, float] | None = None,
+        final_result: dict | None = None,
     ):
         if self.render_mode is None:
             return None
@@ -228,6 +231,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             done=done,
             last_action_by_agent=last_action_by_agent,
             last_reward_by_agent=last_reward_by_agent,
+            final_result=final_result,
         )
 
     def capture_frame(
@@ -238,6 +242,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         done: bool = False,
         last_action_by_agent: dict[str, str] | None = None,
         last_reward_by_agent: dict[str, float] | None = None,
+        final_result: dict | None = None,
     ):
         return self._render_scene(
             render_mode="rgb_array",
@@ -246,7 +251,33 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             done=done,
             last_action_by_agent=last_action_by_agent,
             last_reward_by_agent=last_reward_by_agent,
+            final_result=final_result,
         )
+
+    def wait_for_close(
+        self,
+        *,
+        learner: str | None = None,
+        total_reward: float | None = None,
+        done: bool = False,
+        last_action_by_agent: dict[str, str] | None = None,
+        last_reward_by_agent: dict[str, float] | None = None,
+        final_result: dict | None = None,
+    ) -> None:
+        if self.render_mode != "human":
+            return
+
+        renderer = self._get_renderer()
+        while not renderer.is_closed:
+            self._render_scene(
+                render_mode="human",
+                learner=learner,
+                total_reward=total_reward,
+                done=done,
+                last_action_by_agent=last_action_by_agent,
+                last_reward_by_agent=last_reward_by_agent,
+                final_result=final_result,
+            )
 
     def _render_scene(
         self,
@@ -257,6 +288,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         done: bool,
         last_action_by_agent: dict[str, str] | None,
         last_reward_by_agent: dict[str, float] | None,
+        final_result: dict | None,
     ):
         if render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -278,6 +310,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             done=done,
             last_action_by_agent=last_action_by_agent,
             last_reward_by_agent=last_reward_by_agent,
+            final_result=final_result,
         )
 
     # Cache observation spaces because they are static by agent ID.
@@ -396,7 +429,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 tile_size=self.tile_size,
                 fps=self.fps,
                 caption="Pacman MARL",
+                show_observations=self.show_observations,
             )
+        else:
+            self._renderer.show_observations = self.show_observations
         return self._renderer
 
     def _build_initial_pellet_mask(self) -> np.ndarray | None:

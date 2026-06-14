@@ -26,6 +26,7 @@ class RenderColors:
     hud_bg: Color = (12, 12, 20)
     hud_text: Color = (255, 255, 255)
     hud_muted: Color = (160, 175, 210)
+    final_panel: Color = (14, 14, 24)
 
 
 class PacmanRenderer:
@@ -48,6 +49,7 @@ class PacmanRenderer:
         fps: int = 12,
         caption: str = "Pacman MARL",
         hud_height: int = 54,
+        show_observations: bool = True,
     ) -> None:
         if tile_size < 12:
             raise ValueError("tile_size must be at least 12 pixels.")
@@ -58,23 +60,31 @@ class PacmanRenderer:
         self.fps = int(fps)
         self.caption = caption
         self.hud_height = int(hud_height)
+        self.show_observations = bool(show_observations)
         self.colors = RenderColors()
 
         self._pygame = None
         self._screen = None
         self._clock = None
+        self._large_font = None
         self._font = None
         self._small_font = None
         self._frame_index = 0
         self._closed = False
 
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
     def close(self) -> None:
         if self._pygame is None:
+            self._closed = True
             return
         if self._screen is not None:
             self._pygame.display.quit()
         self._screen = None
         self._clock = None
+        self._large_font = None
         self._font = None
         self._small_font = None
         self._closed = True
@@ -94,9 +104,12 @@ class PacmanRenderer:
         done: bool = False,
         last_action_by_agent: dict[str, str] | None = None,
         last_reward_by_agent: dict[str, float] | None = None,
+        final_result: dict[str, Any] | None = None,
     ) -> np.ndarray | None:
         if render_mode not in {"human", "rgb_array"}:
             raise ValueError(f"Unsupported render_mode: {render_mode!r}")
+        if render_mode == "human" and self._closed:
+            return None
 
         pygame = self._ensure_pygame()
         rows, cols = grid.shape
@@ -106,6 +119,8 @@ class PacmanRenderer:
 
         surface.fill(self.colors.background)
         self._draw_grid(surface, grid, pellet_mask)
+        if self.show_observations:
+            self._draw_observation_overlays(surface, grid, ghosts)
         self._draw_agents(surface, grid, ghosts, pacman)
         self._draw_hud(
             surface,
@@ -119,6 +134,8 @@ class PacmanRenderer:
             last_action_by_agent=last_action_by_agent,
             last_reward_by_agent=last_reward_by_agent,
         )
+        if final_result is not None:
+            self._draw_final_overlay(surface, final_result)
 
         self._frame_index += 1
 
@@ -130,6 +147,12 @@ class PacmanRenderer:
 
     def _ensure_pygame(self):
         if self._pygame is not None:
+            if self._font is None or self._small_font is None or self._large_font is None:
+                self._pygame.font.init()
+                self._clock = self._pygame.time.Clock()
+                self._large_font = self._pygame.font.SysFont("arial", max(24, self.tile_size), bold=True)
+                self._font = self._pygame.font.SysFont("arial", max(15, self.tile_size // 2), bold=True)
+                self._small_font = self._pygame.font.SysFont("arial", max(12, self.tile_size // 3))
             return self._pygame
 
         try:
@@ -143,6 +166,7 @@ class PacmanRenderer:
         pygame.font.init()
         self._pygame = pygame
         self._clock = pygame.time.Clock()
+        self._large_font = pygame.font.SysFont("arial", max(24, self.tile_size), bold=True)
         self._font = pygame.font.SysFont("arial", max(15, self.tile_size // 2), bold=True)
         self._small_font = pygame.font.SysFont("arial", max(12, self.tile_size // 3))
         return pygame
@@ -176,6 +200,44 @@ class PacmanRenderer:
 
                 if pellet_mask is not None and bool(pellet_mask[row, col]):
                     self._draw_pellet(surface, row, col)
+
+    def _draw_observation_overlays(
+        self,
+        surface,
+        grid: np.ndarray,
+        ghosts: list[Any],
+    ) -> None:
+        pygame = self._pygame
+        assert pygame is not None
+
+        rows, cols = grid.shape
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for index, ghost in enumerate(ghosts):
+            current_position = getattr(ghost, "current_position", None)
+            if current_position is None:
+                continue
+
+            color = self.GHOST_COLORS[index % len(self.GHOST_COLORS)]
+            fill_color = (*color, 42)
+            outline_color = (*color, 185)
+            outline_inset = min(max(1, index * 2 + 1), max(1, self.tile_size // 4))
+            radius = max(2, self.tile_size // 6)
+
+            for row, col in self._visible_cells_for_ghost(ghost, rows, cols):
+                rect = self._tile_rect(row, col)
+                fill_rect = rect.inflate(-2, -2)
+                outline_rect = rect.inflate(-2 * outline_inset, -2 * outline_inset)
+                pygame.draw.rect(overlay, fill_color, fill_rect, border_radius=radius)
+                if outline_rect.width > 2 and outline_rect.height > 2:
+                    pygame.draw.rect(
+                        overlay,
+                        outline_color,
+                        outline_rect,
+                        width=max(1, self.tile_size // 18),
+                        border_radius=max(1, radius - outline_inset // 2),
+                    )
+
+        surface.blit(overlay, (0, 0))
 
     def _draw_agents(
         self,
@@ -244,9 +306,75 @@ class PacmanRenderer:
         if line_2:
             self._blit_text(surface, line_2, 10, hud_y + 30, self.colors.hud_muted, self._small_font)
 
+    def _draw_final_overlay(self, surface, final_result: dict[str, Any]) -> None:
+        pygame = self._pygame
+        assert pygame is not None
+
+        width, height = surface.get_size()
+        shade = pygame.Surface((width, height), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 178))
+        surface.blit(shade, (0, 0))
+
+        panel_width = min(width - 28, max(300, int(width * 0.72)))
+        panel_height = min(height - 28, 210)
+        panel = pygame.Rect(0, 0, panel_width, panel_height)
+        panel.center = (width // 2, height // 2)
+        radius = max(6, self.tile_size // 4)
+
+        pygame.draw.rect(surface, self.colors.final_panel, panel, border_radius=radius)
+        pygame.draw.rect(surface, self.colors.wall_edge, panel, width=2, border_radius=radius)
+
+        title = str(final_result.get("title") or "Episode finished")
+        accent = self._final_result_accent(title)
+        title_font = self._large_font or self._font
+        body_font = self._font
+        small_font = self._small_font or self._font
+        assert title_font is not None
+        assert body_font is not None
+        assert small_font is not None
+
+        self._blit_centered_text(
+            surface,
+            title,
+            panel.centerx,
+            panel.y + 22,
+            accent,
+            title_font,
+            panel.width - 28,
+        )
+
+        lines = self._final_result_lines(final_result)
+        y = panel.y + 76
+        for line in lines:
+            self._blit_centered_text(
+                surface,
+                line,
+                panel.centerx,
+                y,
+                self.colors.hud_text,
+                body_font,
+                panel.width - 34,
+            )
+            y += max(21, self.tile_size // 2)
+
+        reason = str(final_result.get("reason") or "")
+        if reason:
+            self._blit_centered_text(
+                surface,
+                reason,
+                panel.centerx,
+                panel.bottom - 34,
+                self.colors.hud_muted,
+                small_font,
+                panel.width - 34,
+            )
+
     def _draw_to_display(self, surface, width: int, height: int) -> None:
         pygame = self._pygame
         assert pygame is not None
+
+        if self._closed:
+            return
 
         if self._screen is None:
             if not pygame.display.get_init():
@@ -402,6 +530,22 @@ class PacmanRenderer:
             rendered = font.render(text[:clipped_chars] + "...", True, color)
         surface.blit(rendered, (x, y))
 
+    def _blit_centered_text(
+        self,
+        surface,
+        text: str,
+        center_x: int,
+        y: int,
+        color: Color,
+        font: Any,
+        available_width: int,
+    ) -> None:
+        rendered = font.render(text, True, color)
+        if rendered.get_width() > available_width:
+            clipped_chars = max(8, int(len(text) * available_width / rendered.get_width()) - 3)
+            rendered = font.render(text[:clipped_chars] + "...", True, color)
+        surface.blit(rendered, (center_x - rendered.get_width() // 2, y))
+
     def _tile_rect(self, row: int, col: int):
         pygame = self._pygame
         assert pygame is not None
@@ -417,6 +561,63 @@ class PacmanRenderer:
             col * self.tile_size + self.tile_size // 2,
             row * self.tile_size + self.tile_size // 2,
         )
+
+    def _visible_cells_for_ghost(self, ghost: Any, rows: int, cols: int) -> list[tuple[int, int]]:
+        center = getattr(ghost, "current_position", None)
+        if center is None:
+            return []
+
+        view = getattr(ghost, "view", None)
+        if view is None:
+            view_shape = (3, 3)
+        else:
+            view_shape = tuple(view.shape[:2])
+
+        view_rows, view_cols = view_shape
+        row_center = view_rows // 2
+        col_center = view_cols // 2
+        visible_cells = []
+        for local_row in range(view_rows):
+            for local_col in range(view_cols):
+                row = int(center[0]) + local_row - row_center
+                col = int(center[1]) + local_col - col_center
+                if 0 <= row < rows and 0 <= col < cols:
+                    visible_cells.append((row, col))
+        return visible_cells
+
+    def _final_result_lines(self, final_result: dict[str, Any]) -> list[str]:
+        lines = []
+        steps = final_result.get("steps")
+        max_steps = final_result.get("max_steps")
+        if steps is not None and max_steps is not None:
+            lines.append(f"Steps: {int(steps)} / {int(max_steps)}")
+        elif steps is not None:
+            lines.append(f"Steps: {int(steps)}")
+
+        total_reward = final_result.get("total_reward")
+        if total_reward is not None:
+            lines.append(f"Team reward: {float(total_reward):.2f}")
+
+        elapsed_seconds = final_result.get("elapsed_seconds")
+        if elapsed_seconds is not None:
+            lines.append(f"Elapsed: {self._format_elapsed(float(elapsed_seconds))}")
+
+        return lines
+
+    def _final_result_accent(self, title: str) -> Color:
+        title_lower = title.lower()
+        if title_lower.startswith("ghost"):
+            return self.GHOST_COLORS[0]
+        if title_lower.startswith("pacman"):
+            return self.colors.pacman
+        return self.colors.hud_text
+
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        seconds = max(0.0, seconds)
+        minutes = int(seconds // 60)
+        remaining = seconds - minutes * 60
+        return f"{minutes:02d}:{remaining:05.2f}"
 
     @staticmethod
     def _is_capture_grid(grid: np.ndarray) -> bool:

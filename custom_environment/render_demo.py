@@ -61,6 +61,37 @@ def _random_actions(env: PacManEnvironment) -> dict[str, int]:
     return {agent: int(env.action_space(agent).sample()) for agent in env.agents}
 
 
+def _build_final_result(
+    env: PacManEnvironment,
+    *,
+    step: int,
+    run_max_steps: int,
+    total_reward: float,
+    elapsed_seconds: float,
+) -> dict:
+    if env._is_capture_state():
+        title = "Ghosts win"
+        reason = "Pacman was captured."
+    elif not env.agents and env.step_count >= env.max_steps:
+        title = "Pacman wins"
+        reason = "Pacman survived until the environment time limit."
+    elif step >= run_max_steps:
+        title = "Run stopped"
+        reason = "The runner max-step limit was reached before the episode terminated."
+    else:
+        title = "Episode finished"
+        reason = "The run ended without an active terminal condition."
+
+    return {
+        "title": title,
+        "reason": reason,
+        "steps": step,
+        "max_steps": run_max_steps,
+        "total_reward": total_reward,
+        "elapsed_seconds": elapsed_seconds,
+    }
+
+
 def run_demo(
     *,
     render_mode: str,
@@ -72,6 +103,7 @@ def run_demo(
     number_ghosts: int,
     seed: int | None,
     screenshot_out: Path | None,
+    show_observations: bool,
 ) -> None:
     if seed is not None:
         random.seed(seed)
@@ -83,6 +115,7 @@ def run_demo(
         render_mode=None if render_mode == "ascii" else render_mode,
         tile_size=tile_size,
         fps=fps,
+        show_observations=show_observations,
     )
 
     observations, infos = env.reset(seed=seed)
@@ -92,6 +125,10 @@ def run_demo(
     done = False
     step = 0
     last_frame = None
+    last_action_info = None
+    last_reward_info = None
+    start_time = time.perf_counter()
+    final_result = None
 
     try:
         if render_mode == "ascii":
@@ -126,6 +163,8 @@ def run_demo(
                 agent: ACTION_NAME.get(action, str(action))
                 for agent, action in actions.items()
             }
+            last_action_info = action_info
+            last_reward_info = rewards
 
             if render_mode == "ascii":
                 print()
@@ -154,6 +193,45 @@ def run_demo(
 
             if delay > 0:
                 time.sleep(delay)
+
+        final_result = _build_final_result(
+            env,
+            step=step,
+            run_max_steps=max_steps,
+            total_reward=total_reward,
+            elapsed_seconds=time.perf_counter() - start_time,
+        )
+        final_done = done or step >= max_steps
+
+        if render_mode != "ascii":
+            frame = env.render(
+                learner="random",
+                total_reward=total_reward,
+                done=final_done,
+                last_action_by_agent=last_action_info,
+                last_reward_by_agent=last_reward_info,
+                final_result=final_result,
+            )
+            if render_mode == "rgb_array":
+                last_frame = frame
+            if screenshot_out is not None and render_mode != "rgb_array":
+                last_frame = env.capture_frame(
+                    learner="random",
+                    total_reward=total_reward,
+                    done=final_done,
+                    last_action_by_agent=last_action_info,
+                    last_reward_by_agent=last_reward_info,
+                    final_result=final_result,
+                )
+            if render_mode == "human":
+                env.wait_for_close(
+                    learner="random",
+                    total_reward=total_reward,
+                    done=final_done,
+                    last_action_by_agent=last_action_info,
+                    last_reward_by_agent=last_reward_info,
+                    final_result=final_result,
+                )
     finally:
         if screenshot_out is not None and last_frame is not None:
             save_rgb_frame(last_frame, screenshot_out)
@@ -161,8 +239,10 @@ def run_demo(
         env.close()
 
     print()
+    result_title = final_result["title"] if final_result is not None else "unknown"
     print(
-        f"Demo finished | steps={step} | total_reward={total_reward:.3f} | done={done}"
+        f"Demo finished | steps={step} | total_reward={total_reward:.3f} "
+        f"| done={done} | result={result_title}"
     )
 
 
@@ -192,6 +272,11 @@ def main() -> None:
         default=None,
         help="Optional PNG path for the last rendered frame.",
     )
+    parser.add_argument(
+        "--hide-observations",
+        action="store_true",
+        help="Disable the translucent local-observation overlays in Pygame renders.",
+    )
     args = parser.parse_args()
 
     run_demo(
@@ -204,6 +289,7 @@ def main() -> None:
         number_ghosts=args.number_ghosts,
         seed=args.seed,
         screenshot_out=args.screenshot_out,
+        show_observations=not args.hide_observations,
     )
 
 
