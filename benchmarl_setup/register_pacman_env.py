@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from custom_environment.utils import create_grid
 from custom_environment.env.pacman_environment import PacManEnvironment
 from benchmarl_setup.pacman_benchmarl_task import register_pacman_task
 
@@ -21,7 +22,7 @@ def main() -> None:
     full_task_name = register_pacman_task()
     print(f"Registered task key: {full_task_name}")
 
-    env = PacManEnvironment(global_view=None)
+    env = PacManEnvironment(global_view=create_grid())
     print("Pacman environment instantiated successfully:")
     print(env)
 

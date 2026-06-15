@@ -186,6 +186,37 @@ def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
     return [float(x) for x in flat.tolist()]
 
 
+def _build_final_result(
+    raw_env,
+    *,
+    step: int,
+    run_max_steps: int,
+    total_reward: float,
+    elapsed_seconds: float,
+) -> dict:
+    if raw_env._is_capture_state():
+        title = "Ghosts win"
+        reason = "Pacman was captured."
+    elif not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+        title = "Pacman wins"
+        reason = "Pacman survived until the environment time limit."
+    elif step >= run_max_steps:
+        title = "Run stopped"
+        reason = "The runner max-step limit was reached before the episode terminated."
+    else:
+        title = "Episode finished"
+        reason = "The run ended without an active terminal condition."
+
+    return {
+        "title": title,
+        "reason": reason,
+        "steps": step,
+        "max_steps": run_max_steps,
+        "total_reward": total_reward,
+        "elapsed_seconds": elapsed_seconds,
+    }
+
+
 def run_episode(
     learner: str,
     delay: float,
@@ -198,6 +229,7 @@ def run_episode(
     tile_size: int,
     fps: int,
     screenshot_out: Path | None,
+    show_observations: bool,
 ) -> None:
     learner = normalize_algorithm(learner)
 
@@ -223,17 +255,22 @@ def run_episode(
     raw_env.render_mode = None if render_mode == "ascii" else render_mode
     raw_env.tile_size = tile_size
     raw_env.fps = fps
+    raw_env.show_observations = show_observations
     agent_ids = list(getattr(raw_env, "possible_agents", []))
 
     total_reward = 0.0
     done = False
     step = 0
     last_frame = None
+    last_action_info = None
+    last_reward_info = None
+    final_result = None
 
     try:
         try:
             with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
                 tensordict = env.reset()
+                start_time = time.perf_counter()
 
                 if render_mode == "ascii":
                     print("Pacman Environment (episode start):")
@@ -277,6 +314,8 @@ def run_episode(
                         agent_ids[i] if i < len(agent_ids) else f"ghost_{i+1}": reward_values[i]
                         for i in range(len(reward_values))
                     }
+                    last_action_info = action_info
+                    last_reward_info = reward_info
 
                     done = bool(next_td.get("done").item())
 
@@ -322,6 +361,45 @@ def run_episode(
                         action_keys=env.action_keys,
                         done_keys=env.done_keys,
                     )
+
+                final_result = _build_final_result(
+                    raw_env,
+                    step=step,
+                    run_max_steps=max_steps,
+                    total_reward=total_reward,
+                    elapsed_seconds=time.perf_counter() - start_time,
+                )
+                final_done = done or step >= max_steps
+
+                if render_mode != "ascii":
+                    frame = raw_env.render(
+                        learner=learner,
+                        total_reward=total_reward,
+                        done=final_done,
+                        last_action_by_agent=last_action_info,
+                        last_reward_by_agent=last_reward_info,
+                        final_result=final_result,
+                    )
+                    if render_mode == "rgb_array":
+                        last_frame = frame
+                    if screenshot_out is not None and render_mode != "rgb_array":
+                        last_frame = raw_env.capture_frame(
+                            learner=learner,
+                            total_reward=total_reward,
+                            done=final_done,
+                            last_action_by_agent=last_action_info,
+                            last_reward_by_agent=last_reward_info,
+                            final_result=final_result,
+                        )
+                    if render_mode == "human":
+                        raw_env.wait_for_close(
+                            learner=learner,
+                            total_reward=total_reward,
+                            done=final_done,
+                            last_action_by_agent=last_action_info,
+                            last_reward_by_agent=last_reward_info,
+                            final_result=final_result,
+                        )
         finally:
             if screenshot_out is not None and last_frame is not None:
                 save_rgb_frame(last_frame, screenshot_out)
@@ -331,9 +409,10 @@ def run_episode(
         experiment.close()
 
     print()
+    result_title = final_result["title"] if final_result is not None else "unknown"
     print(
         f"Episode finished | learner={learner} | steps={step} "
-        f"| total_reward={total_reward:.3f} | done={done}"
+        f"| total_reward={total_reward:.3f} | done={done} | result={result_title}"
     )
 
 
@@ -417,6 +496,11 @@ def main() -> None:
         default=None,
         help="Optional PNG path for the last rendered frame.",
     )
+    parser.add_argument(
+        "--hide-observations",
+        action="store_true",
+        help="Disable the translucent local-observation overlays in Pygame renders.",
+    )
     args = parser.parse_args()
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
@@ -436,6 +520,7 @@ def main() -> None:
         tile_size=args.tile_size,
         fps=args.fps,
         screenshot_out=args.screenshot_out,
+        show_observations=not args.hide_observations,
     )
 
 
