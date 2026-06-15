@@ -1,5 +1,6 @@
 # Research 000001 | fernanda-INF2072 | 2026-06-13 19:02 UTC | Pallet system and reward design
 tags: reward-shaping, environment-design, pacman, pallet-system, marl
+spawned: plan-000003
 
 ## User Brief
 
