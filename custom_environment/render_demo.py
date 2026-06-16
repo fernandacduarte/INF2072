@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from custom_environment.env.pacman_environment import PacManEnvironment
 from custom_environment.env.domain.constant import Observation
-from custom_environment.utils import create_grid
+from custom_environment.utils import build_maze
 
 
 SYMBOLS = {
@@ -104,13 +104,14 @@ def run_demo(
     seed: int | None,
     screenshot_out: Path | None,
     show_observations: bool,
+    maze: str = "default",
 ) -> None:
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
     env = PacManEnvironment(
-        global_view=create_grid(size=grid_size),
+        global_view=build_maze(name=maze, size=grid_size),
         number_ghosts=number_ghosts,
         render_mode=None if render_mode == "ascii" else render_mode,
         tile_size=tile_size,
@@ -265,6 +266,13 @@ def main() -> None:
     parser.add_argument("--fps", type=int, default=12)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument("--number-ghosts", type=int, default=2)
+    parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=["default", "pinklike"],
+        help="Maze layout to render.",
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--screenshot-out",
@@ -290,6 +298,7 @@ def main() -> None:
         seed=args.seed,
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,
+        maze=args.maze,
     )
 
 
