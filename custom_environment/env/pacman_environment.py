@@ -40,6 +40,12 @@ from custom_environment.utils import MazeSpec, spec_from_grid
 from collections import deque
 
 
+# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7. Change this single value to resize the ghosts'
+# local observation for all trainings. Off-grid cells (near the map border) are
+# padded with WALL, so the maze never needs to change when this value changes.
+GHOST_VIEW_SIZE = 5
+
+
 # Main environment class following PettingZoo parallel interface.
 class PacManEnvironment(ParallelEnv):  # Main environment class
     # Metadata advertised by the environment.
@@ -65,6 +71,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 f"Unsupported render_mode={render_mode!r}. "
                 f"Expected one of {self.metadata['render_modes']} or None."
             )
+
+        # Ghost local field-of-view geometry (see GHOST_VIEW_SIZE at module top).
+        if GHOST_VIEW_SIZE < 1 or GHOST_VIEW_SIZE % 2 == 0:
+            raise ValueError(
+                f"GHOST_VIEW_SIZE must be a positive odd integer, got {GHOST_VIEW_SIZE}"
+            )
+        self.view_size = GHOST_VIEW_SIZE
+        self.view_radius = GHOST_VIEW_SIZE // 2
 
         # Accept a MazeSpec, or wrap a raw grid array with legacy spawns (back-compat).
         spec = global_view if isinstance(global_view, MazeSpec) else spec_from_grid(global_view)
@@ -330,8 +344,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     def observation_space(self, agent: AgentID):
         """
         Returns the partial information available for the given agent.
-        A local view of a 3x3 grid centered on the agent's position,
-        with the following encoded values:
+        A local view of a (view_size x view_size) grid centered on the agent's
+        position (view_size = GHOST_VIEW_SIZE), with the following encoded values:
             (1) Capture;
             (2) Empty;
             (3) Ghost;
@@ -339,7 +353,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             (5) Wall.
         """
         # Encoded values span [1, 5], with uint8 storage.
-        return Box(low=1, high=5, shape=(3, 3), dtype=np.uint8)
+        return Box(low=1, high=5, shape=(self.view_size, self.view_size), dtype=np.uint8)
 
     # Cache action spaces because they are static by agent ID.
     @functools.lru_cache(maxsize=None)
@@ -484,13 +498,23 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             return Action(action_int)
         raise ValueError(f"Invalid action token for ghost policy: {action}")
 
-    # Compute 3x3 local observation for one ghost.
+    # Compute the (view_size x view_size) local observation for one ghost.
     def _get_observation(self, ghost: Ghost) -> np.ndarray:
-        # Read ghost position.
+        # Read ghost position and view geometry.
         x, y = ghost.current_position
-        # Slice 3x3 centered around ghost (walls on borders prevent out-of-bounds).
-        ghost.view = self.global_view[(x-1):(x+2), (y-1):(y+2)]
-        # Return cached local view.
+        r, size = self.view_radius, self.view_size
+        rows, cols = self.global_view.shape
+        # Fixed-shape patch; off-grid cells (near the border) are padded with WALL,
+        # so a corner ghost sees impassable space beyond the map.
+        patch = np.full((size, size), Observation.WALL.value, dtype=self.global_view.dtype)
+        # Window in global coords, clamped to the grid to avoid negative-index wrap.
+        x0, y0 = x - r, y - r
+        sx0, sy0 = max(x0, 0), max(y0, 0)
+        sx1, sy1 = min(x + r + 1, rows), min(y + r + 1, cols)
+        # Copy the in-bounds overlap into the correctly offset slice of the patch.
+        patch[sx0 - x0:sx1 - x0, sy0 - y0:sy1 - y0] = self.global_view[sx0:sx1, sy0:sy1]
+        ghost.view = patch
+        # Return local view.
         return ghost.view
 
     def _compute_team_reward(self, capture_happened: bool) -> float:
@@ -570,7 +594,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 continue
             local_x, local_y = (int(pacman_local_positions[0][0]), int(pacman_local_positions[0][1]))
             ghost_x, ghost_y = ghost.current_position
-            global_pos = (ghost_x + (local_x - 1), ghost_y + (local_y - 1))
+            r = self.view_radius
+            global_pos = (ghost_x + (local_x - r), ghost_y + (local_y - r))
             seen_positions.append(global_pos)
         return len(seen_positions) > 0, seen_positions
 

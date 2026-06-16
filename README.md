@@ -65,7 +65,7 @@ the human-view Pygame renderer, use:
 py -3.11 custom_environment\eval.py --learner iql --render-mode human --delay 0.08
 ```
 
-The Pygame renderer highlights each ghost's current 3x3 local observation with
+The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
@@ -275,7 +275,7 @@ State vector order:
    - `step_fraction`
    - `remaining_fraction`
 
-Policy observations remain local 3x3 for all algorithms; only `qmixglobal` mixer uses this centralized state.
+Policy observations remain local (5x5 by default) for all algorithms; only `qmixglobal` mixer uses this centralized state.
 
 Optional parameters:
 
@@ -336,7 +336,12 @@ Parâmetros principais do script:
 The environment now uses a **shared team reward**: one scalar reward is computed per step and broadcast to all ghosts.
 
 Observability and shared information rules:
-1. Each ghost only observes its local 3x3 neighborhood.
+1. Each ghost only observes its local neighborhood (5x5 by default).
+   - **Changing the view size:** edit the single constant `GHOST_VIEW_SIZE` in
+     `custom_environment/env/pacman_environment.py` (any odd integer: `3`→3x3, `5`→5x5, `7`→7x7).
+     It applies to every algorithm/training; off-grid cells near the border are padded with walls,
+     so the maze needs no changes. Note that resizing changes the policy input shape, so existing
+     checkpoints must be retrained.
 2. Team-level visibility is computed from local observations only (logical OR across ghosts).
 3. The only shared memory about Pacman location is:
    - `last_pacman_sighting_position`
