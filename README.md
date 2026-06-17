@@ -65,7 +65,7 @@ the human-view Pygame renderer, use:
 py -3.11 custom_environment\eval.py --learner iql --render-mode human --delay 0.08
 ```
 
-The Pygame renderer highlights each ghost's current 3x3 local observation with
+The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
@@ -122,6 +122,54 @@ Useful optional rendering parameters for the random-policy demo
 ```
 
 Outputs are saved under `benchmarl_setup/runs` by default.
+
+### Mazes (Map Selection)
+
+Two maze layouts are available via `--maze`:
+
+- `default`: a 20x20 lattice maze.
+- `pinklike`: a 20x20 maze resembling the classic "Pink" Pacman maze, without portals.
+
+**Layout notation (map-authored spawns + pellets).** Mazes are defined as ASCII layouts in
+`custom_environment/utils.py` (`DEFAULT_LAYOUT`, `PINKLIKE_LAYOUT`) and parsed by `parse_layout`
+into a `MazeSpec` (grid + spawns + cosmetic pellet mask). The map itself declares where every
+entity starts, so there are no hardcoded spawn positions. Characters:
+
+- `%` or `#` — wall
+- `.` — pellet (cosmetic only);  `o` — power pellet (treated as a pellet for now)
+- `G` — ghost spawn (the number of ghosts equals the number of `G`s)
+- `P` — Pac-Man spawn (exactly one)
+- space (or any other char) — empty, no pellet
+
+`parse_layout` validates a single `P`, at least one `G`, a solid border, and full connectivity
+(`assert_connected`). Pellets are **cosmetic** — they do not affect observations, reward, or
+termination. To add a maze, define a new layout list + register it in the `MAZES` dict.
+
+The selected maze is supported by training, benchmarking, and the render demo:
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --maze pinklike
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --maze pinklike
+py -3.11 custom_environment\render_demo.py --render-mode human --maze pinklike
+```
+
+The maze is recorded in each run's task config, so `eval.py` rebuilds the correct maze
+automatically from the checkpoint (no `--maze` needed for evaluation).
+
+**Keeping the two mazes' runs separate.** Both mazes write run folders with the same
+`<algorithm>_pacman_*` prefix, so train each maze into its own output folder and read it
+back with `--runs-root` during evaluation/plotting:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze default   --save-folder benchmarl_setup\runs\default
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze pinklike  --save-folder benchmarl_setup\runs\pinklike
+
+py -3.11 custom_environment\eval.py --learner iql --runs-root benchmarl_setup\runs\pinklike
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --runs-root benchmarl_setup\runs\pinklike
+```
+
+New mazes can be registered in `custom_environment/utils.py` via the `MAZES` registry
+(`grid_from_ascii` parses an ASCII layout; `assert_connected` validates reachability).
 
 ### Benchmark (Multi-Seed, Parallel by Algorithm)
 
@@ -227,7 +275,7 @@ State vector order:
    - `step_fraction`
    - `remaining_fraction`
 
-Policy observations remain local 3x3 for all algorithms; only `qmixglobal` mixer uses this centralized state.
+Policy observations remain local (5x5 by default) for all algorithms; only `qmixglobal` mixer uses this centralized state.
 
 Optional parameters:
 
@@ -288,7 +336,12 @@ Parâmetros principais do script:
 The environment now uses a **shared team reward**: one scalar reward is computed per step and broadcast to all ghosts.
 
 Observability and shared information rules:
-1. Each ghost only observes its local 3x3 neighborhood.
+1. Each ghost only observes its local neighborhood (5x5 by default).
+   - **Changing the view size:** edit the single constant `GHOST_VIEW_SIZE` in
+     `custom_environment/env/pacman_environment.py` (any odd integer: `3`→3x3, `5`→5x5, `7`→7x7).
+     It applies to every algorithm/training; off-grid cells near the border are padded with walls,
+     so the maze needs no changes. Note that resizing changes the policy input shape, so existing
+     checkpoints must be retrained.
 2. Team-level visibility is computed from local observations only (logical OR across ghosts).
 3. The only shared memory about Pacman location is:
    - `last_pacman_sighting_position`

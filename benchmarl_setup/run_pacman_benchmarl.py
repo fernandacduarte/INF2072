@@ -50,6 +50,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=["default", "pinklike"],
+        help="Maze layout to train on.",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -84,6 +91,7 @@ def main() -> None:
             "max_cycles": 200,
             "number_ghosts": args.number_ghosts,
             "grid_size": args.grid_size,
+            "map_name": args.maze,
             "include_global_state": qmix_uses_global_state(algorithm),
         }
     )

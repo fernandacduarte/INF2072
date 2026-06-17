@@ -569,7 +569,9 @@ class PacmanRenderer:
 
         view = getattr(ghost, "view", None)
         if view is None:
-            view_shape = (3, 3)
+            # Fallback before the first observation is computed; match the env's configured size.
+            from custom_environment.env.pacman_environment import GHOST_VIEW_SIZE
+            view_shape = (GHOST_VIEW_SIZE, GHOST_VIEW_SIZE)
         else:
             view_shape = tuple(view.shape[:2])
 

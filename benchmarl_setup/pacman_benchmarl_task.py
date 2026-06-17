@@ -10,7 +10,7 @@ from benchmarl.environments.common import Task, TaskClass
 from benchmarl.utils import DEVICE_TYPING
 
 from custom_environment.env.pacman_environment import PacManEnvironment
-from custom_environment.utils import create_grid
+from custom_environment.utils import build_maze
 
 
 class PacmanTaskClass(TaskClass):
@@ -31,10 +31,11 @@ class PacmanTaskClass(TaskClass):
         grid_size = int(config.get("grid_size", 20))
         number_ghosts = int(config.get("number_ghosts", 2))
         include_global_state = bool(config.get("include_global_state", False))
+        map_name = str(config.get("map_name", "default"))
 
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
-                global_view=create_grid(size=grid_size),
+                global_view=build_maze(name=map_name, size=grid_size),
                 number_ghosts=number_ghosts,
             )
             return PettingZooWrapper(
