@@ -8,6 +8,8 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 
+from algorithm_utils import SUPPORTED_MAZES, runs_root_for_maze
+
 
 def _load_two_col_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
     x_vals = []
@@ -68,7 +70,14 @@ def main() -> None:
         "--runs-root",
         type=Path,
         default=Path("benchmarl_setup") / "runs",
-        help="Root directory containing BenchMARL run folders.",
+        help="Base runs directory.",
+    )
+    parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=SUPPORTED_MAZES,
+        help="Maze subfolder under --runs-root.",
     )
     parser.add_argument(
         "--run-dir",
@@ -85,8 +94,8 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("benchmarl_setup") / "runs" / "iql_reward_mean_stddev.png",
-        help="Output PNG path.",
+        default=None,
+        help="Output PNG path (default: <runs-root>/<maze>/iql_reward_mean_stddev.png).",
     )
     parser.add_argument(
         "--no-open",
@@ -94,8 +103,10 @@ def main() -> None:
         help="Do not open the generated PNG automatically.",
     )
     args = parser.parse_args()
+    maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
+    out = args.out if args.out is not None else maze_runs_root / "iql_reward_mean_stddev.png"
 
-    run_dir = args.run_dir if args.run_dir is not None else _find_latest_run(args.runs_root)
+    run_dir = args.run_dir if args.run_dir is not None else _find_latest_run(maze_runs_root)
     scalars_dir = _resolve_scalars_dir(run_dir)
 
     frames_path = scalars_dir / "counters_total_frames.csv"
@@ -110,7 +121,7 @@ def main() -> None:
 
     reward_std = _rolling_std(reward_mean, window=args.window)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
@@ -130,16 +141,16 @@ def main() -> None:
     ax.legend()
 
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    fig.savefig(out, dpi=150)
 
     print(f"Run dir: {run_dir}")
     print(f"Scalars dir: {scalars_dir}")
-    print(f"Saved: {args.out}")
+    print(f"Saved: {out}")
     print(f"Reward mean min/max: {reward_mean.min():.3f}/{reward_mean.max():.3f}")
     print(f"Reward stddev min/max: {reward_std.min():.3f}/{reward_std.max():.3f}")
 
     if not args.no_open:
-        _open_file(args.out)
+        _open_file(out)
 
 
 if __name__ == "__main__":

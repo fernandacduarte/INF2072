@@ -12,7 +12,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarl_setup.pacman_benchmarl_task import PacmanTask, register_pacman_task
-from benchmarl_setup.algorithm_utils import normalize_algorithm, qmix_uses_global_state
+from benchmarl_setup.algorithm_utils import (
+    SUPPORTED_MAZES,
+    normalize_algorithm,
+    qmix_uses_global_state,
+    runs_root_for_maze,
+)
 
 
 def _algorithm_config(name: str):
@@ -50,16 +55,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
+        "--ghost-view-size",
+        type=int,
+        default=None,
+        help="Odd local observation width/height for ghosts (for example 3 or 5).",
+    )
+    parser.add_argument(
         "--maze",
         type=str,
         default="default",
-        choices=["default", "pinklike"],
+        choices=SUPPORTED_MAZES,
         help="Maze layout to train on.",
     )
     parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
+        help="Base runs directory. Training output is stored under <save-folder>/<maze>.",
     )
     parser.add_argument(
         "--checkpoint-interval",
@@ -80,21 +92,23 @@ def main() -> None:
     args = parse_args()
     algorithm = normalize_algorithm(args.algorithm)
 
-    save_root = Path(args.save_folder)
+    save_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     save_root.mkdir(parents=True, exist_ok=True)
 
     full_task_name = register_pacman_task()
     print(f"Registered task: {full_task_name}")
 
-    task = PacmanTask.PACMAN.get_task(
-        config={
-            "max_cycles": 200,
-            "number_ghosts": args.number_ghosts,
-            "grid_size": args.grid_size,
-            "map_name": args.maze,
-            "include_global_state": qmix_uses_global_state(algorithm),
-        }
-    )
+    task_config = {
+        "max_cycles": 200,
+        "number_ghosts": args.number_ghosts,
+        "grid_size": args.grid_size,
+        "map_name": args.maze,
+        "include_global_state": qmix_uses_global_state(algorithm),
+    }
+    if args.ghost_view_size is not None:
+        task_config["ghost_view_size"] = int(args.ghost_view_size)
+
+    task = PacmanTask.PACMAN.get_task(config=task_config)
 
     algorithm_config = _algorithm_config(algorithm)
     model_config = MlpConfig.get_from_yaml()
