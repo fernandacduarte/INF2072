@@ -58,11 +58,11 @@ py -3.11 custom_environment\eval.py --learner qmixlocal
 py -3.11 custom_environment\eval.py --learner qmixglobal
 ```
 
-By default, evaluation preserves the original ASCII terminal rendering. To open
-the human-view Pygame renderer, use:
+By default, evaluation opens the human-view Pygame renderer. To preserve the
+original ASCII terminal rendering, use:
 
 ```bash
-py -3.11 custom_environment\eval.py --learner iql --render-mode human --delay 0.08
+py -3.11 custom_environment\eval.py --learner iql --render-mode ascii --delay 0.08
 ```
 
 The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
