@@ -52,6 +52,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=["default", "pinklike"],
+        help="Maze layout to train on (applied to all algorithms/seeds in this benchmark).",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -134,6 +141,8 @@ def _build_command(args: argparse.Namespace, algorithm: str, seed: int) -> list[
         str(args.number_ghosts),
         "--grid-size",
         str(args.grid_size),
+        "--maze",
+        str(args.maze),
         "--save-folder",
         str(args.save_folder),
         "--checkpoint-interval",

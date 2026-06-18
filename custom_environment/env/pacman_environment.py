@@ -34,7 +34,16 @@ from custom_environment.env.domain.ghost import Ghost
 # PacMan: class for pacman agent
 from custom_environment.env.domain.pacman import PacMan
 
+# MazeSpec: map-authored layout (grid + spawns + pellet mask); spec_from_grid: back-compat wrapper
+from custom_environment.utils import MazeSpec, spec_from_grid
+
 from collections import deque
+
+
+# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7. Change this single value to resize the ghosts'
+# local observation for all trainings. Off-grid cells (near the map border) are
+# padded with WALL, so the maze never needs to change when this value changes.
+GHOST_VIEW_SIZE = 5
 
 
 # Main environment class following PettingZoo parallel interface.
@@ -50,8 +59,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     # Constructor receives the world grid and number of ghost agents.
     def __init__(
         self,  # The environment instance
-        global_view: np.ndarray,  # The grid (walls, empty, ghosts, pacman)
-        number_ghosts: int = 2,  # Number of ghost agents
+        global_view,  # A MazeSpec, or a raw grid array (back-compat)
+        number_ghosts: int = 2,  # Deprecated: ghost count now comes from the map's spawns
         render_mode: str | None = None,  # Optional visual render mode
         tile_size: int = 28,  # Tile size in pixels for Pygame rendering
         fps: int = 12,  # Target frames per second for human rendering
@@ -63,11 +72,27 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 f"Expected one of {self.metadata['render_modes']} or None."
             )
 
-        # List of agent IDs (ghost_1, ghost_2, ...)
-        self.possible_agents = [f"ghost_{ghost+1}" for ghost in range(number_ghosts)]
+        # Ghost local field-of-view geometry (see GHOST_VIEW_SIZE at module top).
+        if GHOST_VIEW_SIZE < 1 or GHOST_VIEW_SIZE % 2 == 0:
+            raise ValueError(
+                f"GHOST_VIEW_SIZE must be a positive odd integer, got {GHOST_VIEW_SIZE}"
+            )
+        self.view_size = GHOST_VIEW_SIZE
+        self.view_radius = GHOST_VIEW_SIZE // 2
+
+        # Accept a MazeSpec, or wrap a raw grid array with legacy spawns (back-compat).
+        spec = global_view if isinstance(global_view, MazeSpec) else spec_from_grid(global_view)
+
+        # Map-authored spawns and cosmetic pellet layer.
+        self.ghost_spawns = [tuple(pos) for pos in spec.ghost_spawns]
+        self.pacman_spawn = tuple(spec.pacman_spawn)
+        self._base_pellet_mask = np.array(spec.pellet_mask, copy=True)
+
+        # Agent IDs are derived from the number of ghost spawns declared in the map.
+        self.possible_agents = [f"ghost_{i+1}" for i in range(len(self.ghost_spawns))]
         # Keep an immutable base map and reset from it every episode.
-        self._base_grid = np.array(global_view, copy=True)
-        self.global_view = np.array(global_view, copy=True)
+        self._base_grid = np.array(spec.grid, copy=True)
+        self.global_view = np.array(spec.grid, copy=True)
         self._wall_map = (self._base_grid == Observation.WALL.value).astype(np.float32)
 
         # List of Ghost objects (populated on reset)
@@ -116,10 +141,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_team_reward_breakdown = {}
         self.unseen_steps = self.newly_spotted_min_unseen_steps
 
-        # --- Spawn ghosts at fixed positions (could be parameterized) ---
+        # --- Spawn ghosts at the map-authored spawn cells ---
         self.ghosts = [
-            Ghost(id="ghost_1", current_position=(1, 1)),
-            Ghost(id="ghost_2", current_position=(1, 18))
+            Ghost(id=f"ghost_{i+1}", current_position=pos)
+            for i, pos in enumerate(self.ghost_spawns)
         ]
         # Reset per-ghost exploration and movement memory at episode start.
         for ghost in self.ghosts:
@@ -129,8 +154,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             x, y = ghost.current_position  # Unpack position
             self.global_view[x, y] = Observation.GHOST.value  # Mark as ghost
 
-        # --- Spawn Pacman at fixed position (could be parameterized) ---
-        self.pacman = PacMan(id="pacman", current_position=(18, 9))  # Bottom center
+        # --- Spawn Pacman at the map-authored spawn cell ---
+        self.pacman = PacMan(id="pacman", current_position=self.pacman_spawn)
         self.global_view[*self.pacman.current_position] = Observation.PAC_MAN.value
         self._reset_visual_pellets()
 
@@ -319,8 +344,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     def observation_space(self, agent: AgentID):
         """
         Returns the partial information available for the given agent.
-        A local view of a 3x3 grid centered on the agent's position,
-        with the following encoded values:
+        A local view of a (view_size x view_size) grid centered on the agent's
+        position (view_size = GHOST_VIEW_SIZE), with the following encoded values:
             (1) Capture;
             (2) Empty;
             (3) Ghost;
@@ -328,7 +353,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             (5) Wall.
         """
         # Encoded values span [1, 5], with uint8 storage.
-        return Box(low=1, high=5, shape=(3, 3), dtype=np.uint8)
+        return Box(low=1, high=5, shape=(self.view_size, self.view_size), dtype=np.uint8)
 
     # Cache action spaces because they are static by agent ID.
     @functools.lru_cache(maxsize=None)
@@ -436,9 +461,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         return self._renderer
 
     def _build_initial_pellet_mask(self) -> np.ndarray | None:
-        if self._base_grid.ndim != 2:
+        if self._base_pellet_mask.ndim != 2:
             return None
-        return self._base_grid == Observation.EMPTY.value
+        return np.array(self._base_pellet_mask, copy=True)
 
     def _reset_visual_pellets(self) -> None:
         self._pellet_mask = self._build_initial_pellet_mask()
@@ -473,13 +498,23 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             return Action(action_int)
         raise ValueError(f"Invalid action token for ghost policy: {action}")
 
-    # Compute 3x3 local observation for one ghost.
+    # Compute the (view_size x view_size) local observation for one ghost.
     def _get_observation(self, ghost: Ghost) -> np.ndarray:
-        # Read ghost position.
+        # Read ghost position and view geometry.
         x, y = ghost.current_position
-        # Slice 3x3 centered around ghost (walls on borders prevent out-of-bounds).
-        ghost.view = self.global_view[(x-1):(x+2), (y-1):(y+2)]
-        # Return cached local view.
+        r, size = self.view_radius, self.view_size
+        rows, cols = self.global_view.shape
+        # Fixed-shape patch; off-grid cells (near the border) are padded with WALL,
+        # so a corner ghost sees impassable space beyond the map.
+        patch = np.full((size, size), Observation.WALL.value, dtype=self.global_view.dtype)
+        # Window in global coords, clamped to the grid to avoid negative-index wrap.
+        x0, y0 = x - r, y - r
+        sx0, sy0 = max(x0, 0), max(y0, 0)
+        sx1, sy1 = min(x + r + 1, rows), min(y + r + 1, cols)
+        # Copy the in-bounds overlap into the correctly offset slice of the patch.
+        patch[sx0 - x0:sx1 - x0, sy0 - y0:sy1 - y0] = self.global_view[sx0:sx1, sy0:sy1]
+        ghost.view = patch
+        # Return local view.
         return ghost.view
 
     def _compute_team_reward(self, capture_happened: bool) -> float:
@@ -559,7 +594,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 continue
             local_x, local_y = (int(pacman_local_positions[0][0]), int(pacman_local_positions[0][1]))
             ghost_x, ghost_y = ghost.current_position
-            global_pos = (ghost_x + (local_x - 1), ghost_y + (local_y - 1))
+            r = self.view_radius
+            global_pos = (ghost_x + (local_x - r), ghost_y + (local_y - r))
             seen_positions.append(global_pos)
         return len(seen_positions) > 0, seen_positions
 
