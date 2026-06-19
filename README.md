@@ -37,6 +37,17 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixlocal
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal
 ```
 
+Device selection for training uses `--device` (`cpu`, `cuda`, `cuda:0`, or `auto`):
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --device cpu
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --device auto
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --device cuda:0
+```
+
+If CUDA is requested but unavailable, the runner falls back to CPU by default.
+To fail fast instead, use `--no-allow-cpu-fallback`.
+
 Algorithm variants:
 
 - `qmixlocal`: uses per-agent Q-values for mixing without centralized global state.
@@ -90,6 +101,13 @@ It now supports futebol2d-style best-run selection across multiple runs:
 py -3.11 custom_environment\eval.py --learner iql --checkpoint-select best
 ```
 
+Evaluation also supports explicit device selection:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --device auto
+py -3.11 custom_environment\eval.py --learner qmixglobal --device cuda --no-allow-cpu-fallback
+```
+
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
@@ -97,6 +115,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 ```bash
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
 --init-random-frames 1000
+--device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
@@ -104,7 +123,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 ```bash
 --delay 0.25 --max-steps 200 --checkpoint-select best --show-reward-breakdown
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
---hide-observations
+--hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
 
 You can also pass an explicit checkpoint to eval:
@@ -183,6 +202,17 @@ Example (5 seeds, shared training config):
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
 ```
 
+Benchmark now supports device sweeps in one command:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
+```
+
+Runs are separated by resolved device under:
+
+- `benchmarl_setup/runs/cpu`
+- `benchmarl_setup/runs/cuda`
+
 Execution strategy:
 
 - Algorithms run in parallel (for example IQL and VDN at the same time).
@@ -192,12 +222,16 @@ Useful optional parameters:
 
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+--devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\benchmark_jobs.csv
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
 
+It also writes a per-job timing ledger (`benchmark_jobs.csv`) with wall-clock duration and run mapping.
+
 The summary CSV includes, per run:
 
+- `device`
 - `algorithm`
 - `seed`
 - `run_dir`
@@ -205,7 +239,23 @@ The summary CSV includes, per run:
 - `final_reward`
 - `tail_mean_reward`
 - `best_reward`
+- `duration_seconds`
+- `frames_per_second`
 - `checkpoint_path`
+
+### CPU vs GPU Benchmark Protocol
+
+Use this protocol for fair comparisons:
+
+1. Keep configuration identical across devices (`--max-frames`, `--frames-per-batch`, `--optimizer-steps`, `--train-batch-size`, seeds).
+2. Run a shared benchmark command with both devices:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000 --summary-out benchmarl_setup\runs\benchmark_summary_cpu_gpu.csv
+```
+
+3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
+4. If CUDA is unavailable, either install CUDA-enabled PyTorch/NVIDIA drivers or keep `--allow-cpu-fallback` enabled and inspect the resolved device logs.
 
 ### Live Plot During Training
 

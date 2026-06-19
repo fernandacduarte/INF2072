@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from custom_environment.env.domain.constant import Observation
 from benchmarl_setup.algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+from benchmarl_setup.device_utils import resolve_device
 
 
 SYMBOLS = {
@@ -230,8 +231,14 @@ def run_episode(
     fps: int,
     screenshot_out: Path | None,
     show_observations: bool,
+    requested_device: str,
+    allow_cpu_fallback: bool,
 ) -> None:
     learner = normalize_algorithm(learner)
+    resolved_device, resolution_reason = resolve_device(
+        requested_device=requested_device,
+        allow_cpu_fallback=allow_cpu_fallback,
+    )
 
     if checkpoint is not None:
         checkpoint_path = checkpoint
@@ -240,6 +247,11 @@ def run_episode(
     else:
         checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root)
     print(f"Using checkpoint: {checkpoint_path}")
+    print(
+        "Eval device selection | "
+        f"requested={requested_device} | resolved={resolved_device} | "
+        f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
+    )
 
     experiment = Experiment.reload_from_file(
         str(checkpoint_path),
@@ -247,6 +259,9 @@ def run_episode(
             "evaluation": False,
             "render": False,
             "loggers": [],
+            "sampling_device": resolved_device,
+            "train_device": resolved_device,
+            "buffer_device": resolved_device,
         },
     )
 
@@ -501,6 +516,18 @@ def main() -> None:
         action="store_true",
         help="Disable the translucent local-observation overlays in Pygame renders.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Compute device for policy/eval tensors: auto, cpu, cuda, cuda:<index>.",
+    )
+    parser.add_argument(
+        "--allow-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fall back to CPU when CUDA is requested but unavailable.",
+    )
     args = parser.parse_args()
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
@@ -521,6 +548,8 @@ def main() -> None:
         fps=args.fps,
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,
+        requested_device=args.device,
+        allow_cpu_fallback=args.allow_cpu_fallback,
     )
 
 
