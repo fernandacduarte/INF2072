@@ -19,6 +19,15 @@ source: research-000001
 - Included: R4 — Add `pallets_remaining_norm` to `_build_global_state()` so VDN/QMIX agents can see board progress; low-cost signal that helps coordination.
 - Deferred: R5 — Change pallet-win from `truncation` to `termination`; either is valid for BenchMARL training, and matching the existing timeout pattern (also `truncation`) keeps the step() logic consistent for now.
 
+## Merge Reconciliation (2026-06-19, source: research-000004)
+
+After this plan was authored (2026-06-15), `main` was merged into `pallets_and_rewards` (commit `becde39`), bringing the map-authoring / render work (`utils.py` `MazeSpec`, `render_demo.py`, configurable ghost view, maze tests). All four step anchors survive, but two assumptions shifted:
+
+- **Pellets are now map-authored.** `_build_initial_pellet_mask()` no longer returns `_base_grid == EMPTY`; it now returns a copy of `self._base_pellet_mask`, which comes from `MazeSpec.pellet_mask` (cells marked `.` in the ASCII layout; spawn cells carry no pellet). `_total_pallets` (Step 2) therefore counts the *designed* pellet set, not every empty cell — which is more correct for the win condition. The `if self._pellet_mask is not None` / `_total_pallets > 0` guards remain valid. No code change to Steps 1–4 logic.
+- **Ghost count and spawns now come from the map.** `number_ghosts` is deprecated; `self.possible_agents` is derived from `len(self.ghost_spawns)`. Step 4's `_state_dim = (rows*cols) + (3*len(self.possible_agents)) + 7` formula still resolves correctly (it reads `possible_agents` dynamically), so the `+7 → +8` change is unchanged.
+
+**Only the Step 3 / Step 4 test construction must change.** The original test built "a minimal 3×3 grid" and passed it as a raw grid. The constructor now wraps a raw grid via `spec_from_grid()`, which hardcodes legacy spawns `pacman_spawn=(18,9)`, `ghost_spawns=[(1,1),(1,18)]` — out of bounds for a 3×3 grid, so `reset()` would `IndexError`. The test must instead construct a `custom_environment.utils.MazeSpec` directly (or a small `parse_layout` ASCII string) with in-bounds spawns and a controlled `pellet_mask`. See revised Step 3 / Step 4 Tests below.
+
 ## Best Practices
 
 - Match the pattern of the existing `PACMAN_TIMEOUT_WIN` for symmetry (same magnitude, same truncation style).
@@ -30,7 +39,7 @@ source: research-000001
 
 **User-visible impact**: Episodes can now end with a Pacman-wins outcome when all pallets are consumed. Ghost agents receive a −20 reward (same magnitude as timeout loss). The global state vector gains one additional normalized feature, which means saved checkpoints trained without this feature are incompatible unless re-trained.
 
-**Trade-offs accepted**: Adding `pallets_remaining_norm` to the state increases `_state_dim` by 1 — existing checkpoints must be re-trained. This is acceptable at the current research stage and is the reward of giving coordinating algorithms visibility into the threat level. The alternative (not adding the state feature) would leave QMIX/VDN blind to pallet progress, reducing the value of the new mechanic for coordination research.
+**Trade-offs accepted**: Adding `pallets_remaining_norm` to the state increases `_state_dim` by 1 — existing checkpoints must be re-trained. (Note: the `main` merge already broke pre-merge checkpoints independently by changing the ghost observation from 3×3 to `GHOST_VIEW_SIZE`=5×5, so re-training is required regardless; this plan adds no *new* incompatibility beyond what the merge introduced.) This is acceptable at the current research stage and is the reward of giving coordinating algorithms visibility into the threat level. The alternative (not adding the state feature) would leave QMIX/VDN blind to pallet progress, reducing the value of the new mechanic for coordination research.
 
 **Metacommunication impact**: The system now communicates to ghost agents that there is a third way to lose (pallet exhaustion), not only timeout and capture. This shapes the trained policy — agents must balance pursuit with patrol coverage to prevent Pacman from clearing the board.
 
@@ -57,7 +66,7 @@ In `pacman_environment.py`, after the call to `self._reset_visual_pellets()` ins
 self._total_pallets = int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0
 ```
 
-This captures the per-episode pallet count from the already-correct `_pellet_mask`. No change needed to `_consume_visual_pellet` — it already decrements the mask correctly.
+This captures the per-episode pallet count from the already-correct `_pellet_mask`. (Post-merge, this mask is map-authored — sourced from `MazeSpec.pellet_mask` via `_base_pellet_mask` — so `_total_pallets` counts the designed pellet set; see Merge Reconciliation.) No change needed to `_consume_visual_pellet` — it already decrements the mask correctly.
 
 Also initialize `self._total_pallets = 0` in `__init__` (before `_pellet_mask` is built) to avoid attribute errors if `state()` is called before the first `reset()`.
 
@@ -102,7 +111,7 @@ The existing `if any(terminations.values()) or all(truncations.values()): self.a
 - **Depends on**: Step 1, Step 2
 - **Interface**: N/A
 - **Verify**: `py -3.11 -m pytest test/test_petting_zoo.py` passes; manually confirm episode terminates when pellet mask is all-False
-- **Tests**: Add `test/test_pallet_win.py` with a smoke test: build a minimal 3×3 grid with one EMPTY cell, reset the env, manually consume that pellet via `_consume_visual_pellet`, call `step()` with any actions, and assert `truncations` are `True` and `rewards` equal `Reward.PACMAN_WIN_PALLETS.value + Reward.TIMESTEP_PENALTY.value`.
+- **Tests**: Add `test/test_pallet_win.py` with a smoke test. **Do not pass a raw grid** (the back-compat `spec_from_grid` would assign out-of-bounds legacy spawns `(1,18)`/`(18,9)`). Instead construct a `custom_environment.utils.MazeSpec` directly with in-bounds spawns and a controlled `pellet_mask` holding exactly one pellet, e.g. a 5×5 walled grid with one interior EMPTY pellet cell, `pacman_spawn`/`ghost_spawns` on other interior cells, and `pellet_mask` True only at the pellet cell. Pass that spec to `PacManEnvironment(spec)`, `reset()`, manually consume the pellet via `_consume_visual_pellet`, call `step()` with one action per ghost (keyed by `ghost.id`), and assert `truncations` are `True` and `rewards` equal `Reward.PACMAN_WIN_PALLETS.value + Reward.TIMESTEP_PENALTY.value` (adjust if other per-step reward terms apply). A small `parse_layout` ASCII string with one `.` pellet is an acceptable alternative.
 - [ ] Done
 
 ### Step 4: Expose pallet progress in global state
@@ -126,7 +135,7 @@ In `__init__`, update `_state_dim` from `(rows * cols) + (3 * len(self.possible_
 - **Depends on**: Step 2
 - **Interface**: N/A
 - **Verify**: After `env.reset()`, `env.state().shape[0] == env._state_dim` with the updated value; `env.state()[-1]` equals `1.0` at episode start (all pallets present)
-- **Tests**: Add assertion to `test/test_pallet_win.py`: after consuming all pellets, `env.state()[-1] == 0.0`
+- **Tests**: Add assertion to `test/test_pallet_win.py` (using the `MazeSpec`-based fixture from Step 3, not a raw grid): after consuming all pellets, `env.state()[-1] == 0.0`, and at episode start `env.state()[-1] == 1.0`.
 - [ ] Done
 
 ---
