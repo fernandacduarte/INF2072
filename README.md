@@ -208,6 +208,8 @@ Benchmark now supports device sweeps in one command:
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
 ```
 
+If multiple requested devices resolve to the same runtime target (for example `cpu,cuda` when CUDA is unavailable and fallback is enabled), the benchmark now fails fast with an explicit error instead of silently dropping one device leg.
+
 Runs are separated by resolved device under:
 
 - `benchmarl_setup/runs/cpu`
@@ -256,6 +258,7 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglo
 
 3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
 4. If CUDA is unavailable, either install CUDA-enabled PyTorch/NVIDIA drivers or keep `--allow-cpu-fallback` enabled and inspect the resolved device logs.
+5. For strict CPU-vs-GPU comparisons, prefer `--no-allow-cpu-fallback` so unavailable CUDA fails immediately.
 
 ### Live Plot During Training
 
@@ -301,6 +304,32 @@ Examples:
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixlocal,qmixglobal --show-runs
 ```
+
+### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
+
+Use:
+
+- `benchmarl_setup/plot_cpu_gpu_summary.py`
+
+This script reads `benchmark_summary.csv` and produces one image with:
+
+- GPU/CPU speedup per algorithm (`>1.0` means GPU is faster)
+- CPU vs GPU reward bars for a selected reward metric
+
+Example:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --summary-csv benchmarl_setup\runs\benchmark_summary.csv --reward-metric tail_mean_reward --out benchmarl_setup\runs\cpu_gpu_summary_comparison.png
+```
+
+Alternative reward metrics:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric final_reward
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric best_reward
+```
+
+If the script reports that no algorithm has both CPU and GPU rows, run benchmark first with `--devices cpu,cuda` and ensure CUDA is available.
 
 ### QMIX Global Mixer State Schema
 

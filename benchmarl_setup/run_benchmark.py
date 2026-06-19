@@ -309,17 +309,20 @@ def _save_folder_for_device(base_save_folder: Path, resolved_device: str) -> Pat
 def _build_device_configs(args: argparse.Namespace) -> list[dict[str, str]]:
     requested_values = parse_device_list(args.devices)
     configs: list[dict[str, str]] = []
-    seen_labels: set[str] = set()
+    seen_requested: set[str] = set()
+    by_label: dict[str, list[str]] = {}
 
     for requested in requested_values:
+        if requested in seen_requested:
+            continue
+        seen_requested.add(requested)
+
         resolved, reason = resolve_device(
             requested_device=requested,
             allow_cpu_fallback=args.allow_cpu_fallback,
         )
         label = device_label(resolved)
-        if label in seen_labels:
-            continue
-        seen_labels.add(label)
+        by_label.setdefault(label, []).append(requested)
         configs.append(
             {
                 "requested": requested,
@@ -328,6 +331,18 @@ def _build_device_configs(args: argparse.Namespace) -> list[dict[str, str]]:
                 "label": label,
             }
         )
+
+    collisions = {label: reqs for label, reqs in by_label.items() if len(reqs) > 1}
+    if collisions:
+        details = "; ".join(
+            f"{label} <= {','.join(reqs)}" for label, reqs in sorted(collisions.items())
+        )
+        raise ValueError(
+            "Device benchmark matrix collapsed because multiple requested devices resolved "
+            f"to the same runtime device: {details}. "
+            "Use --no-allow-cpu-fallback to fail on unavailable CUDA, or adjust --devices."
+        )
+
     return configs
 
 
