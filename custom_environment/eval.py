@@ -580,7 +580,7 @@ def main() -> None:
     parser.add_argument(
         "--render-mode",
         choices=["ascii", "human", "rgb_array"],
-        default="ascii",
+        default="human",
         help=(
             "Render output mode: ascii is a simple terminal grid, "
             "human opens the Pygame window, rgb_array returns image frames."
