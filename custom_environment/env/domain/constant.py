@@ -23,6 +23,7 @@ class Action(Enum):
 class Reward(Enum):
     GET_PACMAN                     =  20.0  # Terminal reward to encourage successful Pacman capture
     PACMAN_TIMEOUT_WIN             = -20.0  # Penalizes the team if it fails to capture before timeout
+    PACMAN_WIN_PALLETS             = -20.0  # Penalizes the team if Pacman eats every pallet and wins
     NEWLY_SPOTTED                  =   1.0  # Bonus for regaining visual contact after an unseen period
     DISTANCE_DECREASE              =   0.3  # Encourages reducing the team's minimum distance to the known target
     DISTANCE_INCREASE              =  -0.3  # Discourages moves that increase distance from the target

@@ -1,4 +1,4 @@
-# Plan 000003 | FEATURE fernanda-INF2072 | 2026-06-15 16:38 UTC | Pallet system and reward update | Review: light
+# DONE | 2026-06-19 14:35 UTC | Plan 000003 | FEATURE fernanda-INF2072 | 2026-06-15 16:38 UTC | Pallet system and reward update | Review: light
 plan_format_version: 1
 source: research-000001
 
@@ -56,7 +56,7 @@ Add a new enum member `PACMAN_WIN_PALLETS = -20.0` to the `Reward` class in `con
 - **Interface**: `Reward.PACMAN_WIN_PALLETS` — float value `−20.0`, accessible as `Reward.PACMAN_WIN_PALLETS.value`
 - **Verify**: `python -c "from custom_environment.env.domain.constant import Reward; assert Reward.PACMAN_WIN_PALLETS.value == -20.0"` passes
 - **Tests**: N/A — enum value addition; covered by Step 3's integration test
-- [ ] Done
+- [x] Done
 
 ### Step 2: Track total pallet count on episode reset
 
@@ -76,7 +76,7 @@ Also initialize `self._total_pallets = 0` in `__init__` (before `_pellet_mask` i
 - **Interface**: `self._total_pallets` — episode-level int, read-only after `reset()`
 - **Verify**: After `env.reset()`, `env._total_pallets > 0` for a standard grid
 - **Tests**: N/A — internal state; verified by Step 3's integration test
-- [ ] Done
+- [x] Done
 
 ### Step 3: Detect pallet-win terminal condition in `step()` and apply reward
 
@@ -112,7 +112,7 @@ The existing `if any(terminations.values()) or all(truncations.values()): self.a
 - **Interface**: N/A
 - **Verify**: `py -3.11 -m pytest test/test_petting_zoo.py` passes; manually confirm episode terminates when pellet mask is all-False
 - **Tests**: Add `test/test_pallet_win.py` with a smoke test. **Do not pass a raw grid** (the back-compat `spec_from_grid` would assign out-of-bounds legacy spawns `(1,18)`/`(18,9)`). Instead construct a `custom_environment.utils.MazeSpec` directly with in-bounds spawns and a controlled `pellet_mask` holding exactly one pellet, e.g. a 5×5 walled grid with one interior EMPTY pellet cell, `pacman_spawn`/`ghost_spawns` on other interior cells, and `pellet_mask` True only at the pellet cell. Pass that spec to `PacManEnvironment(spec)`, `reset()`, manually consume the pellet via `_consume_visual_pellet`, call `step()` with one action per ghost (keyed by `ghost.id`), and assert `truncations` are `True` and `rewards` equal `Reward.PACMAN_WIN_PALLETS.value + Reward.TIMESTEP_PENALTY.value` (adjust if other per-step reward terms apply). A small `parse_layout` ASCII string with one `.` pellet is an acceptable alternative.
-- [ ] Done
+- [x] Done
 
 ### Step 4: Expose pallet progress in global state
 
@@ -136,7 +136,7 @@ In `__init__`, update `_state_dim` from `(rows * cols) + (3 * len(self.possible_
 - **Interface**: N/A
 - **Verify**: After `env.reset()`, `env.state().shape[0] == env._state_dim` with the updated value; `env.state()[-1]` equals `1.0` at episode start (all pallets present)
 - **Tests**: Add assertion to `test/test_pallet_win.py` (using the `MazeSpec`-based fixture from Step 3, not a raw grid): after consuming all pellets, `env.state()[-1] == 0.0`, and at episode start `env.state()[-1] == 1.0`.
-- [ ] Done
+- [x] Done
 
 ---
 
@@ -177,3 +177,27 @@ In `__init__`, update `_state_dim` from `(rows * cols) + (3 * len(self.possible_
 | Deferred concerns | 0 |
 | Phase 2 deep-dives | 0 (light depth) |
 | Iterations | 1 |
+
+---
+
+## Implementation Summary
+
+**Mode**: manual | **Completed**: 2026-06-19 14:35 UTC | **Steps**: 4/4 done
+
+| Step | File | Change |
+|---|---|---|
+| 1 | `custom_environment/env/domain/constant.py` | Added `Reward.PACMAN_WIN_PALLETS = -20.0` after `PACMAN_TIMEOUT_WIN`. |
+| 2 | `custom_environment/env/pacman_environment.py` | Init `self._total_pallets = 0` in `__init__`; record `int(self._pellet_mask.sum())` in `reset()` after `_reset_visual_pellets()` (post spawn-cell consumption). |
+| 3 | `custom_environment/env/pacman_environment.py` | In `step()`: compute `pallets_all_eaten`/`pacman_win_happened` (guarded by `not capture_happened` and `_total_pallets > 0`), add `PACMAN_WIN_PALLETS` to `team_reward`, and OR the outcome into `truncations`. |
+| 4 | `custom_environment/env/pacman_environment.py` | Append `pallets_remaining_norm` to `_build_global_state()`; bump `_state_dim` from `+7` to `+8`. |
+| Tests | `test/test_pallet_win.py` (new) | 4 tests: reset pallet tracking, state-dim match, trailing feature drops to 0.0, terminal+penalty (reward isolated via `_compute_team_reward` stub; `MazeSpec` from `parse_layout` to avoid the back-compat out-of-bounds-spawn trap). |
+
+**Verification** (this env lacks pytest/ruff/pyright — heavy deps present, dev tooling absent):
+- New tests run directly via `.venv` Python: **4/4 pass**.
+- Regression: PettingZoo `parallel_api_test` passes on `default` + `pinklike` mazes and the back-compat `create_grid()` raw-grid path; `state().shape[0] == _state_dim` and trailing feature `== 1.0` at episode start.
+- `py_compile` clean on all changed files.
+
+**Deferred / follow-up**:
+- Quality-gate automation (`/check validate`, `/check review`, `test-runner`) not run — ruff/pyright/pytest are not installed in `.venv`. Re-run `py -3.11 -m pytest test/` once dev dependencies are installed to confirm `test_pallet_win.py` and `test_mazes.py` (the latter `import pytest`, so it could not be exercised here).
+- R5 (pallet-win as `termination` rather than `truncation`) remains deferred per the original plan.
+- Checkpoint incompatibility: pre-merge checkpoints already require re-training (observation 3×3→5×5 from the main merge); the `+1` state-dim change adds no new incompatibility beyond that.
