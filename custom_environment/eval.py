@@ -25,6 +25,7 @@ from benchmarl_setup.algorithm_utils import (
     normalize_algorithm,
     runs_root_for_maze,
 )
+from benchmarl_setup.device_utils import resolve_device
 
 
 SYMBOLS = {
@@ -320,8 +321,14 @@ def run_episode(
     screenshot_out: Path | None,
     show_observations: bool,
     ghost_view_size: int | None,
+    requested_device: str,
+    allow_cpu_fallback: bool,
 ) -> None:
     learner = normalize_algorithm(learner)
+    resolved_device, resolution_reason = resolve_device(
+        requested_device=requested_device,
+        allow_cpu_fallback=allow_cpu_fallback,
+    )
 
     if checkpoint is not None:
         checkpoint_path = checkpoint
@@ -330,6 +337,11 @@ def run_episode(
     else:
         checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root)
     print(f"Using checkpoint: {checkpoint_path}")
+    print(
+        "Eval device selection | "
+        f"requested={requested_device} | resolved={resolved_device} | "
+        f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
+    )
 
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -342,6 +354,9 @@ def run_episode(
             "evaluation": False,
             "render": False,
             "loggers": [],
+            "sampling_device": resolved_device,
+            "train_device": resolved_device,
+            "buffer_device": resolved_device,
         },
     )
 
@@ -580,7 +595,7 @@ def main() -> None:
     parser.add_argument(
         "--render-mode",
         choices=["ascii", "human", "rgb_array"],
-        default="ascii",
+        default="human",
         help=(
             "Render output mode: ascii is a simple terminal grid, "
             "human opens the Pygame window, rgb_array returns image frames."
@@ -609,6 +624,18 @@ def main() -> None:
         action="store_true",
         help="Disable the translucent local-observation overlays in Pygame renders.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Compute device for policy/eval tensors: auto, cpu, cuda, cuda:<index>.",
+    )
+    parser.add_argument(
+        "--allow-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fall back to CPU when CUDA is requested but unavailable.",
+    )
     args = parser.parse_args()
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
@@ -632,6 +659,8 @@ def main() -> None:
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,
         ghost_view_size=args.ghost_view_size,
+        requested_device=args.device,
+        allow_cpu_fallback=args.allow_cpu_fallback,
     )
 
 

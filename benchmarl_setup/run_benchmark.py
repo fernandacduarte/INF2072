@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from algorithm_utils import (
@@ -14,6 +15,7 @@ from algorithm_utils import (
     normalize_algorithm,
     runs_root_for_maze,
 )
+from device_utils import device_label, parse_device_list, resolve_device
 from summarize_benchmark_runs import summarize_runs
 
 
@@ -89,6 +91,18 @@ def parse_args() -> argparse.Namespace:
         help="Save a checkpoint at the end of each run.",
     )
     parser.add_argument(
+        "--devices",
+        type=str,
+        default="cpu",
+        help="Comma-separated compute devices to benchmark (for example: cpu,cuda).",
+    )
+    parser.add_argument(
+        "--allow-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fall back to CPU when a CUDA device is requested but unavailable.",
+    )
+    parser.add_argument(
         "--stop-on-error",
         action="store_true",
         help="Stop immediately if one run fails.",
@@ -127,10 +141,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable writing live progress updates for liveplot.py.",
     )
+    parser.add_argument(
+        "--jobs-out",
+        type=str,
+        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_jobs.csv").resolve()),
+        help="Output CSV path for per-job wall-clock timing records.",
+    )
     return parser.parse_args()
 
 
-def _build_command(args: argparse.Namespace, algorithm: str, seed: int) -> list[str]:
+def _build_command(
+    args: argparse.Namespace,
+    algorithm: str,
+    seed: int,
+    requested_device: str,
+    save_folder: Path,
+) -> list[str]:
     command = [
         sys.executable,
         str(RUNNER_PATH),
@@ -157,13 +183,21 @@ def _build_command(args: argparse.Namespace, algorithm: str, seed: int) -> list[
         "--maze",
         str(args.maze),
         "--save-folder",
-        str(args.save_folder),
+        str(save_folder),
+        "--save-folder-includes-maze",
         "--checkpoint-interval",
         str(args.checkpoint_interval),
+        "--device",
+        requested_device,
     ]
 
     if args.ghost_view_size is not None:
         command.extend(["--ghost-view-size", str(args.ghost_view_size)])
+
+    if args.allow_cpu_fallback:
+        command.append("--allow-cpu-fallback")
+    else:
+        command.append("--no-allow-cpu-fallback")
 
     if args.checkpoint_at_end:
         command.append("--checkpoint-at-end")
@@ -205,25 +239,26 @@ def _load_two_col_csv(path: Path) -> tuple[list[float], list[float]]:
 class ProgressReporter:
     def __init__(
         self,
-        runs_root: Path,
+        runs_roots_by_label: dict[str, Path],
         algorithms: list[str],
         output_file: Path,
         interval_seconds: float,
     ) -> None:
-        self.runs_root = runs_root
+        self.runs_roots_by_label = runs_roots_by_label
         self.algorithms = algorithms
         self.output_file = output_file
         self.interval_seconds = max(0.2, interval_seconds)
-        self._last_step_by_run: dict[tuple[str, str], int] = {}
+        self._last_step_by_run: dict[tuple[str, str, str], int] = {}
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._existing_run_ids: set[tuple[str, str]] = set()
-        self._tracked_run_ids: set[tuple[str, str]] = set()
+        self._existing_run_ids: set[tuple[str, str, str]] = set()
+        self._tracked_run_ids: set[tuple[str, str, str]] = set()
 
     def start(self) -> None:
-        for algorithm in self.algorithms:
-            for run_dir in candidate_run_dirs(self.runs_root, algorithm):
-                self._existing_run_ids.add((algorithm, run_dir.name))
+        for label, runs_root in self.runs_roots_by_label.items():
+            for algorithm in self.algorithms:
+                for run_dir in candidate_run_dirs(runs_root, algorithm):
+                    self._existing_run_ids.add((label, algorithm, run_dir.name))
 
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
         # Truncate at the beginning of a new benchmark session.
@@ -244,71 +279,206 @@ class ProgressReporter:
 
     def poll_once(self) -> None:
         lines: list[str] = []
-        for algorithm in self.algorithms:
-            for run_dir in candidate_run_dirs(self.runs_root, algorithm):
-                scalars_dir = _resolve_scalars_dir(run_dir)
-                if scalars_dir is None:
-                    continue
-
-                frames_path = scalars_dir / "counters_total_frames.csv"
-                reward_path = scalars_dir / "collection_reward_reward_mean.csv"
-                _, frames = _load_two_col_csv(frames_path)
-                _, rewards = _load_two_col_csv(reward_path)
-
-                n = min(len(frames), len(rewards))
-                if n <= 0:
-                    continue
-
-                run_key = (algorithm, run_dir.name)
-
-                # Ignore pre-existing runs and only track runs created in this session.
-                if run_key not in self._tracked_run_ids:
-                    if run_key in self._existing_run_ids:
+        for label, runs_root in self.runs_roots_by_label.items():
+            for algorithm in self.algorithms:
+                for run_dir in candidate_run_dirs(runs_root, algorithm):
+                    scalars_dir = _resolve_scalars_dir(run_dir)
+                    if scalars_dir is None:
                         continue
-                    self._tracked_run_ids.add(run_key)
 
-                last_step = self._last_step_by_run.get(run_key, 0)
+                    frames_path = scalars_dir / "counters_total_frames.csv"
+                    reward_path = scalars_dir / "collection_reward_reward_mean.csv"
+                    _, frames = _load_two_col_csv(frames_path)
+                    _, rewards = _load_two_col_csv(reward_path)
 
-                for step in range(last_step + 1, n + 1):
-                    frame_value = frames[step - 1]
-                    reward_value = rewards[step - 1]
-                    lines.append(
-                        f"{algorithm},{run_dir.name},{step},{frame_value},{reward_value}\n"
-                    )
+                    n = min(len(frames), len(rewards))
+                    if n <= 0:
+                        continue
 
-                self._last_step_by_run[run_key] = n
+                    run_key = (label, algorithm, run_dir.name)
+
+                    # Ignore pre-existing runs and only track runs created in this session.
+                    if run_key not in self._tracked_run_ids:
+                        if run_key in self._existing_run_ids:
+                            continue
+                        self._tracked_run_ids.add(run_key)
+
+                    last_step = self._last_step_by_run.get(run_key, 0)
+
+                    for step in range(last_step + 1, n + 1):
+                        frame_value = frames[step - 1]
+                        reward_value = rewards[step - 1]
+                        lines.append(
+                            f"{algorithm}@{label},{run_dir.name},{step},{frame_value},{reward_value}\n"
+                        )
+
+                    self._last_step_by_run[run_key] = n
 
         if lines:
             with self.output_file.open("a", encoding="utf-8") as f:
                 f.writelines(lines)
 
 
+def _save_folder_for_device(base_save_folder: Path, resolved_device: str) -> Path:
+    return base_save_folder / device_label(resolved_device)
+
+
+def _build_device_configs(args: argparse.Namespace) -> list[dict[str, str]]:
+    requested_values = parse_device_list(args.devices)
+    configs: list[dict[str, str]] = []
+    seen_requested: set[str] = set()
+    by_label: dict[str, list[str]] = {}
+
+    for requested in requested_values:
+        if requested in seen_requested:
+            continue
+        seen_requested.add(requested)
+
+        resolved, reason = resolve_device(
+            requested_device=requested,
+            allow_cpu_fallback=args.allow_cpu_fallback,
+        )
+        label = device_label(resolved)
+        by_label.setdefault(label, []).append(requested)
+        configs.append(
+            {
+                "requested": requested,
+                "resolved": resolved,
+                "reason": reason,
+                "label": label,
+            }
+        )
+
+    collisions = {label: reqs for label, reqs in by_label.items() if len(reqs) > 1}
+    if collisions:
+        details = "; ".join(
+            f"{label} <= {','.join(reqs)}" for label, reqs in sorted(collisions.items())
+        )
+        raise ValueError(
+            "Device benchmark matrix collapsed because multiple requested devices resolved "
+            f"to the same runtime device: {details}. "
+            "Use --no-allow-cpu-fallback to fail on unavailable CUDA, or adjust --devices."
+        )
+
+    return configs
+
+
+def _discover_new_run_dir(
+    runs_root: Path,
+    algorithm: str,
+    before_names: set[str],
+    started_at: float,
+    ended_at: float,
+) -> str:
+    candidates = []
+    for run_dir in candidate_run_dirs(runs_root, algorithm):
+        if run_dir.name in before_names:
+            continue
+        mtime = run_dir.stat().st_mtime
+        if (started_at - 5.0) <= mtime <= (ended_at + 120.0):
+            candidates.append(run_dir)
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0].name
+
+
+def _write_job_records(path: Path, records: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "algorithm",
+        "seed",
+        "requested_device",
+        "resolved_device",
+        "device_label",
+        "save_folder",
+        "run_dir",
+        "returncode",
+        "duration_seconds",
+        "started_at_utc",
+        "ended_at_utc",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
+    print(f"Wrote {len(records)} benchmark job rows to: {path}")
+
+
 def _run_algorithm_serial_seeds(
     args: argparse.Namespace,
     algorithm: str,
+    device_config: dict[str, str],
+    save_folder: Path,
     seeds: list[int],
     stop_event: threading.Event,
-) -> list[tuple[str, int, int]]:
-    failures: list[tuple[str, int, int]] = []
+) -> tuple[list[tuple[str, int, int, str]], list[dict[str, str]]]:
+    failures: list[tuple[str, int, int, str]] = []
+    job_records: list[dict[str, str]] = []
     for seed in seeds:
         if args.stop_on_error and stop_event.is_set():
             break
 
-        cmd = _build_command(args, algorithm, seed)
-        print(f"[algorithm={algorithm}] seed={seed}")
+        before_names = {run_dir.name for run_dir in candidate_run_dirs(save_folder, algorithm)}
+        cmd = _build_command(
+            args=args,
+            algorithm=algorithm,
+            seed=seed,
+            requested_device=device_config["requested"],
+            save_folder=save_folder,
+        )
+        print(
+            f"[algorithm={algorithm}] seed={seed} "
+            f"requested_device={device_config['requested']} resolved_device={device_config['resolved']}"
+        )
         print(" ".join(cmd))
 
+        start_perf = time.perf_counter()
+        start_wall = time.time()
+        started_at_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         completed = subprocess.run(cmd, check=False)
+        duration_seconds = time.perf_counter() - start_perf
+        end_wall = time.time()
+        ended_at_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        run_dir_name = _discover_new_run_dir(
+            runs_root=save_folder,
+            algorithm=algorithm,
+            before_names=before_names,
+            started_at=start_wall,
+            ended_at=end_wall,
+        )
+
+        job_records.append(
+            {
+                "algorithm": algorithm,
+                "seed": str(seed),
+                "requested_device": device_config["requested"],
+                "resolved_device": device_config["resolved"],
+                "device_label": device_config["label"],
+                "save_folder": str(save_folder),
+                "run_dir": run_dir_name,
+                "returncode": str(completed.returncode),
+                "duration_seconds": f"{duration_seconds:.6f}",
+                "started_at_utc": started_at_iso,
+                "ended_at_utc": ended_at_iso,
+            }
+        )
+
         if completed.returncode != 0:
             print(
-                f"Job failed: algorithm={algorithm} seed={seed} returncode={completed.returncode}"
+                "Job failed: "
+                f"algorithm={algorithm} seed={seed} "
+                f"device={device_config['resolved']} returncode={completed.returncode}"
             )
-            failures.append((algorithm, seed, completed.returncode))
+            failures.append((algorithm, seed, completed.returncode, device_config["resolved"]))
             if args.stop_on_error:
                 stop_event.set()
                 break
 
-    return failures
+    return failures, job_records
 
 
 def main() -> None:
@@ -335,13 +505,30 @@ def main() -> None:
         if args.summary_out is not None
         else maze_runs_root / "benchmark_summary.csv"
     )
+    device_configs = _build_device_configs(args)
 
-    failures: list[tuple[str, int, int]] = []
+    base_save_folder = maze_runs_root
+    runs_roots_by_label = {
+        cfg["label"]: _save_folder_for_device(base_save_folder, cfg["resolved"])
+        for cfg in device_configs
+    }
+    for label, root in runs_roots_by_label.items():
+        root.mkdir(parents=True, exist_ok=True)
+
+    print("Benchmark device matrix:")
+    for cfg in device_configs:
+        print(
+            f"- requested={cfg['requested']} resolved={cfg['resolved']} "
+            f"label={cfg['label']} reason={cfg['reason']}"
+        )
+
+    failures: list[tuple[str, int, int, str]] = []
+    job_records: list[dict[str, str]] = []
 
     reporter: ProgressReporter | None = None
     if not args.no_liveplot_report:
         reporter = ProgressReporter(
-            runs_root=maze_runs_root,
+            runs_roots_by_label=runs_roots_by_label,
             algorithms=algorithms,
             output_file=live_progress_file,
             interval_seconds=args.report_interval_seconds,
@@ -349,43 +536,62 @@ def main() -> None:
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")
 
-    total = len(algorithms) * len(seeds)
+    total = len(algorithms) * len(seeds) * len(device_configs)
     print(
-        "Running benchmark jobs with parallel algorithms and serial seeds per algorithm. "
+        "Running benchmark jobs with parallel algorithm-device workers and serial seeds per worker. "
         f"Total jobs: {total}"
     )
 
     stop_event = threading.Event()
+    worker_specs = [
+        (algorithm, cfg, runs_roots_by_label[cfg["label"]])
+        for cfg in device_configs
+        for algorithm in algorithms
+    ]
     try:
-        with ThreadPoolExecutor(max_workers=len(algorithms)) as executor:
+        with ThreadPoolExecutor(max_workers=len(worker_specs)) as executor:
             future_map = {
                 executor.submit(
                     _run_algorithm_serial_seeds,
                     args,
                     algorithm,
+                    device_config,
+                    save_folder,
                     seeds,
                     stop_event,
-                ): algorithm
-                for algorithm in algorithms
+                ): (algorithm, device_config["resolved"])
+                for algorithm, device_config, save_folder in worker_specs
             }
 
-            for future, algorithm in future_map.items():
+            for future, worker_id in future_map.items():
                 try:
-                    failures.extend(future.result())
+                    worker_failures, worker_records = future.result()
+                    failures.extend(worker_failures)
+                    job_records.extend(worker_records)
                 except Exception as exc:
-                    print(f"Worker crashed: algorithm={algorithm} error={exc}")
-                    failures.append((algorithm, -1, 1))
+                    algorithm, resolved_device = worker_id
+                    print(
+                        "Worker crashed: "
+                        f"algorithm={algorithm} device={resolved_device} error={exc}"
+                    )
+                    failures.append((algorithm, -1, 1, resolved_device))
                     if args.stop_on_error:
                         stop_event.set()
     finally:
         if reporter is not None:
             reporter.stop()
 
+    jobs_out = Path(args.jobs_out)
+    _write_job_records(jobs_out, job_records)
+
     print()
     if failures:
         print("Benchmark finished with failures:")
-        for algorithm, seed, returncode in failures:
-            print(f"- algorithm={algorithm} seed={seed} returncode={returncode}")
+        for algorithm, seed, returncode, resolved_device in failures:
+            print(
+                f"- algorithm={algorithm} seed={seed} device={resolved_device} "
+                f"returncode={returncode}"
+            )
         raise SystemExit(1)
 
     print("Benchmark finished successfully.")
@@ -395,10 +601,12 @@ def main() -> None:
         return
 
     summarize_runs(
-        runs_root=maze_runs_root,
+        runs_root=base_save_folder,
         algorithms=algorithms,
         tail_window=args.tail_window,
         out=summary_out,
+        devices=[cfg["label"] for cfg in device_configs],
+        jobs_path=jobs_out,
     )
 
 

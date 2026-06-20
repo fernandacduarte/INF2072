@@ -2,6 +2,8 @@ import argparse
 from pathlib import Path
 import sys
 
+import torch
+
 from benchmarl.algorithms import IqlConfig, QmixConfig, VdnConfig
 from benchmarl.experiment import Experiment, ExperimentConfig
 from benchmarl.models import MlpConfig
@@ -18,6 +20,7 @@ from benchmarl_setup.algorithm_utils import (
     qmix_uses_global_state,
     runs_root_for_maze,
 )
+from benchmarl_setup.device_utils import resolve_device
 
 
 def _algorithm_config(name: str):
@@ -74,6 +77,11 @@ def parse_args() -> argparse.Namespace:
         help="Base runs directory. Training output is stored under <save-folder>/<maze>.",
     )
     parser.add_argument(
+        "--save-folder-includes-maze",
+        action="store_true",
+        help="Treat --save-folder as the final output root (do not append <maze>).",
+    )
+    parser.add_argument(
         "--checkpoint-interval",
         type=int,
         default=0,
@@ -85,18 +93,42 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Save a checkpoint at the end of training.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Compute device for sampling/training/buffer: auto, cpu, cuda, cuda:<index>.",
+    )
+    parser.add_argument(
+        "--allow-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fall back to CPU when CUDA is requested but unavailable.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     algorithm = normalize_algorithm(args.algorithm)
+    resolved_device, resolution_reason = resolve_device(
+        requested_device=args.device,
+        allow_cpu_fallback=args.allow_cpu_fallback,
+    )
 
-    save_root = runs_root_for_maze(Path(args.save_folder), args.maze)
+    if args.save_folder_includes_maze:
+        save_root = Path(args.save_folder)
+    else:
+        save_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     save_root.mkdir(parents=True, exist_ok=True)
 
     full_task_name = register_pacman_task()
     print(f"Registered task: {full_task_name}")
+    print(
+        "Device selection | "
+        f"requested={args.device} | resolved={resolved_device} | "
+        f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
+    )
 
     task_config = {
         "max_cycles": 200,
@@ -116,9 +148,9 @@ def main() -> None:
     experiment_config = ExperimentConfig.get_from_yaml()
 
     # Keep defaults deterministic and light for local experimentation.
-    experiment_config.sampling_device = "cpu"
-    experiment_config.train_device = "cpu"
-    experiment_config.buffer_device = "cpu"
+    experiment_config.sampling_device = resolved_device
+    experiment_config.train_device = resolved_device
+    experiment_config.buffer_device = resolved_device
     experiment_config.prefer_continuous_actions = False
     experiment_config.parallel_collection = False
     experiment_config.loggers = ["csv"]
