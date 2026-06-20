@@ -150,8 +150,10 @@ py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,
 This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per learner:
 
 - `ghost_win_rate`
+- `pacman_win_rate`
 - `mean_episode_return`
 - `std_episode_return`
+- `median_episode_return`
 - `mean_steps`
 
 Useful options for deterministic report evaluation (`custom_environment\eval_report.py`):
@@ -162,6 +164,8 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
 --ghost-view-size 3|5|7 --verbose
 ```
+
+Use this report to compare final policy quality across algorithms under deterministic action selection (evaluation-time), instead of relying only on training scalar curves.
 
 Useful optional rendering parameters for the random-policy demo
 (`custom_environment\render_demo.py`):
@@ -279,6 +283,39 @@ The summary CSV includes, per run:
 - `duration_seconds`
 - `frames_per_second`
 - `checkpoint_path`
+
+### Summarize Benchmark Runs (Standalone)
+
+Use:
+
+- `benchmarl_setup/summarize_benchmark_runs.py`
+
+This script can be run independently (without re-running training) to regenerate `benchmark_summary.csv` from existing run folders.
+
+Example (single device layout under `runs/<maze>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze pinklike --algorithms iql,vdn,qmixglobal --devices cpu
+```
+
+Example (device-separated layout under `runs/<maze>/<device>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze default --algorithms iql,vdn,qmixlocal,qmixglobal --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv --out benchmarl_setup\runs\default\benchmark_summary.csv
+```
+
+Useful options:
+
+```bash
+--tail-window 20 --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv
+--out benchmarl_setup\runs\pinklike\benchmark_summary_custom.csv
+```
+
+Notes:
+
+- `--devices` filters device labels included in the summary (for example `cpu,cuda`).
+- `--jobs-path` merges timing metrics (`duration_seconds`, `frames_per_second`) when a benchmark jobs ledger is available.
+- The printed aggregate is grouped by `algorithm + device`.
 
 ### CPU vs GPU Benchmark Protocol
 
