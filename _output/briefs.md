@@ -4,7 +4,7 @@ Execution log of all skill invocations.
 
 ---
 
-STARTED | 2026-06-20 16:25 UTC | research | current reward system and impact into training. ghosts not learning, stay still near each other after eval
+DONE | 2026-06-20 16:29 UTC | STARTED | 2026-06-20 16:25 UTC | research | current reward system and impact into training. ghosts not learning, stay still near each other after eval
 
 DONE | 2026-06-20 16:26 UTC | STARTED | 2026-06-20 16:22 UTC | plan | add feat to live plot: win rate and other metrics | PLAN | 000011
 
