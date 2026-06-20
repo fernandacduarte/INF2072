@@ -64,6 +64,29 @@ def _tail_mean(values: list[float], window: int) -> float:
     return sum(values[-n:]) / float(n)
 
 
+def _fmt_float(value: float) -> str:
+    if value != value:  # NaN check without extra imports.
+        return ""
+    return f"{value:.6f}"
+
+
+def _mean_from_rows(rows: list[dict[str, str]], key: str) -> float:
+    values: list[float] = []
+    for row in rows:
+        raw = row.get(key, "")
+        if raw == "":
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value == value:  # Skip NaN
+            values.append(value)
+    if not values:
+        return float("nan")
+    return sum(values) / float(len(values))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Summarize BenchMARL run metrics for algorithm comparison."
@@ -128,12 +151,21 @@ def summarize_runs(
                 continue
 
             reward_path = scalars_dir / "collection_reward_reward_mean.csv"
+            episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
             if not reward_path.exists():
                 continue
 
             rewards = _read_reward_series(reward_path)
             if not rewards:
                 continue
+
+            episode_rewards: list[float] = []
+            if episode_reward_path.exists():
+                episode_rewards = _read_reward_series(episode_reward_path)
+
+            episode_final = episode_rewards[-1] if episode_rewards else float("nan")
+            episode_tail = _tail_mean(episode_rewards, tail_window) if episode_rewards else float("nan")
+            episode_best = max(episode_rewards) if episode_rewards else float("nan")
 
             checkpoint = _latest_checkpoint(run_dir)
             seed = _extract_seed(run_dir)
@@ -146,9 +178,13 @@ def summarize_runs(
                     "run_dir": run_dir.name,
                     "run_mtime": mtime,
                     "n_points": str(len(rewards)),
+                    "n_episode_points": str(len(episode_rewards)),
                     "final_reward": f"{rewards[-1]:.6f}",
                     "tail_mean_reward": f"{_tail_mean(rewards, tail_window):.6f}",
                     "best_reward": f"{max(rewards):.6f}",
+                    "final_episode_return": _fmt_float(episode_final),
+                    "tail_mean_episode_return": _fmt_float(episode_tail),
+                    "best_episode_return": _fmt_float(episode_best),
                     "checkpoint_path": "" if checkpoint is None else str(checkpoint),
                 }
             )
@@ -162,9 +198,13 @@ def summarize_runs(
         "run_dir",
         "run_mtime",
         "n_points",
+        "n_episode_points",
         "final_reward",
         "tail_mean_reward",
         "best_reward",
+        "final_episode_return",
+        "tail_mean_episode_return",
+        "best_episode_return",
         "checkpoint_path",
     ]
     with out.open("w", newline="", encoding="utf-8") as f:
@@ -185,12 +225,20 @@ def summarize_runs(
     print("\nAggregate summary (mean over runs):")
     for algorithm in sorted(by_algorithm):
         group = by_algorithm[algorithm]
-        final_mean = sum(float(row["final_reward"]) for row in group) / float(len(group))
-        tail_mean = sum(float(row["tail_mean_reward"]) for row in group) / float(len(group))
-        best_mean = sum(float(row["best_reward"]) for row in group) / float(len(group))
+        final_mean = _mean_from_rows(group, "final_reward")
+        tail_mean = _mean_from_rows(group, "tail_mean_reward")
+        best_mean = _mean_from_rows(group, "best_reward")
+        final_episode_mean = _mean_from_rows(group, "final_episode_return")
+        tail_episode_mean = _mean_from_rows(group, "tail_mean_episode_return")
+        best_episode_mean = _mean_from_rows(group, "best_episode_return")
         print(
             f"- {algorithm}: runs={len(group)} "
-            f"final_mean={final_mean:.4f} tail_mean={tail_mean:.4f} best_mean={best_mean:.4f}"
+            f"reward_final_mean={final_mean:.4f} "
+            f"reward_tail_mean={tail_mean:.4f} "
+            f"reward_best_mean={best_mean:.4f} "
+            f"episode_final_mean={final_episode_mean:.4f} "
+            f"episode_tail_mean={tail_episode_mean:.4f} "
+            f"episode_best_mean={best_episode_mean:.4f}"
         )
 
     return rows

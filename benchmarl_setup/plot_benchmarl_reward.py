@@ -142,7 +142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window",
         type=int,
-        default=1,
+        default=30,
         help="Smoothing window applied to each run before aggregation.",
     )
     parser.add_argument(
@@ -167,6 +167,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
+
+    if args.window < 1:
+        raise ValueError("--window must be >= 1")
 
     algorithms: list[str]
     if args.algorithms:

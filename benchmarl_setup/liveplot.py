@@ -203,7 +203,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window",
         type=int,
-        default=1,
+        default=30,
         help="Smoothing window applied to aggregated curves.",
     )
     return parser.parse_args()
@@ -220,10 +220,13 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
 
+    if args.window < 1:
+        raise ValueError("--window must be >= 1")
+
     print(f"[LivePlot] Watching: {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
 
-    plotter = LiveComparisonPlotter(algorithms=algorithms, window=max(1, args.window))
+    plotter = LiveComparisonPlotter(algorithms=algorithms, window=args.window)
     try:
         while True:
             plotter.update_from_file(progress_file)
