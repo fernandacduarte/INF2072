@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-20 15:11 UTC | STARTED | 2026-06-20 15:09 UTC | research | parse readme and create a comprehensive tutorial on how to run benchmark training
+
 DONE | 2026-06-20 14:23 UTC | STARTED | 2026-06-20 03:27 UTC | implement | 000008 | PLAN | 000008
 
 DONE | 2026-06-20 03:25 UTC | STARTED | 2026-06-20 03:19 UTC | plan | implementr iql learning to win against pacman | PLAN | 000008
