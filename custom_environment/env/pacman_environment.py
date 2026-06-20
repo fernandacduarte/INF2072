@@ -26,7 +26,13 @@ from gymnasium.spaces import Box, Discrete
 from custom_environment.env.domain.agent import Agent
 
 # Action, Observation, Reward: enums for actions, cell types, and reward values
-from custom_environment.env.domain.constant import Action, Observation, Reward
+# POTENTIAL_SHAPING_ALPHA: coefficient for potential-based pursuit shaping (plan-000021)
+from custom_environment.env.domain.constant import (
+    Action,
+    Observation,
+    Reward,
+    POTENTIAL_SHAPING_ALPHA,
+)
 
 # Ghost: class for ghost agents
 from custom_environment.env.domain.ghost import Ghost
@@ -113,6 +119,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_pacman_sighting_step = None
         self.last_any_pacman_visible = False
         self.last_target_min_distance = None
+        # Previous-step potential F(s) for potential-based pursuit shaping
+        # (plan-000021); None means "no baseline yet" so the first reward
+        # computation of an episode only sets the baseline and emits no term.
+        self.last_potential = None
         self.last_team_reward_breakdown = {}
         self.newly_spotted_min_unseen_steps = 6
         self.unseen_steps = 0
@@ -153,6 +163,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_pacman_sighting_step = None
         self.last_any_pacman_visible = False
         self.last_target_min_distance = None
+        # Clear the potential baseline so shaping restarts cleanly each episode.
+        self.last_potential = None
         self.last_team_reward_breakdown = {}
         self.unseen_steps = self.newly_spotted_min_unseen_steps
 
@@ -578,15 +590,19 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         else:
             self.unseen_steps += 1
 
-        target_position = self.last_pacman_sighting_position
-        if target_position is not None:
-            min_distance = self._compute_min_distance_to_target(target_position)
-            if min_distance is not None and self.last_target_min_distance is not None:
-                if min_distance < self.last_target_min_distance:
-                    add_term("distance_decrease", float(Reward.DISTANCE_DECREASE.value))
-                elif min_distance > self.last_target_min_distance:
-                    add_term("distance_increase", float(Reward.DISTANCE_INCREASE.value))
-            self.last_target_min_distance = min_distance
+        # Potential-based pursuit shaping (plan-000021 / research-000012 R1).
+        # The potential F(s) = -ALPHA * min_bfs_distance(ghosts -> TRUE Pacman) gives
+        # a dense, correct gradient toward capture at every step -- even while Pacman
+        # is unseen by the ghosts -- replacing the former stale-sighting distance term
+        # that created a stay-still trap. Using F(s') - F(s) is policy-invariant, so it
+        # adds pursuit pressure without changing the set of optimal policies.
+        current_min_distance = self._compute_min_distance_to_target(self.pacman.current_position)
+        if current_min_distance is not None:
+            potential = -POTENTIAL_SHAPING_ALPHA * float(current_min_distance)
+            if self.last_potential is not None:
+                add_term("potential_shaping", potential - self.last_potential)
+            self.last_potential = potential
+            self.last_target_min_distance = current_min_distance
 
         for ghost in self.ghosts:
             moved = (ghost.prev_position is not None and ghost.prev_position != ghost.current_position)

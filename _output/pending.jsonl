@@ -13,3 +13,5 @@
 {"created_at": "2026-06-20T20:09:43Z", "description": "Execute plan-000019 add DEVICE variable to Makefile goals", "id": "pa-000009", "last_reminded_at": null, "snooze_until": null, "source": "plan-000019", "status": "pending", "type": "implement"}
 {"closed_at": "2026-06-20T20:11:27Z", "id": "pa-000009", "status": "done"}
 {"created_at": "2026-06-20T21:29:58Z", "description": "Execute plan-000021 reward tuning from research 12", "id": "pa-000010", "last_reminded_at": null, "snooze_until": null, "source": "plan-000021", "status": "pending", "type": "implement"}
+{"created_at": "2026-06-20T23:53:32Z", "description": "tune-late-stability: IQL policy collapses after iter ~150 at 60k frames (captures vanish, mean -> -20). Diagnose budget (R2: try 200k-500k frames) vs R3 over-bump (exploration terms outweigh potential_shaping); see plan-000021 Validation Run Findings.", "id": "pa-000011", "last_reminded_at": null, "snooze_until": null, "source": "plan-000021", "status": "pending", "type": "user-defined"}
+{"closed_at": "2026-06-20T23:53:32Z", "id": "pa-000010", "status": "done"}
