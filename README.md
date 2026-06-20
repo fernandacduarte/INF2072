@@ -37,6 +37,17 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixlocal
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal
 ```
 
+Device selection for training uses `--device` (`cpu`, `cuda`, `cuda:0`, or `auto`):
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --device cpu
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --device auto
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --device cuda:0
+```
+
+If CUDA is requested but unavailable, the runner falls back to CPU by default.
+To fail fast instead, use `--no-allow-cpu-fallback`.
+
 Algorithm variants:
 
 - `qmixlocal`: uses per-agent Q-values for mixing without centralized global state.
@@ -90,6 +101,13 @@ It now supports futebol2d-style best-run selection across multiple runs:
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
 ```
 
+Evaluation also supports explicit device selection:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --device auto
+py -3.11 custom_environment\eval.py --learner qmixglobal --device cuda --no-allow-cpu-fallback
+```
+
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
@@ -98,6 +116,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
 --init-random-frames 1000
 --ghost-view-size 3|5|7
+--device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
@@ -105,7 +124,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 ```bash
 --delay 0.25 --max-steps 200 --maze default --checkpoint-select best --show-reward-breakdown
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
---hide-observations
+--hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --ghost-view-size 3|5|7
 ```
 
@@ -191,6 +210,19 @@ Example (5 seeds, shared training config):
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
 ```
 
+Benchmark now supports device sweeps in one command:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
+```
+
+If multiple requested devices resolve to the same runtime target (for example `cpu,cuda` when CUDA is unavailable and fallback is enabled), the benchmark now fails fast with an explicit error instead of silently dropping one device leg.
+
+Runs are separated by resolved device under:
+
+- `benchmarl_setup/runs/<maze>/cpu`
+- `benchmarl_setup/runs/<maze>/cuda`
+
 Execution strategy:
 
 - Algorithms run in parallel (for example IQL and VDN at the same time).
@@ -201,12 +233,16 @@ Useful optional parameters:
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
 --ghost-view-size 3|5|7
+--devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
 
+It also writes a per-job timing ledger (`benchmark_jobs.csv`) with wall-clock duration and run mapping.
+
 The summary CSV includes, per run:
 
+- `device`
 - `algorithm`
 - `seed`
 - `run_dir`
@@ -214,7 +250,24 @@ The summary CSV includes, per run:
 - `final_reward`
 - `tail_mean_reward`
 - `best_reward`
+- `duration_seconds`
+- `frames_per_second`
 - `checkpoint_path`
+
+### CPU vs GPU Benchmark Protocol
+
+Use this protocol for fair comparisons:
+
+1. Keep configuration identical across devices (`--max-frames`, `--frames-per-batch`, `--optimizer-steps`, `--train-batch-size`, seeds).
+2. Run a shared benchmark command with both devices:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
+```
+
+3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
+4. If CUDA is unavailable, either install CUDA-enabled PyTorch/NVIDIA drivers or keep `--allow-cpu-fallback` enabled and inspect the resolved device logs.
+5. For strict CPU-vs-GPU comparisons, prefer `--no-allow-cpu-fallback` so unavailable CUDA fails immediately.
 
 ### Live Plot During Training
 
@@ -223,11 +276,19 @@ Training now reports live progress to:
 - `benchmarl_setup/runs/<maze>/live_progress.csvl`
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with mean ± std curves per algorithm.
+By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 
 Start live monitor:
 
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn,qmixlocal,qmixglobal
+```
+
+Monitor only one device label:
+
+```bash
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn --device cpu
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn --device cuda
 ```
 
 Then run benchmark normally:
@@ -240,7 +301,7 @@ Useful options:
 
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 3
-py -3.11 benchmarl_setup\liveplot.py --maze pinklike --interval 1.0 --window 3
+py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 3
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
@@ -261,6 +322,32 @@ Examples:
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixlocal,qmixglobal --show-runs
 ```
+
+### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
+
+Use:
+
+- `benchmarl_setup/plot_cpu_gpu_summary.py`
+
+This script reads `benchmark_summary.csv` and produces one image with:
+
+- GPU/CPU speedup per algorithm (`>1.0` means GPU is faster)
+- CPU vs GPU reward bars for a selected reward metric
+
+Example:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --summary-csv benchmarl_setup\runs\default\benchmark_summary.csv --reward-metric tail_mean_reward --out benchmarl_setup\runs\default\cpu_gpu_summary_comparison.png
+```
+
+Alternative reward metrics:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric final_reward
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric best_reward
+```
+
+If the script reports that no algorithm has both CPU and GPU rows, run benchmark first with `--devices cpu,cuda` and ensure CUDA is available.
 
 ### QMIX Global Mixer State Schema
 
