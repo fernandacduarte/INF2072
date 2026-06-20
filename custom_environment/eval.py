@@ -186,6 +186,41 @@ def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
     return [float(x) for x in flat.tolist()]
 
 
+def classify_outcome(raw_env, step: int, max_steps: int) -> str:
+    """Win-rate outcome label derived from the *same* predicates as
+    ``_build_final_result``, so the headless harness and the renderer can never
+    disagree about who won.
+
+    Returns one of:
+      - ``"ghosts"``  -> a ghost captured Pacman (the only ghost win),
+      - ``"pacman"``  -> the env reached its own time limit with Pacman alive,
+      - ``"timeout"`` -> the runner step cap was hit without an env-terminal.
+    """
+    if raw_env._is_capture_state():
+        return "ghosts"
+    if not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+        return "pacman"
+    return "timeout"
+
+
+def summarize_win_rate(outcomes: list[str]) -> dict:
+    """Aggregate a list of ``classify_outcome`` labels into counts + ghost win rate.
+
+    Pure and checkpoint-free so it is unit-testable. Empty input yields a 0.0
+    rate (no ZeroDivisionError).
+    """
+    episodes = len(outcomes)
+    ghosts = sum(1 for o in outcomes if o == "ghosts")
+    pacman = sum(1 for o in outcomes if o == "pacman")
+    timeout = sum(1 for o in outcomes if o == "timeout")
+    ghosts_win_rate = (ghosts / episodes) if episodes else 0.0
+    return {
+        "episodes": episodes,
+        "ghosts": ghosts,
+        "pacman": pacman,
+        "timeout": timeout,
+        "ghosts_win_rate": ghosts_win_rate,
+    }
 def _build_final_result(
     raw_env,
     *,

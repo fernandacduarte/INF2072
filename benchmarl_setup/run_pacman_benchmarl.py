@@ -125,6 +125,10 @@ def main() -> None:
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
 
+    # IQL-only convergence tuning; VDN/QMIX keep BenchMARL's stock schedule.
+    if algorithm == "iql":
+        _tune_iql_experiment(experiment_config, args.max_frames)
+
     experiment = Experiment(
         task=task,
         algorithm_config=algorithm_config,
