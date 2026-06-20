@@ -1,6 +1,7 @@
 # Research 000006 | INF2072/fernanda | 2026-06-20 01:51 UTC | Pacman safety-aware pellet-maximization policy
 
 tags: algorithm-design, pathfinding, marl-training-signal, pacman-policy, curriculum-learning
+spawned: plan-000007
 
 **User brief:** algoritm do pacman: utiliza diversos pathfinder estrela para maximizar o ganho de palets. se um caminho tiver um potencial de encontrar fantasmas, seu valor deve ser penalizado fazendo com que o pacman escolha os caminhos absolutamente seguros priorizando o maximo de ganho dentre estes. se durante um caminho o pacman encontrar um fantasma com colisao potencial, ele deve recalcular sua rota para o ponto mais seguro possivel e entao disparar novamente o algoritmo de maximizacao de pellets com maxima seguranca.
 
