@@ -36,3 +36,10 @@ class Reward(Enum):
     REPEATED_DIRECTION_REVERSAL    =  -0.02 # Penalizes repeated reversals to prevent ping-pong loops
     GHOST_OVERLAP_OR_SAME_CORRIDOR =  -0.05 # Discourages overlap and redundant corridor following
     TIMESTEP_PENALTY               =  -0.01 # Per-step cost to encourage faster captures
+
+
+# BFS-distance radius (in cells) within which a ghost is considered a collision
+# threat. When any ghost is this close to Pacman, the PacmanPolicy abandons
+# pellet-seeking and flees. Set one cell beyond the ghost view radius (2) so
+# Pacman reacts a step before ghosts can see it. See plan-000007 / research-000006.
+PACMAN_DANGER_RADIUS = 3

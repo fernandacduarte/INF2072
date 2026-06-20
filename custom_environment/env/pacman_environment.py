@@ -34,6 +34,9 @@ from custom_environment.env.domain.ghost import Ghost
 # PacMan: class for pacman agent
 from custom_environment.env.domain.pacman import PacMan
 
+# PacmanPolicy: deterministic safety-aware Pacman controller (replaces random)
+from custom_environment.env.domain.pacman_policy import PacmanPolicy
+
 # MazeSpec: map-authored layout (grid + spawns + pellet mask); spec_from_grid: back-compat wrapper
 from custom_environment.utils import MazeSpec, spec_from_grid
 
@@ -128,6 +131,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._total_pallets = 0
         self._pellet_mask = self._build_initial_pellet_mask()
 
+        # Deterministic Pacman controller; reset per episode to clear its state
+        # machine. Replaces the former Action.choose_random() policy.
+        self._pacman_policy = PacmanPolicy()
+
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
         # Copy agent list for PettingZoo's active agent tracking
@@ -137,6 +144,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # Reset shared episode memory.
         self.step_count = 0
+        # Fresh Pacman controller so its flee/cooldown state does not leak
+        # across episodes.
+        self._pacman_policy = PacmanPolicy()
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
         self.last_any_pacman_visible = False
@@ -193,8 +203,16 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         truncations = {}
         infos = {}
 
-        # Move Pacman first using internal random policy.
-        self._execute_action(self.pacman, Action.choose_random())
+        # Move Pacman first using the deterministic safety-aware policy: it
+        # seeks the nearest safe pellet and flees ghosts within danger range.
+        ghost_positions = [ghost.current_position for ghost in self.ghosts]
+        pacman_action = self._pacman_policy.choose_action(
+            self.global_view,
+            self._pellet_mask,
+            ghost_positions,
+            self.pacman.current_position,
+        )
+        self._execute_action(self.pacman, pacman_action)
 
         # Then apply each ghost action received from the learning policy.
         # Use ghost ids instead of dict iteration order to avoid agent-action mismatches.
