@@ -62,4 +62,4 @@ POTENTIAL_SHAPING_ALPHA = 0.5
 # least this much clearance; pellet collection is strictly secondary. The value
 # also caps the safety score, so once Pacman is this far from every ghost it
 # stops running and starts eating. See plan-000007 / research-000006.
-PACMAN_SAFE_DISTANCE = 5
+PACMAN_SAFE_DISTANCE = 3
