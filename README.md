@@ -147,6 +147,13 @@ For a compact post-training quality report (deterministic policy, multiple episo
 py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
 ```
 
+When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
+
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label cuda --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label auto --checkpoint-select best --episodes 30
+```
+
 This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per learner:
 
 - `ghost_win_rate`
@@ -162,6 +169,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 --episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
 --learner qmixglobal --checkpoint-select latest
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
+--device-label auto|cpu|cuda|cuda_0
 --ghost-view-size 3|5|7 --verbose
 ```
 

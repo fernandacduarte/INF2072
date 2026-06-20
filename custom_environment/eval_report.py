@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from benchmarl_setup.algorithm_utils import (
     SUPPORTED_ALGORITHMS,
     SUPPORTED_MAZES,
+    candidate_run_dirs,
     normalize_algorithm,
     runs_root_for_maze,
 )
@@ -40,6 +41,54 @@ def _select_checkpoint(
     if checkpoint_select == "best":
         return _best_checkpoint_for_learner(learner, runs_root)
     return _latest_checkpoint_for_learner(learner, runs_root)
+
+
+def _resolve_runs_root_for_learner(
+    base_runs_root: Path,
+    learner: str,
+    device_label_selector: str,
+) -> Path:
+    selector = device_label_selector.strip().lower()
+
+    if selector != "auto":
+        selected_root = base_runs_root / selector
+        if candidate_run_dirs(selected_root, learner):
+            return selected_root
+        if candidate_run_dirs(base_runs_root, learner):
+            return base_runs_root
+        raise FileNotFoundError(
+            f"No run folders found for learner '{learner}' in {selected_root} or {base_runs_root}."
+        )
+
+    if candidate_run_dirs(base_runs_root, learner):
+        return base_runs_root
+
+    candidate_roots: list[Path] = []
+    if base_runs_root.exists():
+        for child in sorted(base_runs_root.iterdir()):
+            if not child.is_dir():
+                continue
+            if candidate_run_dirs(child, learner):
+                candidate_roots.append(child)
+
+    if not candidate_roots:
+        raise FileNotFoundError(
+            f"No run folders found for learner '{learner}' in {base_runs_root} "
+            "or any direct device subfolder."
+        )
+
+    if len(candidate_roots) == 1:
+        selected = candidate_roots[0]
+        print(f"Auto-selected runs root for learner={learner}: {selected}")
+        return selected
+
+    selected = max(candidate_roots, key=lambda p: p.stat().st_mtime)
+    print(
+        "Auto-selected newest runs root for "
+        f"learner={learner}: {selected} "
+        f"(candidates: {', '.join(str(p.name) for p in candidate_roots)})"
+    )
+    return selected
 
 
 def _run_eval_episodes(
@@ -174,6 +223,15 @@ def parse_args() -> argparse.Namespace:
         help="Maze subfolder under --runs-root.",
     )
     parser.add_argument(
+        "--device-label",
+        type=str,
+        default="auto",
+        help=(
+            "Runs subfolder label inside <runs-root>/<maze> (for example: cpu, cuda). "
+            "Use 'auto' to detect runs in <maze> directly or in one-level device subfolders."
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-select",
         choices=["best", "latest"],
         default="best",
@@ -275,9 +333,14 @@ def main() -> None:
 
     report_rows: list[dict[str, float | int | str]] = []
     for learner in algorithms:
+        learner_runs_root = _resolve_runs_root_for_learner(
+            base_runs_root=maze_runs_root,
+            learner=learner,
+            device_label_selector=args.device_label,
+        )
         checkpoint_path = _select_checkpoint(
             learner=learner,
-            runs_root=maze_runs_root,
+            runs_root=learner_runs_root,
             checkpoint_select=args.checkpoint_select,
             explicit_checkpoint=args.checkpoint,
         )
