@@ -18,7 +18,7 @@ ALGOS   ?= iql,vdn,qmixlocal,qmixglobal
 SEEDS   ?= 0,1,2,3,4
 FRAMES  ?= 200000
 LEARNER ?= qmixglobal
-DEVICE  ?= cuda
+DEVICE  ?= cpu
 
 .DEFAULT_GOAL := help
 
