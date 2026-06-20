@@ -1,10 +1,10 @@
-"""Smoke tests for the deterministic safety-aware Pacman policy (plan-000007).
+"""Smoke tests for the deterministic defense-first Pacman policy (plan-000007).
 
-The policy replaces the former random Pacman with a BFS flood-fill controller
-that seeks the nearest safe pellet and flees ghosts within
-``PACMAN_DANGER_RADIUS``. These tests build small ``MazeSpec`` layouts via
-``parse_layout`` so spawns stay in bounds, then drive ``PacmanPolicy`` directly
-on the resulting grid and pellet mask.
+The policy replaces the former random Pacman with a BFS controller that scores
+moves lexicographically: safety (distance to nearest ghost, capped at
+``PACMAN_SAFE_DISTANCE``) first, pellet proximity second. Survival dominates;
+pellet collection only breaks ties between equally-safe moves. These tests drive
+``PacmanPolicy`` directly on grids built with numpy.
 """
 
 from pathlib import Path
@@ -55,9 +55,9 @@ def test_seeks_adjacent_pellet_when_safe():
 
 
 def test_flees_away_from_adjacent_ghost():
-    """When a ghost sits inside the danger radius, the policy moves Pacman so
-    that its distance to that ghost increases (it flees)."""
-    # Pacman at (1,3); ghost at (1,1) -> BFS distance 2 (<= PACMAN_DANGER_RADIUS).
+    """With a ghost nearby and no pellets, the policy maximizes distance to the
+    ghost (moves away)."""
+    # Pacman at (1,3); ghost at (1,1). Moving right increases ghost distance.
     grid = _open_grid(3, 9)
     pellet_mask = np.zeros_like(grid, dtype=bool)
 
@@ -69,6 +69,27 @@ def test_flees_away_from_adjacent_ghost():
         pacman_pos=(1, 3),
     )
     # Fleeing from a ghost on the left means moving right (away).
+    assert action == Action.MOVE_RIGHT
+
+
+def test_defense_beats_pellet_toward_ghost():
+    """Defense-first: a pellet sitting next to a ghost must NOT lure Pacman
+    toward the ghost when a safer move away exists."""
+    # Corridor: ghost at (1,1), a tempting pellet at (1,2) right beside it, and
+    # Pacman at (1,4). Moving LEFT chases the pellet but closes on the ghost;
+    # moving RIGHT is safer. Survival must win -> Pacman moves RIGHT (away),
+    # leaving the ghost-adjacent pellet uneaten.
+    grid = _open_grid(3, 9)
+    pellet_mask = np.zeros_like(grid, dtype=bool)
+    pellet_mask[1, 2] = True  # pellet glued to the ghost
+
+    policy = PacmanPolicy()
+    action = policy.choose_action(
+        global_view=grid,
+        pellet_mask=pellet_mask,
+        ghost_positions=[(1, 1)],
+        pacman_pos=(1, 4),
+    )
     assert action == Action.MOVE_RIGHT
 
 

@@ -38,8 +38,10 @@ class Reward(Enum):
     TIMESTEP_PENALTY               =  -0.01 # Per-step cost to encourage faster captures
 
 
-# BFS-distance radius (in cells) within which a ghost is considered a collision
-# threat. When any ghost is this close to Pacman, the PacmanPolicy abandons
-# pellet-seeking and flees. Set one cell beyond the ghost view radius (2) so
-# Pacman reacts a step before ghosts can see it. See plan-000007 / research-000006.
-PACMAN_DANGER_RADIUS = 3
+# Defense-first safety target for the PacmanPolicy: the BFS distance (in cells)
+# Pacman tries to keep between itself and the nearest ghost. Survival is the
+# primary objective — Pacman only pursues pellets among moves that preserve at
+# least this much clearance; pellet collection is strictly secondary. The value
+# also caps the safety score, so once Pacman is this far from every ghost it
+# stops running and starts eating. See plan-000007 / research-000006.
+PACMAN_SAFE_DISTANCE = 5
