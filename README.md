@@ -111,8 +111,8 @@ py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-se
 Evaluation also supports explicit device selection:
 
 ```bash
-py -3.11 custom_environment\eval.py --learner iql --device auto
-py -3.11 custom_environment\eval.py --learner qmixglobal --device cuda --no-allow-cpu-fallback
+py -3.11 custom_environment\eval.py --learner iql --maze pinklike --device auto
+py -3.11 custom_environment\eval.py --learner qmixglobal --maze pinklike --device cuda --no-allow-cpu-fallback --checkpoint-select best
 ```
 
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.

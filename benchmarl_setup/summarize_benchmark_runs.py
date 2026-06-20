@@ -212,10 +212,8 @@ def summarize_runs(
     for device in device_labels:
         device_root = runs_root / device
         if not device_root.exists():
-            if len(device_labels) == 1:
-                device_root = runs_root
-            else:
-                continue
+            print(f"Warning: device runs folder does not exist, skipping: {device_root}")
+            continue
 
         for algorithm in normalized_algorithms:
             run_dirs = candidate_run_dirs(device_root, algorithm)

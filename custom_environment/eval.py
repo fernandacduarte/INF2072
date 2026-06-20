@@ -25,7 +25,7 @@ from benchmarl_setup.algorithm_utils import (
     normalize_algorithm,
     runs_root_for_maze,
 )
-from benchmarl_setup.device_utils import resolve_device
+from benchmarl_setup.device_utils import device_label, resolve_device
 
 
 SYMBOLS = {
@@ -347,19 +347,21 @@ def run_episode(
         requested_device=requested_device,
         allow_cpu_fallback=allow_cpu_fallback,
     )
+    runs_root_for_device = runs_root / device_label(resolved_device)
 
     if checkpoint is not None:
         checkpoint_path = checkpoint
     elif checkpoint_select == "best":
-        checkpoint_path = _best_checkpoint_for_learner(learner, runs_root)
+        checkpoint_path = _best_checkpoint_for_learner(learner, runs_root_for_device)
     else:
-        checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root)
+        checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root_for_device)
     print(f"Using checkpoint: {checkpoint_path}")
     print(
         "Eval device selection | "
         f"requested={requested_device} | resolved={resolved_device} | "
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
+    print(f"Runs root for checkpoint discovery: {runs_root_for_device}")
 
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
