@@ -10,5 +10,6 @@ class Ghost(Agent):
     invalid_move: bool = False  # True when the latest action was blocked (wall/occupied cell)
     last_move_direction: tuple[int, int] | None = None  # Last movement vector (dx, dy)
     reverse_streak: int = 0  # Number of consecutive direction reversals for anti-loop penalty
+    stall_streak: int = 0  # Number of consecutive steps the ghost has stayed in the same cell (anti-freeze penalty)
     seen_local_cells: set[tuple[int, int]] = field(default_factory=set)  # Global coordinates revealed by local FOV so far
     last_tile_visit_step: dict[tuple[int, int], int] = field(default_factory=dict)  # Last step index when each tile was visited

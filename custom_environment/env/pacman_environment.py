@@ -103,6 +103,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Episode-level controls and shared team memory.
         self.max_steps = 200
         self.recently_unvisited_window = 10
+        # Cap for the escalating freeze penalty: a ghost frozen for more steps than
+        # this stops accruing additional per-step cost, keeping return magnitudes bounded.
+        self.max_freeze_escalation_steps = 10
         self.step_count = 0
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
@@ -554,10 +557,23 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         for ghost in self.ghosts:
             moved = (ghost.prev_position is not None and ghost.prev_position != ghost.current_position)
             if not moved:
+                ghost.stall_streak += 1
                 if ghost.invalid_move:
                     add_term("invalid_move", float(Reward.INVALID_MOVE.value))
                 else:
                     add_term("stay_still", float(Reward.STAY_STILL.value))
+                # Escalating freeze penalty: each additional consecutive step spent
+                # parked in the same cell costs more, so the "bump a wall forever"
+                # trajectory accumulates sharply negative return and the trained
+                # policy learns to leave its spawn instead of stalling. Capped so
+                # return magnitudes stay bounded relative to the capture reward.
+                freeze_factor = min(ghost.stall_streak, self.max_freeze_escalation_steps)
+                add_term(
+                    "freeze_escalation",
+                    float(Reward.FREEZE_ESCALATION.value) * float(freeze_factor),
+                )
+            else:
+                ghost.stall_streak = 0
 
             if moved:
                 add_term("valid_move", float(Reward.VALID_MOVE.value))

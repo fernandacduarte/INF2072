@@ -30,8 +30,9 @@ class Reward(Enum):
     ENTER_RECENTLY_UNVISITED_TILE  =   0.08 # Encourages spatial exploration outside recently visited paths
     REVEAL_UNSEEN_LOCAL_CELLS      =   0.05 # Encourages revealing new cells in local field of view
     VALID_MOVE                     =   0.01 # Small bonus to favor valid movement and avoid inertia
-    INVALID_MOVE                   =  -0.08 # Penalizes blocked movement attempts (wall/occupied cell)
+    INVALID_MOVE                   =  -0.12 # Penalizes blocked movement attempts (wall/occupied cell)
     STAY_STILL                     =  -0.03 # Penalizes staying still to reduce stagnation
+    FREEZE_ESCALATION              =  -0.02 # Escalating per-step penalty added for each consecutive step a ghost stays frozen in place
     REPEATED_DIRECTION_REVERSAL    =  -0.02 # Penalizes repeated reversals to prevent ping-pong loops
     GHOST_OVERLAP_OR_SAME_CORRIDOR =  -0.05 # Discourages overlap and redundant corridor following
     TIMESTEP_PENALTY               =  -0.01 # Per-step cost to encourage faster captures
