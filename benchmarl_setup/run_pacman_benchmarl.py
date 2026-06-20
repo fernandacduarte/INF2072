@@ -26,6 +26,30 @@ def _algorithm_config(name: str):
     raise ValueError(f"Unsupported algorithm: {name}")
 
 
+def _tune_iql_experiment(experiment_config, max_frames: int) -> None:
+    """Apply IQL-specific exploration/optimization tuning for convergence (plan-000008).
+
+    These fields have no CLI flags, so overriding them here cannot conflict with
+    user-supplied arguments. Each attribute is guarded with ``hasattr`` to stay
+    robust to BenchMARL field renames. Only the IQL path calls this; VDN/QMIX
+    keep BenchMARL's stock schedule.
+    """
+    overrides = {
+        # Anneal epsilon from full exploration down to a small floor over most of
+        # the budget so the team explores early then commits to a pursuit policy.
+        "exploration_eps_init": 1.0,
+        "exploration_eps_end": 0.05,
+        "exploration_anneal_frames": int(max_frames * 0.8),
+        # A slightly higher LR than the stock 5e-5 speeds convergence at this scale.
+        "lr": 1e-4,
+        # Standard discount for episodic pursuit.
+        "gamma": 0.99,
+    }
+    for name, value in overrides.items():
+        if hasattr(experiment_config, name):
+            setattr(experiment_config, name, value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BenchMARL on custom Pacman.")
     parser.add_argument(
@@ -36,7 +60,12 @@ def parse_args() -> argparse.Namespace:
         help="MARL algorithm to run.",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-frames", type=int, default=5000)
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=60000,
+        help="Total collected frames. Default raised to a convergence-scale budget (plan-000008); pass a smaller value for smoke runs.",
+    )
     parser.add_argument("--frames-per-batch", type=int, default=200)
     parser.add_argument("--optimizer-steps", type=int, default=10)
     parser.add_argument("--train-batch-size", type=int, default=128)
@@ -44,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--init-random-frames",
         type=int,
-        default=1000,
+        default=2000,
         help="Initial random interaction frames before learning starts.",
     )
     parser.add_argument("--number-ghosts", type=int, default=2)
@@ -124,6 +153,10 @@ def main() -> None:
     experiment_config.save_folder = str(save_root)
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
+
+    # IQL-only convergence tuning; VDN/QMIX keep BenchMARL's stock schedule.
+    if algorithm == "iql":
+        _tune_iql_experiment(experiment_config, args.max_frames)
 
     experiment = Experiment(
         task=task,

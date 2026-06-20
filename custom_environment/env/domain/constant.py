@@ -21,15 +21,20 @@ class Action(Enum):
         return random.choice(list(cls))
 
 class Reward(Enum):
-    GET_PACMAN                     =  20.0  # Terminal reward to encourage successful Pacman capture
+    # Retuned (plan-000008) for a sharper pursuit->capture gradient so IQL ghosts
+    # learn to win: capture dominates, the approach signal is denser/symmetric,
+    # and distractor exploration bonuses are trimmed so they no longer compete
+    # with pursuit once Pacman's location is known. Signs are unchanged, so the
+    # terminal-penalty smoke tests stay valid.
+    GET_PACMAN                     =  30.0  # Terminal capture reward; raised so capture dominates all shaping noise
     PACMAN_TIMEOUT_WIN             = -20.0  # Penalizes the team if it fails to capture before timeout
     PACMAN_WIN_PALLETS             = -20.0  # Penalizes the team if Pacman eats every pallet and wins
     NEWLY_SPOTTED                  =   1.0  # Bonus for regaining visual contact after an unseen period
-    DISTANCE_DECREASE              =   0.3  # Encourages reducing the team's minimum distance to the known target
-    DISTANCE_INCREASE              =  -0.3  # Discourages moves that increase distance from the target
-    CURRENTLY_VISIBLE              =   0.2  # Rewards keeping Pacman visible to sustain tracking
-    ENTER_RECENTLY_UNVISITED_TILE  =   0.08 # Encourages spatial exploration outside recently visited paths
-    REVEAL_UNSEEN_LOCAL_CELLS      =   0.05 # Encourages revealing new cells in local field of view
+    DISTANCE_DECREASE              =   0.5  # Denser approach gradient: reward reducing min distance to the target
+    DISTANCE_INCREASE              =  -0.5  # Symmetric penalty for moves that increase distance from the target
+    CURRENTLY_VISIBLE              =   0.3  # Stronger incentive to keep Pacman visible and sustain tracking
+    ENTER_RECENTLY_UNVISITED_TILE  =   0.05 # Trimmed exploration bonus so it does not compete with active pursuit
+    REVEAL_UNSEEN_LOCAL_CELLS      =   0.03 # Trimmed local-reveal bonus to keep pursuit the dominant signal
     VALID_MOVE                     =   0.01 # Small bonus to favor valid movement and avoid inertia
     INVALID_MOVE                   =  -0.08 # Penalizes blocked movement attempts (wall/occupied cell)
     STAY_STILL                     =  -0.03 # Penalizes staying still to reduce stagnation

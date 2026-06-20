@@ -186,6 +186,43 @@ def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
     return [float(x) for x in flat.tolist()]
 
 
+def classify_outcome(raw_env, step: int, max_steps: int) -> str:
+    """Win-rate outcome label derived from the *same* predicates as
+    ``_build_final_result``, so the headless harness and the renderer can never
+    disagree about who won.
+
+    Returns one of:
+      - ``"ghosts"``  -> a ghost captured Pacman (the only ghost win),
+      - ``"pacman"``  -> the env reached its own time limit with Pacman alive,
+      - ``"timeout"`` -> the runner step cap was hit without an env-terminal.
+    """
+    if raw_env._is_capture_state():
+        return "ghosts"
+    if not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+        return "pacman"
+    return "timeout"
+
+
+def summarize_win_rate(outcomes: list[str]) -> dict:
+    """Aggregate a list of ``classify_outcome`` labels into counts + ghost win rate.
+
+    Pure and checkpoint-free so it is unit-testable. Empty input yields a 0.0
+    rate (no ZeroDivisionError).
+    """
+    episodes = len(outcomes)
+    ghosts = sum(1 for o in outcomes if o == "ghosts")
+    pacman = sum(1 for o in outcomes if o == "pacman")
+    timeout = sum(1 for o in outcomes if o == "timeout")
+    ghosts_win_rate = (ghosts / episodes) if episodes else 0.0
+    return {
+        "episodes": episodes,
+        "ghosts": ghosts,
+        "pacman": pacman,
+        "timeout": timeout,
+        "ghosts_win_rate": ghosts_win_rate,
+    }
+
+
 def _build_final_result(
     raw_env,
     *,
@@ -194,10 +231,11 @@ def _build_final_result(
     total_reward: float,
     elapsed_seconds: float,
 ) -> dict:
-    if raw_env._is_capture_state():
+    outcome = classify_outcome(raw_env, step, run_max_steps)
+    if outcome == "ghosts":
         title = "Ghosts win"
         reason = "Pacman was captured."
-    elif not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+    elif outcome == "pacman":
         title = "Pacman wins"
         reason = "Pacman survived until the environment time limit."
     elif step >= run_max_steps:
@@ -215,6 +253,119 @@ def _build_final_result(
         "total_reward": total_reward,
         "elapsed_seconds": elapsed_seconds,
     }
+
+
+def _resolve_checkpoint(
+    learner: str,
+    checkpoint: Path | None,
+    checkpoint_select: str,
+    runs_root: Path,
+) -> Path:
+    """Resolve a checkpoint path the same way ``run_episode`` does."""
+    if checkpoint is not None:
+        return checkpoint
+    if checkpoint_select == "best":
+        return _best_checkpoint_for_learner(learner, runs_root)
+    return _latest_checkpoint_for_learner(learner, runs_root)
+
+
+def run_win_rate(
+    learner: str,
+    episodes: int,
+    max_steps: int,
+    checkpoint: Path | None,
+    runs_root: Path,
+    checkpoint_select: str,
+    eval_epsilon: float,
+    seed: int | None,
+    win_rate_out: Path | None,
+) -> dict:
+    """Headless multi-episode evaluation that reports the ghost win rate.
+
+    The environment is deterministic (deterministic Pacman policy + fixed
+    spawns + greedy ghosts), so episodes are varied with seeded epsilon-greedy
+    ghost-action sampling (``eval_epsilon``). With ``eval_epsilon == 0`` every
+    episode is identical and the rate collapses to a single 0/1 outcome.
+    """
+    learner = normalize_algorithm(learner)
+    checkpoint_path = _resolve_checkpoint(learner, checkpoint, checkpoint_select, runs_root)
+    print(f"Using checkpoint: {checkpoint_path}")
+
+    experiment = Experiment.reload_from_file(
+        str(checkpoint_path),
+        experiment_patch={"evaluation": False, "render": False, "loggers": []},
+    )
+    env = experiment.test_env
+    raw_env = _unwrap_pacman_env(env)
+    raw_env.render_mode = None
+
+    base_seed = 0 if seed is None else int(seed)
+    num_actions = len(ACTION_NAME)
+    outcomes: list[str] = []
+
+    try:
+        with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+            for episode_index in range(episodes):
+                torch.manual_seed(base_seed + episode_index)
+                tensordict = env.reset()
+                done = False
+                step = 0
+                while not done and step < max_steps:
+                    step += 1
+                    tensordict = experiment.policy(tensordict)
+
+                    # Seeded epsilon-greedy: per ghost, with prob eval_epsilon,
+                    # overwrite the greedy action with a uniform random one so
+                    # episodes vary in this otherwise-deterministic environment.
+                    if eval_epsilon > 0:
+                        action_tensor = tensordict.get(("ghost", "action"))
+                        flat = action_tensor.reshape(-1)
+                        for ghost_index in range(flat.shape[0]):
+                            if float(torch.rand(())) < eval_epsilon:
+                                flat[ghost_index] = torch.randint(0, num_actions, ())
+                        tensordict.set(("ghost", "action"), flat.reshape(action_tensor.shape))
+
+                    transition = env.step(tensordict)
+                    next_td = transition.get("next")
+                    done = bool(next_td.get("done").item())
+
+                    tensordict = step_mdp(
+                        transition,
+                        reward_keys=env.reward_keys,
+                        action_keys=env.action_keys,
+                        done_keys=env.done_keys,
+                    )
+
+                outcomes.append(classify_outcome(raw_env, step, max_steps))
+    finally:
+        raw_env.close()
+        experiment.close()
+
+    summary = summarize_win_rate(outcomes)
+    print(
+        f"Win-rate over {summary['episodes']} episodes | learner={learner} "
+        f"| ghosts win {summary['ghosts']} ({summary['ghosts_win_rate'] * 100:.1f}%) "
+        f"| pacman win {summary['pacman']} | timeout {summary['timeout']}"
+    )
+
+    if win_rate_out is not None:
+        win_rate_out = Path(win_rate_out)
+        win_rate_out.parent.mkdir(parents=True, exist_ok=True)
+        with win_rate_out.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["episodes", "ghosts_win", "pacman_win", "timeout", "ghosts_win_rate"])
+            writer.writerow(
+                [
+                    summary["episodes"],
+                    summary["ghosts"],
+                    summary["pacman"],
+                    summary["timeout"],
+                    f"{summary['ghosts_win_rate']:.6f}",
+                ]
+            )
+        print(f"Wrote win-rate CSV: {win_rate_out}")
+
+    return summary
 
 
 def run_episode(
@@ -444,7 +595,29 @@ def main() -> None:
         "--seed",
         type=int,
         default=None,
-        help="Deprecated placeholder (kept for CLI compatibility).",
+        help="Base seed for win-rate episodes (episode e uses seed+e). Default None -> base seed 0 for reproducibility.",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=1,
+        help="Number of episodes to evaluate. >1 (or --win-rate-out) switches to the headless win-rate harness.",
+    )
+    parser.add_argument(
+        "--eval-epsilon",
+        type=float,
+        default=0.05,
+        help=(
+            "Per-ghost epsilon-greedy probability used only by the win-rate harness to vary "
+            "the otherwise-deterministic environment across episodes. 0 makes every episode "
+            "identical. Ignored in single-episode render mode."
+        ),
+    )
+    parser.add_argument(
+        "--win-rate-out",
+        type=Path,
+        default=None,
+        help="Optional CSV path for the win-rate summary. Providing it also selects the win-rate harness.",
     )
     parser.add_argument(
         "--runs-root",
@@ -507,6 +680,22 @@ def main() -> None:
         raise ValueError(
             f"Unsupported learner: {args.learner}. Allowed: {list(SUPPORTED_ALGORITHMS)}"
         )
+
+    # Headless win-rate harness when more than one episode is requested or a CSV
+    # output is asked for; otherwise the single-episode render path runs.
+    if args.episodes > 1 or args.win_rate_out is not None:
+        run_win_rate(
+            learner=normalized_learner,
+            episodes=args.episodes,
+            max_steps=args.max_steps,
+            checkpoint=args.checkpoint,
+            runs_root=args.runs_root,
+            checkpoint_select=args.checkpoint_select,
+            eval_epsilon=args.eval_epsilon,
+            seed=args.seed,
+            win_rate_out=args.win_rate_out,
+        )
+        return
 
     run_episode(
         learner=normalized_learner,
