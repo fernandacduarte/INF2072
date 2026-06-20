@@ -58,8 +58,7 @@ Algorithm variants:
 1200` for quick smoke runs). For `--algorithm iql` the runner also applies
 convergence-oriented hyperparameters with no CLI flag of their own (a longer
 epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
-VDN/QMIX keep BenchMARL's stock schedule. After training, confirm the ghosts win
-with the [Win-Rate Evaluation](#win-rate-evaluation-does-iql-actually-win) harness.
+VDN/QMIX keep BenchMARL's stock schedule.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
@@ -132,8 +131,6 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 ```bash
 --delay 0.25 --max-steps 200 --maze default --checkpoint-select best --show-reward-breakdown
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
---hide-observations
---episodes 50 --eval-epsilon 0.05 --win-rate-out path\to\iql_win_rate.csv --seed 0
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --ghost-view-size 3|5|7
 ```
