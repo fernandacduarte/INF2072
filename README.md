@@ -141,6 +141,40 @@ You can also pass an explicit checkpoint to eval:
 --checkpoint path\to\checkpoint_5000.pt
 ```
 
+For a compact post-training quality report (deterministic policy, multiple episodes), use:
+
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
+```
+
+When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
+
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label cuda --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label auto --checkpoint-select best --episodes 30
+```
+
+This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per learner:
+
+- `ghost_win_rate`
+- `pacman_win_rate`
+- `mean_episode_return`
+- `std_episode_return`
+- `median_episode_return`
+- `mean_steps`
+
+Useful options for deterministic report evaluation (`custom_environment\eval_report.py`):
+
+```bash
+--episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
+--learner qmixglobal --checkpoint-select latest
+--learner qmixglobal --checkpoint path\to\checkpoint.pt
+--device-label auto|cpu|cuda|cuda_0
+--ghost-view-size 3|5|7 --verbose
+```
+
+Use this report to compare final policy quality across algorithms under deterministic action selection (evaluation-time), instead of relying only on training scalar curves.
+
 Useful optional rendering parameters for the random-policy demo
 (`custom_environment\render_demo.py`):
 
@@ -246,13 +280,50 @@ The summary CSV includes, per run:
 - `algorithm`
 - `seed`
 - `run_dir`
-- `n_points`
-- `final_reward`
-- `tail_mean_reward`
-- `best_reward`
+- `n_points` (points in `collection_reward_reward_mean.csv`, immediate reward metric)
+- `n_episode_points` (points in `collection_reward_episode_reward_mean.csv`, episode-return metric)
+- `final_reward` (immediate reward)
+- `tail_mean_reward` (immediate reward)
+- `best_reward` (immediate reward)
+- `final_episode_return` (episode return)
+- `tail_mean_episode_return` (episode return)
+- `best_episode_return` (episode return)
 - `duration_seconds`
 - `frames_per_second`
 - `checkpoint_path`
+
+### Summarize Benchmark Runs (Standalone)
+
+Use:
+
+- `benchmarl_setup/summarize_benchmark_runs.py`
+
+This script can be run independently (without re-running training) to regenerate `benchmark_summary.csv` from existing run folders.
+
+Example (single device layout under `runs/<maze>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze pinklike --algorithms iql,vdn,qmixglobal --devices cpu
+```
+
+Example (device-separated layout under `runs/<maze>/<device>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze default --algorithms iql,vdn,qmixlocal,qmixglobal --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv --out benchmarl_setup\runs\default\benchmark_summary.csv
+```
+
+Useful options:
+
+```bash
+--tail-window 20 --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv
+--out benchmarl_setup\runs\pinklike\benchmark_summary_custom.csv
+```
+
+Notes:
+
+- `--devices` filters device labels included in the summary (for example `cpu,cuda`).
+- `--jobs-path` merges timing metrics (`duration_seconds`, `frames_per_second`) when a benchmark jobs ledger is available.
+- The printed aggregate is grouped by `algorithm + device`.
 
 ### CPU vs GPU Benchmark Protocol
 
@@ -300,8 +371,8 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglo
 Useful options:
 
 ```bash
-py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 3
-py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 3
+py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
+py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
@@ -377,7 +448,7 @@ Policy observations remain local (5x5 by default) for all algorithms; only `qmix
 Optional parameters:
 
 ```bash
---maze pinklike --window 5 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
+--maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
 If no `--out` is provided, the default output is:

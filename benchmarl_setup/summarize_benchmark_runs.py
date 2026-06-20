@@ -49,7 +49,6 @@ def _read_last_frame_count(path: Path) -> float | None:
                 continue
     return last_value
 
-
 def _latest_checkpoint(run_dir: Path) -> Path | None:
     checkpoints_dir = run_dir / "checkpoints"
     if not checkpoints_dir.exists():
@@ -80,12 +79,33 @@ def _tail_mean(values: list[float], window: int) -> float:
     return sum(values[-n:]) / float(n)
 
 
+def _fmt_float(value: float) -> str:
+    if value != value:  # NaN check without extra imports.
+        return ""
+    return f"{value:.6f}"
+
+
+def _mean_from_rows(rows: list[dict[str, str]], key: str) -> float:
+    values: list[float] = []
+    for row in rows:
+        raw = row.get(key, "")
+        if raw == "":
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value == value:  # Skip NaN
+            values.append(value)
+    if not values:
+        return float("nan")
+    return sum(values) / float(len(values))
+
 def _parse_device_labels(raw: str) -> list[str]:
     labels = [item.strip() for item in raw.split(",") if item.strip()]
     if not labels:
         raise ValueError("At least one device label must be provided.")
     return labels
-
 
 def _load_job_metrics(path: Path | None) -> dict[tuple[str, str, str, str], dict[str, float]]:
     if path is None or not path.exists():
@@ -112,7 +132,6 @@ def _load_job_metrics(path: Path | None) -> dict[tuple[str, str, str, str], dict
                 "duration_seconds": duration_seconds,
             }
     return metrics
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -189,7 +208,7 @@ def summarize_runs(
 
     job_metrics = _load_job_metrics(jobs_path)
 
-    rows = []
+    rows: list[dict[str, str]] = []
     for device in device_labels:
         device_root = runs_root / device
         if not device_root.exists():
@@ -213,6 +232,15 @@ def summarize_runs(
                 if not rewards:
                     continue
 
+                episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
+                episode_rewards: list[float] = []
+                if episode_reward_path.exists():
+                    episode_rewards = _read_reward_series(episode_reward_path)
+
+                episode_final = episode_rewards[-1] if episode_rewards else float("nan")
+                episode_tail = _tail_mean(episode_rewards, tail_window) if episode_rewards else float("nan")
+                episode_best = max(episode_rewards) if episode_rewards else float("nan")
+
                 frames_value = _read_last_frame_count(scalars_dir / "counters_total_frames.csv")
 
                 checkpoint = _latest_checkpoint(run_dir)
@@ -234,11 +262,15 @@ def summarize_runs(
                         "run_dir": run_dir.name,
                         "run_mtime": mtime,
                         "n_points": str(len(rewards)),
+                        "n_episode_points": str(len(episode_rewards)),
                         "final_reward": f"{rewards[-1]:.6f}",
                         "tail_mean_reward": f"{_tail_mean(rewards, tail_window):.6f}",
                         "best_reward": f"{max(rewards):.6f}",
-                        "duration_seconds": "" if duration_seconds != duration_seconds else f"{duration_seconds:.6f}",
-                        "frames_per_second": "" if fps_value != fps_value else f"{fps_value:.6f}",
+                        "final_episode_return": _fmt_float(episode_final),
+                        "tail_mean_episode_return": _fmt_float(episode_tail),
+                        "best_episode_return": _fmt_float(episode_best),
+                        "duration_seconds": _fmt_float(duration_seconds),
+                        "frames_per_second": _fmt_float(fps_value),
                         "checkpoint_path": "" if checkpoint is None else str(checkpoint),
                     }
                 )
@@ -253,9 +285,13 @@ def summarize_runs(
         "run_dir",
         "run_mtime",
         "n_points",
+        "n_episode_points",
         "final_reward",
         "tail_mean_reward",
         "best_reward",
+        "final_episode_return",
+        "tail_mean_episode_return",
+        "best_episode_return",
         "duration_seconds",
         "frames_per_second",
         "checkpoint_path",
@@ -279,16 +315,20 @@ def summarize_runs(
     print("\nAggregate summary (mean over runs by algorithm+device):")
     for algorithm, device in sorted(by_algorithm_device):
         group = by_algorithm_device[(algorithm, device)]
-        final_mean = sum(float(row["final_reward"]) for row in group) / float(len(group))
-        tail_mean = sum(float(row["tail_mean_reward"]) for row in group) / float(len(group))
-        best_mean = sum(float(row["best_reward"]) for row in group) / float(len(group))
-        durations = [float(row["duration_seconds"]) for row in group if row["duration_seconds"]]
-        fps_values = [float(row["frames_per_second"]) for row in group if row["frames_per_second"]]
-        duration_mean = float("nan") if not durations else sum(durations) / float(len(durations))
-        fps_mean = float("nan") if not fps_values else sum(fps_values) / float(len(fps_values))
+        final_mean = _mean_from_rows(group, "final_reward")
+        tail_mean = _mean_from_rows(group, "tail_mean_reward")
+        best_mean = _mean_from_rows(group, "best_reward")
+        final_episode_mean = _mean_from_rows(group, "final_episode_return")
+        tail_episode_mean = _mean_from_rows(group, "tail_mean_episode_return")
+        best_episode_mean = _mean_from_rows(group, "best_episode_return")
+        duration_mean = _mean_from_rows(group, "duration_seconds")
+        fps_mean = _mean_from_rows(group, "frames_per_second")
         print(
             f"- {algorithm}@{device}: runs={len(group)} "
             f"final_mean={final_mean:.4f} tail_mean={tail_mean:.4f} best_mean={best_mean:.4f} "
+            f"episode_final_mean={final_episode_mean:.4f} "
+            f"episode_tail_mean={tail_episode_mean:.4f} "
+            f"episode_best_mean={best_episode_mean:.4f} "
             f"duration_mean={duration_mean:.2f}s fps_mean={fps_mean:.2f}"
         )
 

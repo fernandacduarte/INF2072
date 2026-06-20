@@ -256,7 +256,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window",
         type=int,
-        default=1,
+        default=30,
         help="Smoothing window applied to aggregated curves.",
     )
     parser.add_argument(
@@ -291,6 +291,9 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
     device_selector = _normalize_device_selector(args.device)
+
+    if args.window < 1:
+        raise ValueError("--window must be >= 1")
 
     print(f"[LivePlot] Watching: {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
