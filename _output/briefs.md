@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-20 20:09 UTC | STARTED | 2026-06-20 20:07 UTC | plan | add --device cuda into Makefile goals | PLAN | 000019
+
+---
+
 DONE | 2026-06-20 19:48 UTC | STARTED | 2026-06-20 19:41 UTC | research | pacman policy after --maze feature
 
 ---
