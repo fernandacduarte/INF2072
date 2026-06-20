@@ -1,6 +1,7 @@
 from pathlib import Path
 
 SUPPORTED_ALGORITHMS = ("iql", "vdn", "qmixlocal", "qmixglobal")
+SUPPORTED_MAZES = ("default", "pinklike")
 
 
 def normalize_algorithm(name: str) -> str:
@@ -69,3 +70,7 @@ def candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
     prefix = f"{run_prefix_for_algorithm(normalized)}_pacman_"
     dirs = [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
     return [p for p in dirs if run_matches_algorithm(normalized, p)]
+
+
+def runs_root_for_maze(base_runs_root: Path, maze: str) -> Path:
+    return base_runs_root / maze

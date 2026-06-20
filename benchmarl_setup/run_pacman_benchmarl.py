@@ -2,6 +2,8 @@ import argparse
 from pathlib import Path
 import sys
 
+import torch
+
 from benchmarl.algorithms import IqlConfig, QmixConfig, VdnConfig
 from benchmarl.experiment import Experiment, ExperimentConfig
 from benchmarl.models import MlpConfig
@@ -12,7 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarl_setup.pacman_benchmarl_task import PacmanTask, register_pacman_task
-from benchmarl_setup.algorithm_utils import normalize_algorithm, qmix_uses_global_state
+from benchmarl_setup.algorithm_utils import (
+    SUPPORTED_MAZES,
+    normalize_algorithm,
+    qmix_uses_global_state,
+    runs_root_for_maze,
+)
+from benchmarl_setup.device_utils import resolve_device
 
 
 def _algorithm_config(name: str):
@@ -79,16 +87,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
+        "--ghost-view-size",
+        type=int,
+        default=None,
+        help="Odd local observation width/height for ghosts (for example 3 or 5).",
+    )
+    parser.add_argument(
         "--maze",
         type=str,
         default="default",
-        choices=["default", "pinklike"],
+        choices=SUPPORTED_MAZES,
         help="Maze layout to train on.",
     )
     parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
+        help="Base runs directory. Training output is stored under <save-folder>/<maze>.",
+    )
+    parser.add_argument(
+        "--save-folder-includes-maze",
+        action="store_true",
+        help="Treat --save-folder as the final output root (do not append <maze>).",
     )
     parser.add_argument(
         "--checkpoint-interval",
@@ -102,28 +122,54 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Save a checkpoint at the end of training.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Compute device for sampling/training/buffer: auto, cpu, cuda, cuda:<index>.",
+    )
+    parser.add_argument(
+        "--allow-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fall back to CPU when CUDA is requested but unavailable.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     algorithm = normalize_algorithm(args.algorithm)
+    resolved_device, resolution_reason = resolve_device(
+        requested_device=args.device,
+        allow_cpu_fallback=args.allow_cpu_fallback,
+    )
 
-    save_root = Path(args.save_folder)
+    if args.save_folder_includes_maze:
+        save_root = Path(args.save_folder)
+    else:
+        save_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     save_root.mkdir(parents=True, exist_ok=True)
 
     full_task_name = register_pacman_task()
     print(f"Registered task: {full_task_name}")
-
-    task = PacmanTask.PACMAN.get_task(
-        config={
-            "max_cycles": 200,
-            "number_ghosts": args.number_ghosts,
-            "grid_size": args.grid_size,
-            "map_name": args.maze,
-            "include_global_state": qmix_uses_global_state(algorithm),
-        }
+    print(
+        "Device selection | "
+        f"requested={args.device} | resolved={resolved_device} | "
+        f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
+
+    task_config = {
+        "max_cycles": 200,
+        "number_ghosts": args.number_ghosts,
+        "grid_size": args.grid_size,
+        "map_name": args.maze,
+        "include_global_state": qmix_uses_global_state(algorithm),
+    }
+    if args.ghost_view_size is not None:
+        task_config["ghost_view_size"] = int(args.ghost_view_size)
+
+    task = PacmanTask.PACMAN.get_task(config=task_config)
 
     algorithm_config = _algorithm_config(algorithm)
     model_config = MlpConfig.get_from_yaml()
@@ -131,9 +177,9 @@ def main() -> None:
     experiment_config = ExperimentConfig.get_from_yaml()
 
     # Keep defaults deterministic and light for local experimentation.
-    experiment_config.sampling_device = "cpu"
-    experiment_config.train_device = "cpu"
-    experiment_config.buffer_device = "cpu"
+    experiment_config.sampling_device = resolved_device
+    experiment_config.train_device = resolved_device
+    experiment_config.buffer_device = resolved_device
     experiment_config.prefer_continuous_actions = False
     experiment_config.parallel_collection = False
     experiment_config.loggers = ["csv"]

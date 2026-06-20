@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-20 19:10 UTC | STARTED | 2026-06-20 19:06 UTC | plan | will not use this win-rate eval strategy. remove it from code | PLAN | 000014
+
+---
+
 DONE | 2026-06-20 16:29 UTC | STARTED | 2026-06-20 16:25 UTC | research | current reward system and impact into training. ghosts not learning, stay still near each other after eval
 
 DONE | 2026-06-20 16:26 UTC | STARTED | 2026-06-20 16:22 UTC | plan | add feat to live plot: win rate and other metrics | PLAN | 000011

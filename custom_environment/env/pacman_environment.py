@@ -68,6 +68,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         tile_size: int = 28,  # Tile size in pixels for Pygame rendering
         fps: int = 12,  # Target frames per second for human rendering
         show_observations: bool = True,  # Whether to tint each ghost's local view in visual renders
+        ghost_view_size: int | None = None,  # Optional override for local observation size
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -76,12 +77,13 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             )
 
         # Ghost local field-of-view geometry (see GHOST_VIEW_SIZE at module top).
-        if GHOST_VIEW_SIZE < 1 or GHOST_VIEW_SIZE % 2 == 0:
+        view_size = GHOST_VIEW_SIZE if ghost_view_size is None else int(ghost_view_size)
+        if view_size < 1 or view_size % 2 == 0:
             raise ValueError(
-                f"GHOST_VIEW_SIZE must be a positive odd integer, got {GHOST_VIEW_SIZE}"
+                f"ghost_view_size must be a positive odd integer, got {view_size}"
             )
-        self.view_size = GHOST_VIEW_SIZE
-        self.view_radius = GHOST_VIEW_SIZE // 2
+        self.view_size = view_size
+        self.view_radius = view_size // 2
 
         # Accept a MazeSpec, or wrap a raw grid array with legacy spawns (back-compat).
         spec = global_view if isinstance(global_view, MazeSpec) else spec_from_grid(global_view)

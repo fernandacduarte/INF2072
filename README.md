@@ -37,6 +37,17 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixlocal
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal
 ```
 
+Device selection for training uses `--device` (`cpu`, `cuda`, `cuda:0`, or `auto`):
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --device cpu
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --device auto
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --device cuda:0
+```
+
+If CUDA is requested but unavailable, the runner falls back to CPU by default.
+To fail fast instead, use `--no-allow-cpu-fallback`.
+
 Algorithm variants:
 
 - `qmixlocal`: uses per-agent Q-values for mixing without centralized global state.
@@ -88,14 +99,21 @@ py -3.11 custom_environment\render_demo.py --render-mode human --fps 12 --max-st
 For headless smoke tests or screenshots, use `rgb_array`:
 
 ```bash
-py -3.11 custom_environment\render_demo.py --render-mode rgb_array --max-steps 3 --screenshot-out benchmarl_setup\runs\pacman_render.png
+py -3.11 custom_environment\render_demo.py --render-mode rgb_array --max-steps 3 --screenshot-out benchmarl_setup\runs\default\pacman_render.png
 ```
 
-`custom_environment/eval.py` loads the latest checkpoint for the selected learner from `benchmarl_setup/runs`.
+`custom_environment/eval.py` loads the latest checkpoint for the selected learner from `benchmarl_setup/runs/<maze>`.
 It now supports futebol2d-style best-run selection across multiple runs:
 
 ```bash
-py -3.11 custom_environment\eval.py --learner iql --checkpoint-select best
+py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
+```
+
+Evaluation also supports explicit device selection:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --device auto
+py -3.11 custom_environment\eval.py --learner qmixglobal --device cuda --no-allow-cpu-fallback
 ```
 
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.
@@ -105,15 +123,26 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 ```bash
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
 --init-random-frames 1000
+--ghost-view-size 3|5|7
+--device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
 
 ```bash
---delay 0.25 --max-steps 200 --checkpoint-select best --show-reward-breakdown
+--delay 0.25 --max-steps 200 --maze default --checkpoint-select best --show-reward-breakdown
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations
 --episodes 50 --eval-epsilon 0.05 --win-rate-out path\to\iql_win_rate.csv --seed 0
+--hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--ghost-view-size 3|5|7
+```
+
+If a legacy checkpoint was trained with a different local view size and auto-detection fails,
+set it explicitly in eval:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --maze default --ghost-view-size 3
 ```
 
 You can also pass an explicit checkpoint to eval:
@@ -122,49 +151,39 @@ You can also pass an explicit checkpoint to eval:
 --checkpoint path\to\checkpoint_5000.pt
 ```
 
-### Win-Rate Evaluation (Does IQL Actually Win?)
-
-To quantify how often the trained ghosts win — rather than watching a single
-episode — run the headless win-rate harness by asking for more than one episode
-(or by providing `--win-rate-out`):
+For a compact post-training quality report (deterministic policy, multiple episodes), use:
 
 ```bash
-py -3.11 custom_environment\eval.py --learner iql --episodes 50 --eval-epsilon 0.05 --win-rate-out benchmarl_setup\runs\iql_win_rate.csv
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
 ```
 
-It prints a summary line and (optionally) writes a one-row CSV
-(`episodes,ghosts_win,pacman_win,timeout,ghosts_win_rate`):
+When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
 
-```text
-Win-rate over 50 episodes | learner=iql | ghosts win 33 (66.0%) | pacman win 17 | timeout 0
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label cuda --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label auto --checkpoint-select best --episodes 30
 ```
 
-A ghost win means a ghost captured Pacman; `pacman win` means Pacman survived to
-the environment time limit; `timeout` means the runner step cap was hit without a
-terminal.
+This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per learner:
 
-**Measured IQL baseline (plan-000008).** With the tuned recipe and retuned
-rewards, IQL was trained at both 60k and 300k frames (seed 0). Both runs measure
-a **0% ghost win rate** over 50 episodes, and the per-step training reward curve
-stays flat (~`-0.20`) with no upward trend. This is a coordination ceiling, not a
-budget shortfall: IQL learns each ghost's Q-values **independently**, so two
-ghosts with only a 5×5 local view never discover the joint pincer needed to
-corner a Pacman that actively flees to keep distance `PACMAN_SAFE_DISTANCE = 5`.
-This is the expected role of IQL as the **independent baseline** — the value
-factorization algorithms (`vdn`, `qmixlocal`, `qmixglobal`) are the coordination
-path and are the ones expected to win. The win-rate harness is the tool that
-makes this contrast measurable.
+- `ghost_win_rate`
+- `pacman_win_rate`
+- `mean_episode_return`
+- `std_episode_return`
+- `median_episode_return`
+- `mean_steps`
 
-**Why `--eval-epsilon` matters.** The environment is fully deterministic (a
-deterministic defense-first Pacman policy, fixed map-authored spawns, and a
-greedy ghost policy), so every greedy episode is identical — a naive win rate
-would be a trivial 0% or 100%. `--eval-epsilon` injects per-ghost epsilon-greedy
-randomness (default `0.05`) with a per-episode seed so episodes vary and the rate
-reflects policy robustness near-greedy. Use `--eval-epsilon 0` to collapse to the
-single deterministic outcome. The base seed comes from `--seed` (episode `e` uses
-`seed + e`; default base seed `0`). Win-rate mode is headless and ignores
-`--render-mode`. In single-episode render mode (`--episodes 1` with no
-`--win-rate-out`), `--eval-epsilon` is ignored.
+Useful options for deterministic report evaluation (`custom_environment\eval_report.py`):
+
+```bash
+--episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
+--learner qmixglobal --checkpoint-select latest
+--learner qmixglobal --checkpoint path\to\checkpoint.pt
+--device-label auto|cpu|cuda|cuda_0
+--ghost-view-size 3|5|7 --verbose
+```
+
+Use this report to compare final policy quality across algorithms under deterministic action selection (evaluation-time), instead of relying only on training scalar curves.
 
 Useful optional rendering parameters for the random-policy demo
 (`custom_environment\render_demo.py`):
@@ -174,7 +193,7 @@ Useful optional rendering parameters for the random-policy demo
 --grid-size 20 --number-ghosts 2 --seed 0 --screenshot-out path\to\frame.png --hide-observations
 ```
 
-Outputs are saved under `benchmarl_setup/runs` by default.
+Outputs are saved under `benchmarl_setup/runs/<maze>` by default.
 
 ### Mazes (Map Selection)
 
@@ -206,19 +225,18 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --m
 py -3.11 custom_environment\render_demo.py --render-mode human --maze pinklike
 ```
 
-The maze is recorded in each run's task config, so `eval.py` rebuilds the correct maze
-automatically from the checkpoint (no `--maze` needed for evaluation).
+Use the same `--maze` at evaluation/plot time so the command reads from the matching
+subfolder.
 
-**Keeping the two mazes' runs separate.** Both mazes write run folders with the same
-`<algorithm>_pacman_*` prefix, so train each maze into its own output folder and read it
-back with `--runs-root` during evaluation/plotting:
+**Keeping the two mazes' runs separate.** Runs are now separated automatically under
+`benchmarl_setup/runs/<maze>`. Use `--maze` consistently across training, evaluation, and plotting:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze default   --save-folder benchmarl_setup\runs\default
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze pinklike  --save-folder benchmarl_setup\runs\pinklike
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze default
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze pinklike
 
-py -3.11 custom_environment\eval.py --learner iql --runs-root benchmarl_setup\runs\pinklike
-py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --runs-root benchmarl_setup\runs\pinklike
+py -3.11 custom_environment\eval.py --learner iql --maze pinklike
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --maze pinklike
 ```
 
 New mazes can be registered in `custom_environment/utils.py` via the `MAZES` registry
@@ -236,6 +254,19 @@ Example (5 seeds, shared training config):
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
 ```
 
+Benchmark now supports device sweeps in one command:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
+```
+
+If multiple requested devices resolve to the same runtime target (for example `cpu,cuda` when CUDA is unavailable and fallback is enabled), the benchmark now fails fast with an explicit error instead of silently dropping one device leg.
+
+Runs are separated by resolved device under:
+
+- `benchmarl_setup/runs/<maze>/cpu`
+- `benchmarl_setup/runs/<maze>/cuda`
+
 Execution strategy:
 
 - Algorithms run in parallel (for example IQL and VDN at the same time).
@@ -245,33 +276,100 @@ Useful optional parameters:
 
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+--ghost-view-size 3|5|7
+--devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
 
+It also writes a per-job timing ledger (`benchmark_jobs.csv`) with wall-clock duration and run mapping.
+
 The summary CSV includes, per run:
 
+- `device`
 - `algorithm`
 - `seed`
 - `run_dir`
-- `n_points`
-- `final_reward`
-- `tail_mean_reward`
-- `best_reward`
+- `n_points` (points in `collection_reward_reward_mean.csv`, immediate reward metric)
+- `n_episode_points` (points in `collection_reward_episode_reward_mean.csv`, episode-return metric)
+- `final_reward` (immediate reward)
+- `tail_mean_reward` (immediate reward)
+- `best_reward` (immediate reward)
+- `final_episode_return` (episode return)
+- `tail_mean_episode_return` (episode return)
+- `best_episode_return` (episode return)
+- `duration_seconds`
+- `frames_per_second`
 - `checkpoint_path`
+
+### Summarize Benchmark Runs (Standalone)
+
+Use:
+
+- `benchmarl_setup/summarize_benchmark_runs.py`
+
+This script can be run independently (without re-running training) to regenerate `benchmark_summary.csv` from existing run folders.
+
+Example (single device layout under `runs/<maze>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze pinklike --algorithms iql,vdn,qmixglobal --devices cpu
+```
+
+Example (device-separated layout under `runs/<maze>/<device>`):
+
+```bash
+py -3.11 benchmarl_setup\summarize_benchmark_runs.py --maze default --algorithms iql,vdn,qmixlocal,qmixglobal --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv --out benchmarl_setup\runs\default\benchmark_summary.csv
+```
+
+Useful options:
+
+```bash
+--tail-window 20 --devices cpu,cuda --jobs-path benchmarl_setup\runs\default\benchmark_jobs.csv
+--out benchmarl_setup\runs\pinklike\benchmark_summary_custom.csv
+```
+
+Notes:
+
+- `--devices` filters device labels included in the summary (for example `cpu,cuda`).
+- `--jobs-path` merges timing metrics (`duration_seconds`, `frames_per_second`) when a benchmark jobs ledger is available.
+- The printed aggregate is grouped by `algorithm + device`.
+
+### CPU vs GPU Benchmark Protocol
+
+Use this protocol for fair comparisons:
+
+1. Keep configuration identical across devices (`--max-frames`, `--frames-per-batch`, `--optimizer-steps`, `--train-batch-size`, seeds).
+2. Run a shared benchmark command with both devices:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
+```
+
+3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
+4. If CUDA is unavailable, either install CUDA-enabled PyTorch/NVIDIA drivers or keep `--allow-cpu-fallback` enabled and inspect the resolved device logs.
+5. For strict CPU-vs-GPU comparisons, prefer `--no-allow-cpu-fallback` so unavailable CUDA fails immediately.
 
 ### Live Plot During Training
 
 Training now reports live progress to:
 
-- `benchmarl_setup/runs/live_progress.csvl`
+- `benchmarl_setup/runs/<maze>/live_progress.csvl`
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with mean ± std curves per algorithm.
+By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 
 Start live monitor:
 
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn,qmixlocal,qmixglobal
+```
+
+Monitor only one device label:
+
+```bash
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn --device cpu
+py -3.11 benchmarl_setup\liveplot.py --algorithms iql,vdn --device cuda
 ```
 
 Then run benchmark normally:
@@ -283,8 +381,9 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglo
 Useful options:
 
 ```bash
-py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 3
-py -3.11 benchmarl_setup\run_benchmark.py --live-progress-file benchmarl_setup\runs\live_progress.csvl --report-interval-seconds 1.0
+py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
+py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
+py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
 ### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX Local, QMIX Global)
@@ -304,6 +403,32 @@ Examples:
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixlocal,qmixglobal --show-runs
 ```
+
+### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
+
+Use:
+
+- `benchmarl_setup/plot_cpu_gpu_summary.py`
+
+This script reads `benchmark_summary.csv` and produces one image with:
+
+- GPU/CPU speedup per algorithm (`>1.0` means GPU is faster)
+- CPU vs GPU reward bars for a selected reward metric
+
+Example:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --summary-csv benchmarl_setup\runs\default\benchmark_summary.csv --reward-metric tail_mean_reward --out benchmarl_setup\runs\default\cpu_gpu_summary_comparison.png
+```
+
+Alternative reward metrics:
+
+```bash
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric final_reward
+py -3.11 benchmarl_setup\plot_cpu_gpu_summary.py --reward-metric best_reward
+```
+
+If the script reports that no algorithm has both CPU and GPU rows, run benchmark first with `--devices cpu,cuda` and ensure CUDA is available.
 
 ### QMIX Global Mixer State Schema
 
@@ -333,19 +458,19 @@ Policy observations remain local (5x5 by default) for all algorithms; only `qmix
 Optional parameters:
 
 ```bash
---window 5 --out benchmarl_setup\runs\benchmark_iql_vdn.png --no-open
+--maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
 If no `--out` is provided, the default output is:
 
-- `benchmarl_setup/runs/benchmark_reward_multiseed_mean_std.png` (when plotting multiple algorithms)
-- `benchmarl_setup/runs/<algorithm>_reward_multiseed_mean_std.png` (when plotting one algorithm)
+- `benchmarl_setup/runs/<maze>/benchmark_reward_multiseed_mean_std.png` (when plotting multiple algorithms)
+- `benchmarl_setup/runs/<maze>/<algorithm>_reward_multiseed_mean_std.png` (when plotting one algorithm)
 
 ### Plot de Reward IQL (Passo a Passo)
 
 Use o script `benchmarl_setup/plot_iql_reward.py` para gerar um gráfico da média de recompensa com banda de desvio padrão rolante.
 
-1. Execute pelo menos um treino de IQL para gerar logs em `benchmarl_setup/runs`.
+1. Execute pelo menos um treino de IQL para gerar logs em `benchmarl_setup/runs/<maze>`.
 
 2. Gere o plot da execução IQL mais recente:
 
@@ -356,13 +481,13 @@ py -3.11 benchmarl_setup\plot_iql_reward.py
 3. Abra o arquivo de saída padrão:
 
 ```text
-benchmarl_setup/runs/iql_reward_mean_stddev.png
+benchmarl_setup/runs/default/iql_reward_mean_stddev.png
 ```
 
 4. (Opcional) Escolha uma run específica com `--run-dir`:
 
 ```bash
-py -3.11 benchmarl_setup\plot_iql_reward.py --run-dir "benchmarl_setup\runs\iql_pacman_mlp__SEU_RUN_ID"
+py -3.11 benchmarl_setup\plot_iql_reward.py --maze default --run-dir "benchmarl_setup\runs\default\iql_pacman_mlp__SEU_RUN_ID"
 ```
 
 5. (Opcional) Ajuste a janela do desvio padrão rolante:
@@ -374,12 +499,13 @@ py -3.11 benchmarl_setup\plot_iql_reward.py --window 10
 6. (Opcional) Defina um caminho de saída customizado:
 
 ```bash
-py -3.11 benchmarl_setup\plot_iql_reward.py --out "benchmarl_setup\runs\meu_plot_iql.png"
+py -3.11 benchmarl_setup\plot_iql_reward.py --maze pinklike --out "benchmarl_setup\runs\pinklike\meu_plot_iql.png"
 ```
 
 Parâmetros principais do script:
 
 - `--runs-root`: pasta raiz das runs (padrão: `benchmarl_setup/runs`)
+- `--maze`: subpasta do labirinto dentro de `--runs-root` (padrão: `default`)
 - `--run-dir`: run específica (se omitido, usa a IQL mais recente)
 - `--window`: janela para cálculo do desvio padrão rolante (padrão: `5`)
 - `--out`: caminho do PNG de saída
