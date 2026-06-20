@@ -1,0 +1,307 @@
+{
+  "version": "1.0",
+  "generated": "2026-05-01T19:37:00Z",
+  "categories": [
+    "planning-execution",
+    "analysis-review",
+    "code-tests",
+    "framework-maintenance",
+    "utilities"
+  ],
+  "edges": [
+    {
+      "after": "/plan",
+      "suggest": "/implement",
+      "reason": "Ready to implement this plan?",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/plan --light",
+      "suggest": "/implement",
+      "reason": "Ready to implement this proposal?",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/plan --roadmap",
+      "suggest": "/implement",
+      "reason": "Ready to implement items from the roadmap?",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/check validate",
+      "reason": "All checks run by default unless --skip-checks was used.",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/check review",
+      "reason": "All checks run by default unless --skip-checks was used.",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/check preflight",
+      "reason": "All checks run by default unless --skip-checks was used.",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/document",
+      "reason": "Runs automatically via post-skill step 2b for FEATURE/REDESIGN plans and plans with non-N/A Docs: fields; edge stays informational for `--skip-docs` and standalone `/document` modes.",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/pending",
+      "reason": "Review pending actions created by this implementation",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/implement",
+      "suggest": "/reflect",
+      "reason": "Surface patterns across recent skill runs (non-prescriptive)",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/explain spec-drift",
+      "suggest": "/plan",
+      "reason": "Specs analyzed -- ready to plan next steps?",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/explain spec-drift",
+      "suggest": "/design",
+      "reason": "Drift indicates intent has evolved -- update the project design",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/explain spec-drift --promote",
+      "suggest": "/explain spec-drift --promote --apply-markers plan-<id>",
+      "reason": "Decision proposal drafted -- after you apply the prose, flip the STATUS markers",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/explain spec-drift",
+      "suggest": "/pending",
+      "reason": "Address pending actions surfaced by the drift check",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/pending",
+      "suggest": "/explain spec-drift --promote",
+      "reason": "Next logical step after addressing pending curation items (generates a Decision proposal for promotion candidates)",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/pending",
+      "suggest": "/implement",
+      "reason": "Next logical step after reviewing pending review items",
+      "category": "planning-execution"
+    },
+    {
+      "after": "/research",
+      "suggest": "/plan",
+      "reason": "Want to turn these recommendations into a plan?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/research",
+      "suggest": "/plan --roadmap",
+      "reason": "Want to turn these recommendations into a plan?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/research",
+      "suggest": "/design",
+      "reason": "Recommendations indicate the design intent should change -- update the project design before planning implementation.",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/research --inventory",
+      "suggest": "/explain",
+      "reason": "Want a deeper explanation of any of these?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/explain",
+      "suggest": "/research",
+      "reason": "Have questions about what you just learned?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check review",
+      "suggest": "/plan",
+      "reason": "Want to plan fixes for the review findings?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check validate",
+      "suggest": "/plan",
+      "reason": "Found issues? Plan and fix them.",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check validate",
+      "suggest": "/check health",
+      "reason": "Also check harness health?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check validate",
+      "suggest": "/pending",
+      "reason": "Check and address outstanding pending actions",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check validate",
+      "suggest": "/reflect",
+      "reason": "After quality checks, surface patterns across recent runs",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check smoke",
+      "suggest": "/plan",
+      "reason": "Found failures? Plan and fix them.",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check health",
+      "suggest": "/plan",
+      "reason": "Found issues? Plan and fix them.",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check preflight",
+      "suggest": "/check review",
+      "reason": "Want a detailed code review of the changes?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check telemetry",
+      "suggest": "/research",
+      "reason": "Want to discuss usage patterns?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check telemetry",
+      "suggest": "/reflect",
+      "reason": "Surface descriptive patterns over the last 30 days?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/reflect",
+      "suggest": "/research",
+      "reason": "Want an assessment and recommendations on any pattern surfaced here?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/reflect",
+      "suggest": "/design",
+      "reason": "Want to turn a surfaced pattern into new design intents?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/reflect",
+      "suggest": "/plan",
+      "reason": "Want to turn a surfaced pattern into new work?",
+      "category": "analysis-review"
+    },
+    {
+      "after": "/check test-plan",
+      "suggest": "/communicate",
+      "reason": "Share the test plan with stakeholders?",
+      "category": "code-tests"
+    },
+    {
+      "after": "/check preflight",
+      "suggest": "/onboard",
+      "reason": "Need to onboard someone to the project?",
+      "category": "code-tests"
+    },
+    {
+      "after": "/seja-setup --upgrade",
+      "suggest": "/check health",
+      "reason": "Verify harness health after upgrading",
+      "category": "framework-maintenance"
+    },
+    {
+      "after": "/seja-setup --upgrade",
+      "suggest": "/explain spec-drift",
+      "reason": "Re-run spec drift after harness upgrade to catch changed conventions",
+      "category": "framework-maintenance"
+    },
+    {
+      "after": "/check preflight",
+      "suggest": "/publish",
+      "reason": "Preflight passed -- ready to cut a release?",
+      "category": "framework-maintenance"
+    },
+    {
+      "after": "/publish",
+      "suggest": "/check health",
+      "reason": "Verify harness health after publishing",
+      "category": "framework-maintenance"
+    },
+    {
+      "after": "/document",
+      "suggest": "/check docs",
+      "reason": "Validate documentation consistency?",
+      "category": "utilities"
+    },
+    {
+      "after": "/communicate",
+      "suggest": "/onboard",
+      "reason": "Need to onboard someone to the project?",
+      "category": "utilities"
+    },
+    {
+      "after": "/onboard",
+      "suggest": "/communicate",
+      "reason": "Want to generate stakeholder material as well?",
+      "category": "utilities"
+    },
+    {
+      "after": "/help",
+      "suggest": "/help --browse",
+      "reason": "Browse all available skills?",
+      "category": "utilities"
+    },
+    {
+      "after": "/help --browse",
+      "suggest": "docs/how-to/plan-and-execute.md",
+      "reason": "See quick-reference workflow sequences in the how-to guides",
+      "category": "utilities"
+    },
+    {
+      "after": "/seja-setup",
+      "suggest": "/design",
+      "reason": "New project: configure project design (stack, conventions, domain model) after setup",
+      "category": "utilities"
+    },
+    {
+      "after": "/seja-setup",
+      "suggest": "general/getting-started.md",
+      "reason": "New to SEJA? Follow the getting-started guide",
+      "category": "utilities"
+    },
+    {
+      "after": "/design",
+      "suggest": "/plan --roadmap",
+      "reason": "Project configured -- generate a development roadmap",
+      "category": "utilities"
+    },
+    {
+      "after": "/design",
+      "suggest": "/plan",
+      "reason": "Plan your first feature against the new project design",
+      "category": "utilities"
+    },
+    {
+      "after": "/qa-log",
+      "suggest": "/research",
+      "reason": "Have more questions to explore?",
+      "category": "utilities"
+    }
+  ]
+}

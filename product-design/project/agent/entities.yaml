@@ -1,0 +1,29 @@
+version: 1
+
+entities:
+  - id: experiment-run
+    name: Experiment Run
+    description: A single training or benchmark execution identified by algorithm, seed, and timestamp
+    storage: filesystem (benchmarl_setup/runs/<timestamp>_<alg>_<seed>/)
+    ownership: researcher (local)
+    soft_delete: false
+
+  - id: algorithm-config
+    name: Algorithm Config
+    description: Hyperparameter configuration for one RL algorithm (IQL, VDN, or QMIX)
+    parent: experiment-run
+    storage: YAML/JSON in run directory
+    immutable_after: run start
+
+  - id: episode
+    name: Episode
+    description: A single Pacman episode (one game from reset to terminal state)
+    parent: algorithm-config
+    storage: in-memory during training; summary logged to CSV
+
+  - id: reward-log
+    name: Reward Log
+    description: Per-step and per-episode reward data from a training run
+    parent: experiment-run
+    storage: CSV in run directory; PNG plot generated post-run
+    export_formats: [csv, png]

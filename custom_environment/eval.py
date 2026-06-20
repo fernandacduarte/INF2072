@@ -195,6 +195,23 @@ def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
     return [float(x) for x in flat.tolist()]
 
 
+def classify_outcome(raw_env, step: int, max_steps: int) -> str:
+    """Win-rate outcome label derived from the *same* predicates as
+    ``_build_final_result``, so the headless harness and the renderer can never
+    disagree about who won.
+
+    Returns one of:
+      - ``"ghosts"``  -> a ghost captured Pacman (the only ghost win),
+      - ``"pacman"``  -> the env reached its own time limit with Pacman alive,
+      - ``"timeout"`` -> the runner step cap was hit without an env-terminal.
+    """
+    if raw_env._is_capture_state():
+        return "ghosts"
+    if not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+        return "pacman"
+    return "timeout"
+
+
 def _build_final_result(
     raw_env,
     *,
@@ -203,10 +220,11 @@ def _build_final_result(
     total_reward: float,
     elapsed_seconds: float,
 ) -> dict:
-    if raw_env._is_capture_state():
+    outcome = classify_outcome(raw_env, step, run_max_steps)
+    if outcome == "ghosts":
         title = "Ghosts win"
         reason = "Pacman was captured."
-    elif not raw_env.agents and raw_env.step_count >= raw_env.max_steps:
+    elif outcome == "pacman":
         title = "Pacman wins"
         reason = "Pacman survived until the environment time limit."
     elif step >= run_max_steps:
@@ -549,12 +567,6 @@ def main() -> None:
         type=int,
         default=200,
         help="Maximum number of environment steps for the episode.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Deprecated placeholder (kept for CLI compatibility).",
     )
     parser.add_argument(
         "--runs-root",

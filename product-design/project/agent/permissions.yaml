@@ -1,0 +1,16 @@
+version: 1
+
+# Single-user local CLI tool. No authentication or role system.
+
+roles:
+  - id: researcher
+    level: 1
+    description: Local researcher — full access to all scripts and outputs
+    capabilities:
+      - run training
+      - run benchmark
+      - evaluate policies
+      - read all outputs in benchmarl_setup/runs/
+      - modify environment and adapter code
+
+resource_access: []  # No resource-level access control

@@ -34,6 +34,9 @@ from custom_environment.env.domain.ghost import Ghost
 # PacMan: class for pacman agent
 from custom_environment.env.domain.pacman import PacMan
 
+# PacmanPolicy: deterministic safety-aware Pacman controller (replaces random)
+from custom_environment.env.domain.pacman_policy import PacmanPolicy
+
 # MazeSpec: map-authored layout (grid + spawns + pellet mask); spec_from_grid: back-compat wrapper
 from custom_environment.utils import MazeSpec, spec_from_grid
 
@@ -115,7 +118,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.unseen_steps = 0
 
         rows, cols = self.global_view.shape
-        self._state_dim = (rows * cols) + (3 * len(self.possible_agents)) + 7
+        # +8 trailing scalars: 4 pacman-memory + team_min_dist + step + remaining + pallets_remaining
+        self._state_dim = (rows * cols) + (3 * len(self.possible_agents)) + 8
         self._state_space = Box(low=-1.0, high=1.0, shape=(self._state_dim,), dtype=np.float32)
 
         # Rendering configuration. The Pygame renderer is imported lazily so
@@ -125,7 +129,13 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.fps = int(fps)
         self.show_observations = bool(show_observations)
         self._renderer = None
+        # Episode-level pallet count, set on reset(); guards state() before first reset.
+        self._total_pallets = 0
         self._pellet_mask = self._build_initial_pellet_mask()
+
+        # Deterministic Pacman controller; reset per episode to clear its state
+        # machine. Replaces the former Action.choose_random() policy.
+        self._pacman_policy = PacmanPolicy()
 
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
@@ -136,6 +146,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # Reset shared episode memory.
         self.step_count = 0
+        # Fresh Pacman controller so its flee/cooldown state does not leak
+        # across episodes.
+        self._pacman_policy = PacmanPolicy()
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
         self.last_any_pacman_visible = False
@@ -160,6 +173,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.pacman = PacMan(id="pacman", current_position=self.pacman_spawn)
         self.global_view[*self.pacman.current_position] = Observation.PAC_MAN.value
         self._reset_visual_pellets()
+        # Capture the per-episode pallet count (after spawn cells are cleared) so
+        # step() can detect the "Pacman ate everything" win condition.
+        self._total_pallets = int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0
 
         # --- Build initial observations and info dicts for all ghosts ---
         observations = {ghost.id: self._get_observation(ghost) for ghost in self.ghosts}
@@ -189,8 +205,16 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         truncations = {}
         infos = {}
 
-        # Move Pacman first using internal random policy.
-        self._execute_action(self.pacman, Action.choose_random())
+        # Move Pacman first using the deterministic safety-aware policy: it
+        # seeks the nearest safe pellet and flees ghosts within danger range.
+        ghost_positions = [ghost.current_position for ghost in self.ghosts]
+        pacman_action = self._pacman_policy.choose_action(
+            self.global_view,
+            self._pellet_mask,
+            ghost_positions,
+            self.pacman.current_position,
+        )
+        self._execute_action(self.pacman, pacman_action)
 
         # Then apply each ghost action received from the learning policy.
         # Use ghost ids instead of dict iteration order to avoid agent-action mismatches.
@@ -210,15 +234,26 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         capture_happened = self._is_capture_state()
         timeout_happened = (self.step_count >= self.max_steps) and (not capture_happened)
 
+        # Pacman wins by eating every pallet on the board. Capture takes priority,
+        # so this outcome only applies when the ghosts did not catch Pacman.
+        pallets_all_eaten = (
+            self._pellet_mask is not None
+            and self._total_pallets > 0
+            and int(self._pellet_mask.sum()) == 0
+        )
+        pacman_win_happened = pallets_all_eaten and not capture_happened
+
         team_reward = self._compute_team_reward(capture_happened)
         if timeout_happened:
             team_reward += float(Reward.PACMAN_TIMEOUT_WIN.value)
+        if pacman_win_happened:
+            team_reward += float(Reward.PACMAN_WIN_PALLETS.value)
 
         # Shared reward is broadcast to every ghost.
         for ghost in self.ghosts:
             rewards[ghost.id] = float(team_reward)
             terminations[ghost.id] = bool(capture_happened)
-            truncations[ghost.id] = bool(timeout_happened)
+            truncations[ghost.id] = bool(timeout_happened or pacman_win_happened)
             infos[ghost.id] = {
                 "last_pacman_sighting_position": self.last_pacman_sighting_position,
                 "last_pacman_sighting_step": self.last_pacman_sighting_step,
@@ -759,6 +794,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         step_fraction = min(float(self.step_count) / float(max_steps), 1.0)
         remaining_fraction = 1.0 - step_fraction
 
+        # 7) Board-clearance signal: fraction of pallets still on the board, so
+        # coordinating agents (VDN/QMIX) can see how close Pacman is to winning.
+        pallets_remaining_norm = (
+            float(int(self._pellet_mask.sum())) / float(max(1, self._total_pallets))
+            if self._pellet_mask is not None and self._total_pallets > 0
+            else 1.0
+        )
+
         state_vector = np.asarray(
             wall_map_flat.tolist()
             + ghost_positions_norm
@@ -769,7 +812,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 steps_since_last_seen_norm,
             ]
             + ghost_to_target_dist_norm
-            + [team_min_dist_norm, step_fraction, remaining_fraction],
+            + [team_min_dist_norm, step_fraction, remaining_fraction]
+            + [pallets_remaining_norm],
             dtype=np.float32,
         )
 

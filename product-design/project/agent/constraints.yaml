@@ -1,0 +1,45 @@
+version: 1
+
+constraints:
+  technical:
+    - id: tech-001
+      rule: "Python 3.11 is the required interpreter; scripts must be invoked via py -3.11"
+      scope: "all"
+      verify: "convention: check pyproject.toml or requirements.txt for python_requires >= 3.11"
+
+    - id: tech-002
+      rule: "All experiment outputs go to benchmarl_setup/runs/"
+      scope: "all"
+      verify: "grep_absent: hardcoded output paths outside benchmarl_setup/runs/ in training scripts"
+
+    - id: tech-003
+      rule: "Custom environment lives in custom_environment/; BenchMARL adapters in benchmarl_setup/"
+      scope: "all"
+      verify: "convention: PacmanEnv class defined in custom_environment/"
+
+    - id: tech-004
+      rule: "Seed must be a configurable CLI argument, not hardcoded"
+      scope: "all"
+      verify: "grep_match: argparse or click seed argument in training scripts"
+
+  quality:
+    - id: qual-001
+      rule: "Tests in test/ must pass before committing environment changes"
+      scope: "all"
+      verify: "file_exists: test/ directory with at least one test_*.py file"
+
+    - id: qual-002
+      rule: "Benchmark runs use a minimum of 5 seeds"
+      scope: "all"
+      verify: "convention: default seeds list has length >= 5 in run_benchmark.py"
+
+  security:
+    - id: sec-001
+      rule: "No API keys or credentials in source code"
+      scope: "all"
+      verify: "grep_absent: hardcoded tokens, passwords, or API keys in source files"
+
+    - id: sec-002
+      rule: "PyTorch checkpoints loaded only from researcher-specified local paths"
+      scope: "all"
+      verify: "grep_absent: urllib or requests used to download checkpoints automatically"

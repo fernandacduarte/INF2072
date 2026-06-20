@@ -53,6 +53,13 @@ Algorithm variants:
 - `qmixlocal`: uses per-agent Q-values for mixing without centralized global state.
 - `qmixglobal`: canonical QMIX variant that uses per-agent Q-values plus centralized global state for the mixer.
 
+**IQL tuning (plan-000008).** The default training budget is now `--max-frames
+60000` (a convergence-scale value; pass a smaller number such as `--max-frames
+1200` for quick smoke runs). For `--algorithm iql` the runner also applies
+convergence-oriented hyperparameters with no CLI flag of their own (a longer
+epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
+VDN/QMIX keep BenchMARL's stock schedule.
+
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
 
@@ -504,6 +511,12 @@ Parâmetros principais do script:
 
 The environment now uses a **shared team reward**: one scalar reward is computed per step and broadcast to all ghosts.
 
+> **Reward magnitudes were retuned in plan-000008** for a sharper pursuit→capture
+> gradient (capture raised to `+30`, the distance signal made denser/symmetric at
+> `±0.5`, `currently_visible` raised to `+0.3`, and the exploration bonuses
+> trimmed). Signs are unchanged. Because absolute magnitudes shifted, reward
+> curves are **not directly comparable** to runs produced before this change.
+
 Observability and shared information rules:
 1. Each ghost only observes its local neighborhood (5x5 by default).
    - **Changing the view size:** edit the single constant `GHOST_VIEW_SIZE` in
@@ -523,14 +536,14 @@ Default episode parameters:
 2. `recently_unvisited_window = 10`
 
 Reward terms:
-1. `+20.0` if Pacman is captured
+1. `+30.0` if Pacman is captured
 2. `-20.0` if Pacman wins by timeout
 3. `+1.0` if Pacman is newly spotted (visibility false -> true)
-4. `+0.3` if Pacman target distance decreases (minimum over ghosts)
-5. `-0.3` if Pacman target distance increases (minimum over ghosts)
-6. `+0.2` if Pacman is currently visible to any ghost
-7. `+0.08` if a ghost enters a recently-unvisited tile
-8. `+0.05` if a ghost reveals previously unseen local cells
+4. `+0.5` if Pacman target distance decreases (minimum over ghosts)
+5. `-0.5` if Pacman target distance increases (minimum over ghosts)
+6. `+0.3` if Pacman is currently visible to any ghost
+7. `+0.05` if a ghost enters a recently-unvisited tile
+8. `+0.03` if a ghost reveals previously unseen local cells
 9. `+0.01` if a ghost performs a valid move
 10. `-0.08` if a ghost attempts an invalid move (blocked by wall/occupied cell)
 11. `-0.03` if a ghost stays still (without invalid-move attempt)
