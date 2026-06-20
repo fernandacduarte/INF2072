@@ -4,7 +4,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+from algorithm_utils import (
+    SUPPORTED_ALGORITHMS,
+    SUPPORTED_MAZES,
+    candidate_run_dirs,
+    normalize_algorithm,
+    runs_root_for_maze,
+)
 
 
 def _resolve_scalars_dir(run_dir: Path) -> Path | None:
@@ -116,6 +122,14 @@ def parse_args() -> argparse.Namespace:
         "--runs-root",
         type=Path,
         default=Path("benchmarl_setup") / "runs",
+        help="Base runs directory.",
+    )
+    parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=SUPPORTED_MAZES,
+        help="Maze subfolder under --runs-root.",
     )
     parser.add_argument(
         "--algorithms",
@@ -132,8 +146,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("benchmarl_setup") / "runs" / "benchmark_summary.csv",
-        help="Output CSV path.",
+        default=None,
+        help="Output CSV path (default: <runs-root>/<maze>/benchmark_summary.csv).",
     )
     parser.add_argument(
         "--devices",
@@ -284,12 +298,14 @@ def summarize_runs(
 def main() -> None:
     args = parse_args()
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
+    maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
+    out = args.out if args.out is not None else maze_runs_root / "benchmark_summary.csv"
     devices = _parse_device_labels(args.devices)
     summarize_runs(
-        runs_root=args.runs_root,
+        runs_root=maze_runs_root,
         algorithms=algorithms,
         tail_window=args.tail_window,
-        out=args.out,
+        out=out,
         devices=devices,
         jobs_path=args.jobs_path,
     )

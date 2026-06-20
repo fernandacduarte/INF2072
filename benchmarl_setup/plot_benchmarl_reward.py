@@ -9,7 +9,13 @@ import webbrowser
 import matplotlib.pyplot as plt
 import numpy as np
 
-from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+from algorithm_utils import (
+    SUPPORTED_ALGORITHMS,
+    SUPPORTED_MAZES,
+    candidate_run_dirs,
+    normalize_algorithm,
+    runs_root_for_maze,
+)
 
 
 def _load_two_col_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -114,7 +120,14 @@ def parse_args() -> argparse.Namespace:
         "--runs-root",
         type=Path,
         default=Path("benchmarl_setup") / "runs",
-        help="Root directory containing BenchMARL run folders.",
+        help="Base runs directory.",
+    )
+    parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=SUPPORTED_MAZES,
+        help="Maze subfolder under --runs-root.",
     )
     parser.add_argument(
         "--run-dir",
@@ -141,7 +154,7 @@ def parse_args() -> argparse.Namespace:
         "--out",
         type=Path,
         default=None,
-        help="Output PNG path. Defaults to benchmarl_setup/runs/<algorithm>_reward_multiseed_mean_std.png",
+        help="Output PNG path. Defaults to <runs-root>/<maze>/<algorithm>_reward_multiseed_mean_std.png",
     )
     parser.add_argument(
         "--no-open",
@@ -153,6 +166,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
 
     algorithms: list[str]
     if args.algorithms:
@@ -169,13 +183,9 @@ def main() -> None:
 
     if args.out is None:
         if len(algorithms) == 1:
-            args.out = (
-                Path("benchmarl_setup")
-                / "runs"
-                / f"{algorithms[0]}_reward_multiseed_mean_std.png"
-            )
+            args.out = maze_runs_root / f"{algorithms[0]}_reward_multiseed_mean_std.png"
         else:
-            args.out = Path("benchmarl_setup") / "runs" / "benchmark_reward_multiseed_mean_std.png"
+            args.out = maze_runs_root / "benchmark_reward_multiseed_mean_std.png"
 
     color_map = {
         "iql": "#1f77b4",
@@ -190,10 +200,10 @@ def main() -> None:
         if args.run_dir:
             run_dirs = args.run_dir
         else:
-            run_dirs = candidate_run_dirs(args.runs_root, algorithm)
+            run_dirs = candidate_run_dirs(maze_runs_root, algorithm)
 
         if not run_dirs:
-            print(f"Warning: no run directories found for algorithm={algorithm} in {args.runs_root}")
+            print(f"Warning: no run directories found for algorithm={algorithm} in {maze_runs_root}")
             continue
 
         series_frames: list[np.ndarray] = []

@@ -1,8 +1,10 @@
 import argparse
 import csv
+import math
 import time
 from pathlib import Path
 import sys
+from collections import Counter
 
 import numpy as np
 import torch
@@ -16,7 +18,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from custom_environment.env.domain.constant import Observation
-from benchmarl_setup.algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+from benchmarl_setup.algorithm_utils import (
+    SUPPORTED_ALGORITHMS,
+    SUPPORTED_MAZES,
+    candidate_run_dirs,
+    normalize_algorithm,
+    runs_root_for_maze,
+)
 from benchmarl_setup.device_utils import resolve_device
 
 
@@ -218,6 +226,87 @@ def _build_final_result(
     }
 
 
+def _set_global_ghost_view_size(view_size: int) -> None:
+    from custom_environment.env import pacman_environment as pacman_env_module
+
+    pacman_env_module.GHOST_VIEW_SIZE = int(view_size)
+
+
+def _extract_view_size_from_hparams(checkpoint_path: Path) -> int | None:
+    run_dir = checkpoint_path.parent.parent
+    hparams_path = run_dir / run_dir.name / "texts" / "hparams0.txt"
+    if not hparams_path.exists():
+        return None
+
+    content = hparams_path.read_text(encoding="utf-8", errors="ignore")
+    marker = "'ghost_view_size':"
+    idx = content.find(marker)
+    if idx < 0:
+        return None
+
+    tail = content[idx + len(marker):]
+    digits = []
+    for ch in tail:
+        if ch.isdigit():
+            digits.append(ch)
+            continue
+        if digits:
+            break
+    if not digits:
+        return None
+
+    value = int("".join(digits))
+    if value > 0 and value % 2 == 1:
+        return value
+    return None
+
+
+def _infer_view_size_from_checkpoint_weights(checkpoint_path: Path) -> int | None:
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        return None
+
+    candidates: list[int] = []
+
+    def _visit(node) -> None:
+        if torch.is_tensor(node):
+            if node.ndim == 2:
+                in_dim = int(node.shape[1])
+                root = int(math.isqrt(in_dim))
+                if root * root == in_dim and root % 2 == 1 and 3 <= root <= 15:
+                    candidates.append(root)
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                _visit(value)
+            return
+        if isinstance(node, (list, tuple)):
+            for value in node:
+                _visit(value)
+
+    _visit(payload)
+    if not candidates:
+        return None
+
+    counts = Counter(candidates)
+    return counts.most_common(1)[0][0]
+
+
+def _resolve_checkpoint_view_size(
+    checkpoint_path: Path,
+    explicit_view_size: int | None,
+) -> int | None:
+    if explicit_view_size is not None:
+        return int(explicit_view_size)
+
+    value = _extract_view_size_from_hparams(checkpoint_path)
+    if value is not None:
+        return value
+
+    return _infer_view_size_from_checkpoint_weights(checkpoint_path)
+
+
 def run_episode(
     learner: str,
     delay: float,
@@ -231,6 +320,7 @@ def run_episode(
     fps: int,
     screenshot_out: Path | None,
     show_observations: bool,
+    ghost_view_size: int | None,
     requested_device: str,
     allow_cpu_fallback: bool,
 ) -> None:
@@ -252,6 +342,11 @@ def run_episode(
         f"requested={requested_device} | resolved={resolved_device} | "
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
+
+    resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
+    if resolved_view_size is not None:
+        _set_global_ghost_view_size(resolved_view_size)
+        print(f"Using ghost view size: {resolved_view_size}x{resolved_view_size}")
 
     experiment = Experiment.reload_from_file(
         str(checkpoint_path),
@@ -465,7 +560,20 @@ def main() -> None:
         "--runs-root",
         type=Path,
         default=PROJECT_ROOT / "benchmarl_setup" / "runs",
-        help="Root folder containing learner run directories.",
+        help="Base runs directory.",
+    )
+    parser.add_argument(
+        "--maze",
+        type=str,
+        default="default",
+        choices=SUPPORTED_MAZES,
+        help="Maze subfolder under --runs-root.",
+    )
+    parser.add_argument(
+        "--ghost-view-size",
+        type=int,
+        default=None,
+        help="Odd local observation width/height for ghosts. Useful for legacy checkpoints.",
     )
     parser.add_argument(
         "--checkpoint",
@@ -535,12 +643,14 @@ def main() -> None:
             f"Unsupported learner: {args.learner}. Allowed: {list(SUPPORTED_ALGORITHMS)}"
         )
 
+    maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
+
     run_episode(
         learner=normalized_learner,
         delay=args.delay,
         max_steps=args.max_steps,
         checkpoint=args.checkpoint,
-        runs_root=args.runs_root,
+        runs_root=maze_runs_root,
         checkpoint_select=args.checkpoint_select,
         show_reward_breakdown=args.show_reward_breakdown,
         render_mode=args.render_mode,
@@ -548,6 +658,7 @@ def main() -> None:
         fps=args.fps,
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,
+        ghost_view_size=args.ghost_view_size,
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
     )

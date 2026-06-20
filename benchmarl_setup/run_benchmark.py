@@ -8,7 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from algorithm_utils import SUPPORTED_ALGORITHMS, candidate_run_dirs, normalize_algorithm
+from algorithm_utils import (
+    SUPPORTED_ALGORITHMS,
+    SUPPORTED_MAZES,
+    candidate_run_dirs,
+    normalize_algorithm,
+    runs_root_for_maze,
+)
 from device_utils import device_label, parse_device_list, resolve_device
 from summarize_benchmark_runs import summarize_runs
 
@@ -54,16 +60,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
+        "--ghost-view-size",
+        type=int,
+        default=None,
+        help="Odd local observation width/height for ghosts (for example 3 or 5).",
+    )
+    parser.add_argument(
         "--maze",
         type=str,
         default="default",
-        choices=["default", "pinklike"],
+        choices=SUPPORTED_MAZES,
         help="Maze layout to train on (applied to all algorithms/seeds in this benchmark).",
     )
     parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
+        help="Base runs directory. Benchmark writes runs under <save-folder>/<maze>.",
     )
     parser.add_argument(
         "--checkpoint-interval",
@@ -103,8 +116,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summary-out",
         type=str,
-        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_summary.csv").resolve()),
-        help="Output CSV path for benchmark summary.",
+        default=None,
+        help="Output CSV path for benchmark summary (default: <save-folder>/<maze>/benchmark_summary.csv).",
     )
     parser.add_argument(
         "--no-summary",
@@ -114,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--live-progress-file",
         type=str,
-        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "live_progress.csvl").resolve()),
+        default=None,
         help="Path to live progress CSVL consumed by benchmarl_setup/liveplot.py.",
     )
     parser.add_argument(
@@ -171,11 +184,15 @@ def _build_command(
         str(args.maze),
         "--save-folder",
         str(save_folder),
+        "--save-folder-includes-maze",
         "--checkpoint-interval",
         str(args.checkpoint_interval),
         "--device",
         requested_device,
     ]
+
+    if args.ghost_view_size is not None:
+        command.extend(["--ghost-view-size", str(args.ghost_view_size)])
 
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
@@ -477,9 +494,20 @@ def main() -> None:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
     seeds = _parse_seeds(args.seeds)
+    maze_runs_root = runs_root_for_maze(Path(args.save_folder), args.maze)
+    live_progress_file = (
+        Path(args.live_progress_file)
+        if args.live_progress_file is not None
+        else maze_runs_root / "live_progress.csvl"
+    )
+    summary_out = (
+        Path(args.summary_out)
+        if args.summary_out is not None
+        else maze_runs_root / "benchmark_summary.csv"
+    )
     device_configs = _build_device_configs(args)
 
-    base_save_folder = Path(args.save_folder)
+    base_save_folder = maze_runs_root
     runs_roots_by_label = {
         cfg["label"]: _save_folder_for_device(base_save_folder, cfg["resolved"])
         for cfg in device_configs
@@ -502,11 +530,11 @@ def main() -> None:
         reporter = ProgressReporter(
             runs_roots_by_label=runs_roots_by_label,
             algorithms=algorithms,
-            output_file=Path(args.live_progress_file),
+            output_file=live_progress_file,
             interval_seconds=args.report_interval_seconds,
         )
         reporter.start()
-        print(f"Live progress enabled: {args.live_progress_file}")
+        print(f"Live progress enabled: {live_progress_file}")
 
     total = len(algorithms) * len(seeds) * len(device_configs)
     print(
@@ -572,7 +600,6 @@ def main() -> None:
         print("Summary generation skipped (--no-summary).")
         return
 
-    summary_out = Path(args.summary_out)
     summarize_runs(
         runs_root=base_save_folder,
         algorithms=algorithms,
