@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+STARTED | 2026-06-20 19:32 UTC | research | after merge that introduced maze options and multiple folders output make liveplot stopped working
+
+---
+
 DONE | 2026-06-20 19:10 UTC | STARTED | 2026-06-20 19:06 UTC | plan | will not use this win-rate eval strategy. remove it from code | PLAN | 000014
 
 ---

@@ -51,7 +51,7 @@ benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE)
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
-	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS)
+	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE)
 
 smoke: ## PettingZoo parallel-API compliance (runs without pytest)
 	$(PYTHON) test/test_petting_zoo.py
