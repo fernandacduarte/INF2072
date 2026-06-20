@@ -16,15 +16,16 @@ GHOSTS ?= 2
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
 ALGOS   ?= iql,vdn,qmixlocal,qmixglobal
 SEEDS   ?= 0,1,2,3,4
-FRAMES  ?= 50000
-LEARNER ?= iql
+FRAMES  ?= 200000
+LEARNER ?= qmixglobal
+DEVICE  ?= cpu
 
 .DEFAULT_GOAL := help
 
 .PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark liveplot eval-best
 
 help: ## Show this help
-	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed benchmark training (all algorithms, parallel)','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE GHOSTS  (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE       (e.g. make benchmark ALGOS=iql,vdn SEEDS=0,1 FRAMES=1200)','Eval vars:  LEARNER                       (e.g. make eval-best LEARNER=vdn)']))"
+	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed benchmark training (all algorithms, parallel)','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE GHOSTS  (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE  (e.g. make benchmark ALGOS=iql,vdn DEVICE=cuda)','Eval vars:  LEARNER DEVICE               (e.g. make eval-best LEARNER=vdn DEVICE=cuda)']))"
 
 demo: ## Live Pygame window: defense-first Pacman vs random ghosts
 	$(PYTHON) custom_environment/render_demo.py --render-mode human --delay $(DELAY) --maze $(MAZE) --number-ghosts $(GHOSTS) --seed $(SEED)
@@ -45,13 +46,13 @@ screenshot: ## Save a PNG of the last rendered frame into _output/
 	$(PYTHON) custom_environment/render_demo.py --render-mode rgb_array --max-steps 80 --maze $(MAZE) --seed $(SEED) --screenshot-out _output/pacman_demo.png
 
 eval-best: ## Watch trained ghosts (best checkpoint by tail-mean reward) in a Pygame window
-	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select best
+	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select best --device $(DEVICE)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
-	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE)
+	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE)
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
-	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE)
+	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device $(DEVICE)
 
 smoke: ## PettingZoo parallel-API compliance (runs without pytest)
 	$(PYTHON) test/test_petting_zoo.py
