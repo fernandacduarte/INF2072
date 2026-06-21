@@ -509,56 +509,181 @@ Parâmetros principais do script:
 
 ### Pacman Reward System (Current)
 
-The environment now uses a **shared team reward**: one scalar reward is computed per step and broadcast to all ghosts.
+The environment broadcasts one shared team reward to all ghosts, but its calculation
+is now delegated to a `RewardStrategy`. Strategies receive an immutable transition
+snapshot and keep their own episode history; they cannot mutate the environment.
 
-> **Reward magnitudes were retuned in plan-000008** for a sharper pursuit→capture
-> gradient (capture raised to `+30`, the distance signal made denser/symmetric at
-> `±0.5`, `currently_visible` raised to `+0.3`, and the exploration bonuses
-> trimmed). Signs are unchanged. Because absolute magnitudes shifted, reward
-> curves are **not directly comparable** to runs produced before this change.
+The behavior-compatible default is
+`custom_environment.env.rewards.current:CurrentTeamReward`. To add an experiment,
+create a zero-argument `RewardStrategy` subclass with a unique `strategy_id`; no
+central registry edit is required.
 
-Observability and shared information rules:
-1. Each ghost only observes its local neighborhood (5x5 by default).
-   - **Changing the view size:** edit the single constant `GHOST_VIEW_SIZE` in
-     `custom_environment/env/pacman_environment.py` (any odd integer: `3`→3x3, `5`→5x5, `7`→7x7).
-     It applies to every algorithm/training; off-grid cells near the border are padded with walls,
-     so the maze needs no changes. Note that resizing changes the policy input shape, so existing
-     checkpoints must be retrained.
-2. Team-level visibility is computed from local observations only (logical OR across ghosts).
-3. The only shared memory about Pacman location is:
-   - `last_pacman_sighting_position`
-   - `last_pacman_sighting_step`
-4. If any ghost sees Pacman, last sighting is updated.
-5. If no ghost sees Pacman, last sighting remains unchanged.
+#### Understanding `module.path:ClassName`
 
-Default episode parameters:
-1. `max_steps = 200` (timeout)
-2. `recently_unvisited_window = 10`
+A reward class is identified with a Python import path in this format:
 
-Reward terms:
-1. `+30.0` if Pacman is captured
-2. `-20.0` if Pacman wins by timeout
-3. `+1.0` if Pacman is newly spotted (visibility false -> true)
-4. `+0.5` if Pacman target distance decreases (minimum over ghosts)
-5. `-0.5` if Pacman target distance increases (minimum over ghosts)
-6. `+0.3` if Pacman is currently visible to any ghost
-7. `+0.05` if a ghost enters a recently-unvisited tile
-8. `+0.03` if a ghost reveals previously unseen local cells
-9. `+0.01` if a ghost performs a valid move
-10. `-0.08` if a ghost attempts an invalid move (blocked by wall/occupied cell)
-11. `-0.03` if a ghost stays still (without invalid-move attempt)
-12. `-0.02` if a ghost repeatedly reverses direction (movement loop)
-13. `-0.05` if ghosts overlap or follow the same corridor closely
-14. `-0.01` timestep penalty
+```text
+module.path:ClassName
+```
 
-Anti-exploit guards:
-1. `newly_spotted` is only awarded if Pacman was unseen for at least `6` consecutive steps before becoming visible again.
-2. Reversal penalty scales with repetition streak (stronger punishment for persistent ping-pong loops).
+For example:
 
-Distance-target rule:
-1. If Pacman is visible now, distance shaping uses current visible Pacman position.
-2. If Pacman is not visible, distance shaping uses `last_pacman_sighting_position`.
-3. If no sighting exists yet, distance shaping is skipped.
+```text
+my_rewards.pursuit:PursuitReward
+```
+
+This has two parts:
+
+- `my_rewards.pursuit` is the Python module. From the project root, it normally
+  corresponds to the file `my_rewards/pursuit.py`.
+- `PursuitReward` is the class defined inside that module.
+- The colon (`:`) separates the module from the class.
+
+Given this project structure:
+
+```text
+INF2072/
+├── my_rewards/
+│   ├── __init__.py
+│   └── pursuit.py
+└── benchmarl_setup/
+```
+
+`my_rewards/pursuit.py` could contain:
+
+```python
+from custom_environment.env.rewards import (
+    RewardResult,
+    RewardStrategy,
+    RewardTerm,
+)
+
+
+class PursuitReward(RewardStrategy):
+    strategy_id = "pursuit"
+
+    def reset(self, initial_context):
+        self.previous_distance = self._distance(initial_context)
+
+    def compute(self, context):
+        distance = self._distance(context)
+        terms = []
+
+        if distance < self.previous_distance:
+            terms.append(RewardTerm("move_toward_pacman", 1.0))
+        elif distance > self.previous_distance:
+            terms.append(RewardTerm("move_away_from_pacman", -1.0))
+
+        if context.capture_happened:
+            terms.append(RewardTerm("capture", 20.0, "terminal"))
+
+        self.previous_distance = distance
+        return RewardResult(tuple(terms))
+
+    @staticmethod
+    def _distance(context):
+        pacman_row, pacman_col = context.pacman_position
+        return min(
+            abs(ghost.current_position[0] - pacman_row)
+            + abs(ghost.current_position[1] - pacman_col)
+            for ghost in context.ghosts
+        )
+```
+
+Select it with:
+
+```bash
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-class my_rewards.pursuit:PursuitReward
+```
+
+If the file is directly in the project root as `pursuit_reward.py`, use:
+
+```text
+pursuit_reward:PursuitReward
+```
+
+Do not use a filesystem path such as `my_rewards/pursuit.py:PursuitReward`.
+Use Python dots, omit the `.py` suffix, and run the command from the project root
+so the module is importable.
+
+Every CLI-loaded reward class must:
+
+- subclass `RewardStrategy`;
+- define a unique lowercase `strategy_id`, such as `pursuit-v2`;
+- be constructible without arguments; and
+- implement `reset(initial_context)` and `compute(context)`.
+
+You can verify an import path without starting training:
+
+```bash
+python -c "from custom_environment.env.rewards import load_reward_strategy; print(load_reward_strategy('my_rewards.pursuit:PursuitReward').strategy_id)"
+```
+
+The expected output for the example above is `pursuit`.
+
+Paired multi-seed comparison:
+
+```bash
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql,vdn \
+  --seeds 0,1,2 \
+  --reward-classes team_a.rewards:RewardA,team_b.rewards:RewardB
+```
+
+Runs are isolated under `<runs>/<maze>/<strategy_id>/<device>/`. After training,
+the benchmark evaluates every final checkpoint on the same episode seeds and writes
+capture-rate/time-to-capture comparisons. Raw returns remain diagnostic only because
+reward scales are not comparable between strategies. Use `--eval-episodes 0` to skip
+the automatic objective evaluation.
+
+#### Regression-check the refactor against `main`
+
+The repository includes a small deterministic A/B experiment. Both runs use IQL,
+seed `17`, CPU, and `4,000` frames. The only command difference is that the refactored
+run explicitly selects `CurrentTeamReward`; old `main` uses its built-in reward.
+
+1. From the project root on the refactor branch, using the project's Python 3.11
+   environment, run:
+
+   ```bash
+   python scripts/run_refactored_reward_regression.py
+   ```
+
+   Results are written outside the repository under the system temporary directory,
+   in `inf2072_reward_regression/refactored`. The script also copies the baseline
+   runner and comparator there so they survive a branch switch.
+
+2. Commit the refactor, make sure the worktree is clean, and switch to unmodified
+   `main`:
+
+   ```bash
+   git switch main
+   ```
+
+3. Run the exact baseline command printed by step 1. On macOS/Linux it normally
+   looks like:
+
+   ```bash
+   python /tmp/inf2072_reward_regression/tools/run_main_reward_regression.py
+   ```
+
+   Use the printed path rather than copying this example; Windows uses its own
+   temporary-directory path. The baseline script refuses to run unless the current
+   branch is `main` and the worktree is clean.
+
+4. Run the comparator command printed by the baseline script. It normally looks like:
+
+   ```bash
+   python /tmp/inf2072_reward_regression/tools/compare_reward_regression.py
+   ```
+
+The comparator checks every common non-timing BenchMARL scalar series, including
+step rewards, episode returns, loss, gradient norm, and frame counters. `SAME` means
+the maximum absolute difference is at most `1e-8`; timing metrics are intentionally
+ignored. If repeating the experiment, remove or rename the prior temporary output
+first—the runners refuse to mix multiple runs in one comparison directory.
 
 ### Python Environment
 

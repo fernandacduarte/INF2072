@@ -25,13 +25,10 @@ from gymnasium.spaces import Box, Discrete
 # Agent: base class for all agents (ghosts, pacman)
 from custom_environment.env.domain.agent import Agent
 
-# Action, Observation, Reward: enums for actions, cell types, and reward values
-# POTENTIAL_SHAPING_ALPHA: coefficient for potential-based pursuit shaping (plan-000021)
+# Action and Observation enums for actions and cell types.
 from custom_environment.env.domain.constant import (
     Action,
     Observation,
-    Reward,
-    POTENTIAL_SHAPING_ALPHA,
 )
 
 # Ghost: class for ghost agents
@@ -45,6 +42,14 @@ from custom_environment.env.domain.pacman_policy import PacmanPolicy
 
 # MazeSpec: map-authored layout (grid + spawns + pellet mask); spec_from_grid: back-compat wrapper
 from custom_environment.utils import MazeSpec, spec_from_grid
+
+from custom_environment.env.rewards import (
+    GhostTransition,
+    RewardContext,
+    RewardStrategy,
+    load_reward_strategy,
+    reward_class_path,
+)
 
 from collections import deque
 
@@ -75,6 +80,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         fps: int = 12,  # Target frames per second for human rendering
         show_observations: bool = True,  # Whether to tint each ghost's local view in visual renders
         ghost_view_size: int | None = None,  # Optional override for local observation size
+        reward_strategy: str | RewardStrategy | None = None,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -105,27 +111,28 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._base_grid = np.array(spec.grid, copy=True)
         self.global_view = np.array(spec.grid, copy=True)
         self._wall_map = (self._base_grid == Observation.WALL.value).astype(np.float32)
+        self._reward_wall_positions = frozenset(
+            (int(row), int(col))
+            for row, col in np.argwhere(self._wall_map == 1.0)
+        )
 
         # List of Ghost objects (populated on reset)
         self.ghosts = []
         # PacMan object (populated on reset)
         self.pacman = None
 
-        # Episode-level controls and shared team memory.
+        # Episode-level controls and shared observation memory.
         self.max_steps = 200
-        self.recently_unvisited_window = 10
         self.step_count = 0
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
-        self.last_any_pacman_visible = False
-        self.last_target_min_distance = None
-        # Previous-step potential F(s) for potential-based pursuit shaping
-        # (plan-000021); None means "no baseline yet" so the first reward
-        # computation of an episode only sets the baseline and emits no term.
-        self.last_potential = None
         self.last_team_reward_breakdown = {}
-        self.newly_spotted_min_unseen_steps = 6
-        self.unseen_steps = 0
+        self.last_reward_category_totals = {"shaping": 0.0, "terminal": 0.0}
+        self.last_reward_context = None
+        self.last_reward_result = None
+        self.reward_strategy = load_reward_strategy(reward_strategy)
+        self.reward_strategy_id = self.reward_strategy.strategy_id
+        self.reward_strategy_class = reward_class_path(self.reward_strategy)
 
         rows, cols = self.global_view.shape
         # +8 trailing scalars: 4 pacman-memory + team_min_dist + step + remaining + pallets_remaining
@@ -161,21 +168,16 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._pacman_policy = PacmanPolicy()
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
-        self.last_any_pacman_visible = False
-        self.last_target_min_distance = None
-        # Clear the potential baseline so shaping restarts cleanly each episode.
-        self.last_potential = None
         self.last_team_reward_breakdown = {}
-        self.unseen_steps = self.newly_spotted_min_unseen_steps
+        self.last_reward_category_totals = {"shaping": 0.0, "terminal": 0.0}
+        self.last_reward_context = None
+        self.last_reward_result = None
 
         # --- Spawn ghosts at the map-authored spawn cells ---
         self.ghosts = [
             Ghost(id=f"ghost_{i+1}", current_position=pos)
             for i, pos in enumerate(self.ghost_spawns)
         ]
-        # Reset per-ghost exploration and movement memory at episode start.
-        for ghost in self.ghosts:
-            ghost.last_tile_visit_step = {ghost.current_position: 0}
         # Place ghosts on the grid
         for ghost in self.ghosts:
             x, y = ghost.current_position  # Unpack position
@@ -191,8 +193,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # --- Build initial observations and info dicts for all ghosts ---
         observations = {ghost.id: self._get_observation(ghost) for ghost in self.ghosts}
-        for ghost in self.ghosts:
-            self._update_seen_local_cells(ghost)
+        initial_context = self._build_reward_context(
+            actions={},
+            pellets_before=self._remaining_pellets(),
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+        self.reward_strategy.reset(initial_context)
         # Build empty info dict for each ghost.
         infos = {ghost.id: {} for ghost in self.ghosts}
 
@@ -217,6 +225,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         truncations = {}
         infos = {}
 
+        pellets_before = self._remaining_pellets()
+
         # Move Pacman first using the deterministic safety-aware policy: it
         # seeks the nearest safe pellet and flees ghosts within danger range.
         ghost_positions = [ghost.current_position for ghost in self.ghosts]
@@ -230,10 +240,12 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # Then apply each ghost action received from the learning policy.
         # Use ghost ids instead of dict iteration order to avoid agent-action mismatches.
+        decoded_actions = {}
         for ghost in self.ghosts:
             if ghost.id not in actions:
                 raise KeyError(f"Missing action for ghost '{ghost.id}'. Received keys: {list(actions.keys())}")
             action = self._decode_action(actions[ghost.id])
+            decoded_actions[ghost.id] = action
             self._execute_action(ghost, action)
 
         # One environment transition completed.
@@ -255,11 +267,25 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         )
         pacman_win_happened = pallets_all_eaten and not capture_happened
 
-        team_reward = self._compute_team_reward(capture_happened)
-        if timeout_happened:
-            team_reward += float(Reward.PACMAN_TIMEOUT_WIN.value)
-        if pacman_win_happened:
-            team_reward += float(Reward.PACMAN_WIN_PALLETS.value)
+        any_visible, seen_positions = self._collect_visible_pacman_positions()
+        if any_visible:
+            self.last_pacman_sighting_position = seen_positions[0]
+            self.last_pacman_sighting_step = self.step_count
+
+        reward_context = self._build_reward_context(
+            actions=decoded_actions,
+            pellets_before=pellets_before,
+            capture_happened=capture_happened,
+            timeout_happened=timeout_happened,
+            pacman_win_happened=pacman_win_happened,
+            visible_pacman_positions=seen_positions,
+        )
+        reward_result = self.reward_strategy.compute(reward_context)
+        team_reward = reward_result.total
+        self.last_reward_context = reward_context
+        self.last_reward_result = reward_result
+        self.last_team_reward_breakdown = reward_result.breakdown
+        self.last_reward_category_totals = reward_result.category_totals
 
         # Shared reward is broadcast to every ghost.
         for ghost in self.ghosts:
@@ -270,6 +296,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 "last_pacman_sighting_position": self.last_pacman_sighting_position,
                 "last_pacman_sighting_step": self.last_pacman_sighting_step,
                 "reward_breakdown": dict(self.last_team_reward_breakdown),
+                "reward_categories": dict(self.last_reward_category_totals),
+                "reward_strategy_id": self.reward_strategy_id,
             }
 
         # If episode ended, clear active agents list according to PettingZoo convention.
@@ -473,6 +501,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         if can_move:
             agent.current_position = (new_x, new_y)
+            if isinstance(agent, Ghost):
+                agent.last_move_direction = (new_x - x, new_y - y)
             # Clear old position on the grid.
             self.global_view[x, y] = Observation.EMPTY.value
             if isinstance(agent, PacMan):
@@ -566,73 +596,62 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Return local view.
         return ghost.view
 
-    def _compute_team_reward(self, capture_happened: bool) -> float:
-        reward = float(Reward.TIMESTEP_PENALTY.value)
-        breakdown = {"timestep": float(Reward.TIMESTEP_PENALTY.value)}
+    def _remaining_pellets(self) -> int:
+        return int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0
 
-        def add_term(name: str, value: float):
-            nonlocal reward
-            reward += value
-            breakdown[name] = breakdown.get(name, 0.0) + float(value)
+    def _build_reward_context(
+        self,
+        *,
+        actions: dict[str, Action],
+        pellets_before: int,
+        capture_happened: bool,
+        timeout_happened: bool,
+        pacman_win_happened: bool,
+        visible_pacman_positions: list[tuple[int, int]] | None = None,
+    ) -> RewardContext:
+        if visible_pacman_positions is None:
+            _, visible_pacman_positions = self._collect_visible_pacman_positions()
 
-        if capture_happened:
-            add_term("GET_PACMAN", float(Reward.GET_PACMAN.value))
-
-        any_visible, seen_positions = self._collect_visible_pacman_positions()
-        if any_visible:
-            current_sighting = seen_positions[0]
-            if (not self.last_any_pacman_visible) and (self.unseen_steps >= self.newly_spotted_min_unseen_steps):
-                add_term("newly_spotted", float(Reward.NEWLY_SPOTTED.value))
-            add_term("currently_visible", float(Reward.CURRENTLY_VISIBLE.value))
-            self.last_pacman_sighting_position = current_sighting
-            self.last_pacman_sighting_step = self.step_count
-            self.unseen_steps = 0
-        else:
-            self.unseen_steps += 1
-
-        # Potential-based pursuit shaping (plan-000021 / research-000012 R1).
-        # The potential F(s) = -ALPHA * min_bfs_distance(ghosts -> TRUE Pacman) gives
-        # a dense, correct gradient toward capture at every step -- even while Pacman
-        # is unseen by the ghosts -- replacing the former stale-sighting distance term
-        # that created a stay-still trap. Using F(s') - F(s) is policy-invariant, so it
-        # adds pursuit pressure without changing the set of optimal policies.
-        current_min_distance = self._compute_min_distance_to_target(self.pacman.current_position)
-        if current_min_distance is not None:
-            potential = -POTENTIAL_SHAPING_ALPHA * float(current_min_distance)
-            if self.last_potential is not None:
-                add_term("potential_shaping", potential - self.last_potential)
-            self.last_potential = potential
-            self.last_target_min_distance = current_min_distance
-
+        ghost_transitions = []
         for ghost in self.ghosts:
-            moved = (ghost.prev_position is not None and ghost.prev_position != ghost.current_position)
-            if not moved:
-                if ghost.invalid_move:
-                    add_term("invalid_move", float(Reward.INVALID_MOVE.value))
-                else:
-                    add_term("stay_still", float(Reward.STAY_STILL.value))
+            previous = ghost.prev_position or ghost.current_position
+            local_observation = tuple(
+                tuple(int(value) for value in row)
+                for row in np.asarray(ghost.view)
+            )
+            action = actions.get(ghost.id)
+            ghost_transitions.append(
+                GhostTransition(
+                    ghost_id=ghost.id,
+                    previous_position=tuple(previous),
+                    current_position=tuple(ghost.current_position),
+                    action=None if action is None else int(action.value),
+                    invalid_move=bool(ghost.invalid_move),
+                    local_observation=local_observation,
+                )
+            )
 
-            if moved:
-                add_term("valid_move", float(Reward.VALID_MOVE.value))
-                if self._is_recently_unvisited_tile(ghost):
-                    add_term("recently_unvisited_tile", float(Reward.ENTER_RECENTLY_UNVISITED_TILE.value))
-                self._update_movement_history(ghost)
-                if ghost.reverse_streak >= 2:
-                    reversal_factor = min(ghost.reverse_streak - 1, 4)
-                    add_term(
-                        "repeated_direction_reversal",
-                        float(Reward.REPEATED_DIRECTION_REVERSAL.value) * float(reversal_factor),
-                    )
-
-            if self._update_seen_local_cells(ghost):
-                add_term("reveal_unseen_local_cells", float(Reward.REVEAL_UNSEEN_LOCAL_CELLS.value))
-
-        if self._has_overlap_or_same_corridor_following():
-            add_term("overlap_or_same_corridor", float(Reward.GHOST_OVERLAP_OR_SAME_CORRIDOR.value))
-
-        self.last_any_pacman_visible = any_visible
-        self.last_team_reward_breakdown = breakdown
-        return reward
+        pacman_previous = getattr(self.pacman, "prev_position", None)
+        if pacman_previous is None:
+            pacman_previous = self.pacman.current_position
+        visible_positions = tuple(tuple(position) for position in visible_pacman_positions)
+        return RewardContext(
+            step_count=int(self.step_count),
+            max_steps=int(self.max_steps),
+            board_shape=tuple(int(value) for value in self.global_view.shape),
+            wall_positions=self._reward_wall_positions,
+            ghosts=tuple(ghost_transitions),
+            pacman_previous_position=tuple(pacman_previous),
+            pacman_position=tuple(self.pacman.current_position),
+            pacman_visible=bool(visible_positions),
+            visible_pacman_positions=visible_positions,
+            pellets_before=int(pellets_before),
+            pellets_remaining=self._remaining_pellets(),
+            total_pellets=int(self._total_pallets),
+            capture_happened=bool(capture_happened),
+            timeout_happened=bool(timeout_happened),
+            pacman_win_happened=bool(pacman_win_happened),
+        )
 
     def _is_capture_state(self) -> bool:
         if np.any(self.global_view == Observation.CAPUTRED.value):
@@ -651,16 +670,6 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             global_pos = (ghost_x + (local_x - r), ghost_y + (local_y - r))
             seen_positions.append(global_pos)
         return len(seen_positions) > 0, seen_positions
-
-    def _compute_min_distance_to_target(self, target_position: tuple[int, int]) -> int | None:
-        distances = []
-        for ghost in self.ghosts:
-            dist = self._bfs_distance(ghost.current_position, target_position)
-            if dist is not None:
-                distances.append(dist)
-        if not distances:
-            return None
-        return min(distances)
 
     def _bfs_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int | None:
         if start == goal:
@@ -686,76 +695,6 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 queue.append(((nx, ny), dist + 1))
 
         return None
-
-    def _is_recently_unvisited_tile(self, ghost: Ghost) -> bool:
-        last_visit_step = ghost.last_tile_visit_step.get(ghost.current_position)
-        is_recently_unvisited = (
-            last_visit_step is None
-            or (self.step_count - int(last_visit_step)) > self.recently_unvisited_window
-        )
-        ghost.last_tile_visit_step[ghost.current_position] = self.step_count
-        return is_recently_unvisited
-
-    @staticmethod
-    def _get_direction(previous_position: tuple[int, int], current_position: tuple[int, int]) -> tuple[int, int]:
-        return (
-            current_position[0] - previous_position[0],
-            current_position[1] - previous_position[1],
-        )
-
-    def _update_movement_history(self, ghost: Ghost):
-        move_direction = self._get_direction(ghost.prev_position, ghost.current_position)
-        last_move_direction = ghost.last_move_direction
-        if last_move_direction is not None and move_direction == (-last_move_direction[0], -last_move_direction[1]):
-            ghost.reverse_streak += 1
-        else:
-            ghost.reverse_streak = 0
-        ghost.last_move_direction = move_direction
-
-    def _update_seen_local_cells(self, ghost: Ghost) -> bool:
-        revealed_new = False
-        x, y = ghost.current_position
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                gx, gy = x + dx, y + dy
-                if (gx, gy) not in ghost.seen_local_cells:
-                    ghost.seen_local_cells.add((gx, gy))
-                    revealed_new = True
-        return revealed_new
-
-    def _has_overlap_or_same_corridor_following(self) -> bool:
-        # Penalize exact overlap.
-        positions = [ghost.current_position for ghost in self.ghosts]
-        if len(set(positions)) < len(positions):
-            return True
-
-        # Penalize ghosts that move close in same row/column with same direction.
-        for i in range(len(self.ghosts)):
-            for j in range(i + 1, len(self.ghosts)):
-                ghost_a = self.ghosts[i]
-                ghost_b = self.ghosts[j]
-                if ghost_a.prev_position is None or ghost_b.prev_position is None:
-                    continue
-                if ghost_a.current_position == ghost_a.prev_position:
-                    continue
-                if ghost_b.current_position == ghost_b.prev_position:
-                    continue
-
-                dir_a = self._get_direction(ghost_a.prev_position, ghost_a.current_position)
-                dir_b = self._get_direction(ghost_b.prev_position, ghost_b.current_position)
-                if dir_a != dir_b:
-                    continue
-
-                same_row = ghost_a.current_position[0] == ghost_b.current_position[0]
-                same_col = ghost_a.current_position[1] == ghost_b.current_position[1]
-                if not (same_row or same_col):
-                    continue
-
-                distance = abs(ghost_a.current_position[0] - ghost_b.current_position[0]) + abs(ghost_a.current_position[1] - ghost_b.current_position[1])
-                if distance <= 2:
-                    return True
-
-        return False
 
     def _build_global_state(self) -> np.ndarray:
         rows, cols = self.global_view.shape

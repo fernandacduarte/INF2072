@@ -107,11 +107,11 @@ def _parse_device_labels(raw: str) -> list[str]:
         raise ValueError("At least one device label must be provided.")
     return labels
 
-def _load_job_metrics(path: Path | None) -> dict[tuple[str, str, str, str], dict[str, float]]:
+def _load_job_metrics(path: Path | None) -> dict[tuple[str, str, str, str, str], dict[str, float]]:
     if path is None or not path.exists():
         return {}
 
-    metrics: dict[tuple[str, str, str, str], dict[str, float]] = {}
+    metrics: dict[tuple[str, str, str, str, str], dict[str, float]] = {}
     with path.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -119,6 +119,7 @@ def _load_job_metrics(path: Path | None) -> dict[tuple[str, str, str, str], dict
             if not run_dir:
                 continue
             key = (
+                (row.get("reward_id") or "current").strip(),
                 (row.get("algorithm") or "").strip(),
                 (row.get("seed") or "").strip(),
                 (row.get("device_label") or "").strip(),
@@ -157,6 +158,12 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated algorithms to include.",
     )
     parser.add_argument(
+        "--rewards",
+        type=str,
+        default="current",
+        help="Comma-separated reward strategy IDs to include.",
+    )
+    parser.add_argument(
         "--tail-window",
         type=int,
         default=20,
@@ -186,6 +193,7 @@ def parse_args() -> argparse.Namespace:
 def summarize_runs(
     runs_root: Path,
     algorithms: list[str],
+    rewards: list[str] | None,
     tail_window: int,
     out: Path,
     devices: list[str] | None = None,
@@ -207,76 +215,82 @@ def summarize_runs(
         raise ValueError("At least one device label must be provided.")
 
     job_metrics = _load_job_metrics(jobs_path)
+    reward_ids = rewards or ["current"]
 
     rows: list[dict[str, str]] = []
-    for device in device_labels:
-        device_root = runs_root / device
-        if not device_root.exists():
-            print(f"Warning: device runs folder does not exist, skipping: {device_root}")
-            continue
+    for reward_id in reward_ids:
+        reward_root = runs_root / reward_id
+        if not reward_root.exists() and reward_id == "current":
+            reward_root = runs_root  # Backward-compatible legacy layout.
+        for device in device_labels:
+            device_root = reward_root / device
+            if not device_root.exists():
+                print(f"Warning: device runs folder does not exist, skipping: {device_root}")
+                continue
 
-        for algorithm in normalized_algorithms:
-            run_dirs = candidate_run_dirs(device_root, algorithm)
-            for run_dir in run_dirs:
-                scalars_dir = _resolve_scalars_dir(run_dir)
-                if scalars_dir is None:
-                    continue
+            for algorithm in normalized_algorithms:
+                run_dirs = candidate_run_dirs(device_root, algorithm)
+                for run_dir in run_dirs:
+                    scalars_dir = _resolve_scalars_dir(run_dir)
+                    if scalars_dir is None:
+                        continue
 
-                reward_path = scalars_dir / "collection_reward_reward_mean.csv"
-                if not reward_path.exists():
-                    continue
+                    reward_path = scalars_dir / "collection_reward_reward_mean.csv"
+                    if not reward_path.exists():
+                        continue
+                    reward_values = _read_reward_series(reward_path)
+                    if not reward_values:
+                        continue
 
-                rewards = _read_reward_series(reward_path)
-                if not rewards:
-                    continue
+                    episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
+                    episode_rewards: list[float] = []
+                    if episode_reward_path.exists():
+                        episode_rewards = _read_reward_series(episode_reward_path)
 
-                episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
-                episode_rewards: list[float] = []
-                if episode_reward_path.exists():
-                    episode_rewards = _read_reward_series(episode_reward_path)
+                    episode_final = episode_rewards[-1] if episode_rewards else float("nan")
+                    episode_tail = _tail_mean(episode_rewards, tail_window) if episode_rewards else float("nan")
+                    episode_best = max(episode_rewards) if episode_rewards else float("nan")
+                    frames_value = _read_last_frame_count(scalars_dir / "counters_total_frames.csv")
+                    checkpoint = _latest_checkpoint(run_dir)
+                    seed = _extract_seed(run_dir)
+                    mtime = datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(timespec="seconds")
 
-                episode_final = episode_rewards[-1] if episode_rewards else float("nan")
-                episode_tail = _tail_mean(episode_rewards, tail_window) if episode_rewards else float("nan")
-                episode_best = max(episode_rewards) if episode_rewards else float("nan")
+                    seed_value = "" if seed is None else str(seed)
+                    timing = job_metrics.get(
+                        (reward_id, algorithm, seed_value, device, run_dir.name), {}
+                    )
+                    duration_seconds = float(timing.get("duration_seconds", float("nan")))
+                    fps_value = float("nan")
+                    if duration_seconds > 0.0 and frames_value is not None and frames_value > 0.0:
+                        fps_value = frames_value / duration_seconds
 
-                frames_value = _read_last_frame_count(scalars_dir / "counters_total_frames.csv")
+                    rows.append(
+                        {
+                            "reward_id": reward_id,
+                            "device": device,
+                            "algorithm": algorithm,
+                            "seed": seed_value,
+                            "run_dir": run_dir.name,
+                            "run_mtime": mtime,
+                            "n_points": str(len(reward_values)),
+                            "n_episode_points": str(len(episode_rewards)),
+                            "final_reward": f"{reward_values[-1]:.6f}",
+                            "tail_mean_reward": f"{_tail_mean(reward_values, tail_window):.6f}",
+                            "best_reward": f"{max(reward_values):.6f}",
+                            "final_episode_return": _fmt_float(episode_final),
+                            "tail_mean_episode_return": _fmt_float(episode_tail),
+                            "best_episode_return": _fmt_float(episode_best),
+                            "duration_seconds": _fmt_float(duration_seconds),
+                            "frames_per_second": _fmt_float(fps_value),
+                            "checkpoint_path": "" if checkpoint is None else str(checkpoint),
+                        }
+                    )
 
-                checkpoint = _latest_checkpoint(run_dir)
-                seed = _extract_seed(run_dir)
-                mtime = datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(timespec="seconds")
-
-                seed_value = "" if seed is None else str(seed)
-                timing = job_metrics.get((algorithm, seed_value, device, run_dir.name), {})
-                duration_seconds = float(timing.get("duration_seconds", float("nan")))
-                fps_value = float("nan")
-                if duration_seconds > 0.0 and frames_value is not None and frames_value > 0.0:
-                    fps_value = frames_value / duration_seconds
-
-                rows.append(
-                    {
-                        "device": device,
-                        "algorithm": algorithm,
-                        "seed": seed_value,
-                        "run_dir": run_dir.name,
-                        "run_mtime": mtime,
-                        "n_points": str(len(rewards)),
-                        "n_episode_points": str(len(episode_rewards)),
-                        "final_reward": f"{rewards[-1]:.6f}",
-                        "tail_mean_reward": f"{_tail_mean(rewards, tail_window):.6f}",
-                        "best_reward": f"{max(rewards):.6f}",
-                        "final_episode_return": _fmt_float(episode_final),
-                        "tail_mean_episode_return": _fmt_float(episode_tail),
-                        "best_episode_return": _fmt_float(episode_best),
-                        "duration_seconds": _fmt_float(duration_seconds),
-                        "frames_per_second": _fmt_float(fps_value),
-                        "checkpoint_path": "" if checkpoint is None else str(checkpoint),
-                    }
-                )
-
-    rows.sort(key=lambda row: (row["algorithm"], row["device"], row["seed"], row["run_mtime"]))
+    rows.sort(key=lambda row: (row["reward_id"], row["algorithm"], row["device"], row["seed"], row["run_mtime"]))
 
     out.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "reward_id",
         "device",
         "algorithm",
         "seed",
@@ -305,14 +319,14 @@ def summarize_runs(
         print("No matching runs were found.")
         return rows
 
-    by_algorithm_device: dict[tuple[str, str], list[dict[str, str]]] = {}
+    by_algorithm_device: dict[tuple[str, str, str], list[dict[str, str]]] = {}
     for row in rows:
-        key = (row["algorithm"], row["device"])
+        key = (row["reward_id"], row["algorithm"], row["device"])
         by_algorithm_device.setdefault(key, []).append(row)
 
     print("\nAggregate summary (mean over runs by algorithm+device):")
-    for algorithm, device in sorted(by_algorithm_device):
-        group = by_algorithm_device[(algorithm, device)]
+    for reward_id, algorithm, device in sorted(by_algorithm_device):
+        group = by_algorithm_device[(reward_id, algorithm, device)]
         final_mean = _mean_from_rows(group, "final_reward")
         tail_mean = _mean_from_rows(group, "tail_mean_reward")
         best_mean = _mean_from_rows(group, "best_reward")
@@ -322,7 +336,7 @@ def summarize_runs(
         duration_mean = _mean_from_rows(group, "duration_seconds")
         fps_mean = _mean_from_rows(group, "frames_per_second")
         print(
-            f"- {algorithm}@{device}: runs={len(group)} "
+            f"- {reward_id}/{algorithm}@{device}: runs={len(group)} "
             f"final_mean={final_mean:.4f} tail_mean={tail_mean:.4f} best_mean={best_mean:.4f} "
             f"episode_final_mean={final_episode_mean:.4f} "
             f"episode_tail_mean={tail_episode_mean:.4f} "
@@ -336,12 +350,14 @@ def summarize_runs(
 def main() -> None:
     args = parse_args()
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
+    rewards = [item.strip() for item in args.rewards.split(",") if item.strip()]
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
     out = args.out if args.out is not None else maze_runs_root / "benchmark_summary.csv"
     devices = _parse_device_labels(args.devices)
     summarize_runs(
         runs_root=maze_runs_root,
         algorithms=algorithms,
+        rewards=rewards,
         tail_window=args.tail_window,
         out=out,
         devices=devices,
