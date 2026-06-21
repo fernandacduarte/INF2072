@@ -1,5 +1,6 @@
 # Research 000012 | fernanda-INF2072 | 2026-06-20 16:29 UTC | Reward system and ghost learning failure
 tags: reward-shaping, irl-training, marl, credit-assignment, exploration
+spawned: plan-000021
 
 ## User Brief
 

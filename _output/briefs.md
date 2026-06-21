@@ -4,6 +4,24 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-20 22:50 UTC | STARTED | 2026-06-20 22:37 UTC | research | there is something strange when i run eval. the ghosts stop and the pac man move back and forth to be in the visible range of the phantom. but the pac man does not enter in the visible range more, nor get other pellets | RESEARCH | 000022
+
+DONE | 2026-06-20 23:54 UTC | STARTED | 2026-06-20 21:31 UTC | implement | plan-000021 | PLAN | 000021
+
+DONE | 2026-06-20 21:29 UTC | STARTED | 2026-06-20 21:24 UTC | plan | reward tunning from research 12 | PLAN | 000021
+
+DONE | 2026-06-20 20:11 UTC | STARTED | 2026-06-20 20:10 UTC | implement | plan-000019 | PLAN | 000019
+
+---
+
+DONE | 2026-06-20 20:09 UTC | STARTED | 2026-06-20 20:07 UTC | plan | add --device cuda into Makefile goals | PLAN | 000019
+
+---
+
+DONE | 2026-06-20 19:48 UTC | STARTED | 2026-06-20 19:41 UTC | research | pacman policy after --maze feature
+
+---
+
 DONE | 2026-06-20 19:35 UTC | STARTED | 2026-06-20 19:32 UTC | research | after merge that introduced maze options and multiple folders output make liveplot stopped working
 
 ---

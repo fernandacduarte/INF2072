@@ -68,7 +68,18 @@ def candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
         return []
 
     prefix = f"{run_prefix_for_algorithm(normalized)}_pacman_"
-    dirs = [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
+
+    def _scan(root: Path) -> list[Path]:
+        return [p for p in root.iterdir() if p.is_dir() and p.name.startswith(prefix)]
+
+    dirs = _scan(runs_root)
+    if not dirs:
+        # BenchMARL appends a device subfolder (e.g. "cpu", "cuda") under save_folder.
+        # Search one level of non-run subdirectories to find it.
+        for sub in runs_root.iterdir():
+            if sub.is_dir() and not sub.name.startswith(prefix):
+                dirs.extend(_scan(sub))
+
     return [p for p in dirs if run_matches_algorithm(normalized, p)]
 
 

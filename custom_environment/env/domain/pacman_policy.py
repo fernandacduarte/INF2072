@@ -23,6 +23,7 @@ Design rationale: research-000006 / plan-000007 (defense-first revision).
 """
 
 from collections import deque
+from typing import Deque
 
 import numpy as np
 
@@ -57,6 +58,13 @@ class PacmanPolicy:
     # The safety cap, exposed as an attribute so experiments can tune defensive
     # conservatism without touching the constant.
     safe_distance: int = PACMAN_SAFE_DISTANCE
+
+    # Small tiebreaker penalty applied to cells visited in the last 2 steps to
+    # break A<->B oscillation saddles without affecting the safety-first priority.
+    _REVISIT_PENALTY: float = 0.01
+
+    def __init__(self) -> None:
+        self._recent: Deque[tuple[int, int]] = deque(maxlen=2)
 
     def choose_action(
         self,
@@ -97,7 +105,10 @@ class PacmanPolicy:
             safety = min(ghost_dist.get(cell, _INF), self.safe_distance)
             # Pellet progress: closer to a pellet is better, so negate distance.
             progress = -pellet_dist.get(cell, _INF)
-            key = (safety, progress)
+            # Anti-oscillation: penalize cells recently visited to break A<->B
+            # saddles where safety and pellet-progress are otherwise tied.
+            revisit_penalty = -self._REVISIT_PENALTY if cell in self._recent else 0.0
+            key = (safety, progress + revisit_penalty)
 
             if best_key is None or key > best_key:
                 best_key = key
@@ -105,6 +116,7 @@ class PacmanPolicy:
 
         if best_action is None:
             return Action.choose_random()
+        self._recent.append(pacman_pos)
         return best_action
 
     # -- Helpers -----------------------------------------------------------
