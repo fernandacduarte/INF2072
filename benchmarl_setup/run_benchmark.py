@@ -57,7 +57,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-batch-size", type=int, default=128)
     parser.add_argument("--memory-size", type=int, default=10000)
     parser.add_argument("--init-random-frames", type=int, default=1000)
-    parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
@@ -176,8 +175,6 @@ def _build_command(
         str(args.memory_size),
         "--init-random-frames",
         str(args.init_random_frames),
-        "--number-ghosts",
-        str(args.number_ghosts),
         "--grid-size",
         str(args.grid_size),
         "--maze",

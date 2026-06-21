@@ -29,7 +29,6 @@ class PacmanTaskClass(TaskClass):
 
         config = copy.deepcopy(self.config)
         grid_size = int(config.get("grid_size", 20))
-        number_ghosts = int(config.get("number_ghosts", 2))
         include_global_state = bool(config.get("include_global_state", False))
         map_name = str(config.get("map_name", "default"))
         ghost_view_size = config.get("ghost_view_size", None)
@@ -37,7 +36,6 @@ class PacmanTaskClass(TaskClass):
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
                 global_view=build_maze(name=map_name, size=grid_size),
-                number_ghosts=number_ghosts,
                 ghost_view_size=ghost_view_size,
             )
             return PettingZooWrapper(

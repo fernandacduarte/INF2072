@@ -84,7 +84,6 @@ def parse_args() -> argparse.Namespace:
         default=2000,
         help="Initial random interaction frames before learning starts.",
     )
-    parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
@@ -161,7 +160,6 @@ def main() -> None:
 
     task_config = {
         "max_cycles": 200,
-        "number_ghosts": args.number_ghosts,
         "grid_size": args.grid_size,
         "map_name": args.maze,
         "include_global_state": qmix_uses_global_state(algorithm),
