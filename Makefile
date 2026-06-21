@@ -45,11 +45,12 @@ demo-hard: ## Live window on the default maze
 screenshot: ## Save a PNG of the last rendered frame into _output/
 	$(PYTHON) custom_environment/render_demo.py --render-mode rgb_array --max-steps 80 --maze $(MAZE) --seed $(SEED) --screenshot-out _output/pacman_demo.png
 
-eval-best: ## Watch trained ghosts (best checkpoint by tail-mean reward) in a Pygame window
-	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select best --device $(DEVICE)
+eval-latest: ## Watch trained ghosts (latest checkpoint) in a Pygame window
+	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select latest --device $(DEVICE) --maze $(MAZE)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE)
+
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
 	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device $(DEVICE)

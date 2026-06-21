@@ -8,21 +8,21 @@ __pycache__/
 *.pyd
 /.vscode
 
-benchmarl_setup/*
-benchmarl_setup/runs/iql_pacman_*
-benchmarl_setup/runs/vdn_pacman_*
-benchmarl_setup/runs/qmix_pacman_*
-benchmarl_setup/runs/live_progress.csvl
-benchmarl_setup/runs/benchmark_summary.csv
-benchmarl_setup/runs/benchmark_jobs.csv
-benchmarl_setup/runs/cpu_gpu_summary_comparison.png
+/benchmarl_setup/*
+/benchmarl_setup/runs/iql_pacman_*
+/benchmarl_setup/runs/vdn_pacman_*
+/benchmarl_setup/runs/qmix_pacman_*
+/benchmarl_setup/runs/live_progress.csvl
+/benchmarl_setup/runs/benchmark_summary.csv
+/benchmarl_setup/runs/benchmark_jobs.csv
+/benchmarl_setup/runs/cpu_gpu_summary_comparison.png
 
-# Per-maze run subfolders (for example runs/default/, runs/pinklike/)
-benchmarl_setup/runs/*/iql_pacman_*
-benchmarl_setup/runs/*/vdn_pacman_*
-benchmarl_setup/runs/*/qmix_pacman_*
-benchmarl_setup/runs/*/live_progress.csvl
-benchmarl_setup/runs/*/benchmark_summary.csv
+/# Per-maze run subfolders (for example runs/default/, runs/pinklike/)
+/benchmarl_setup/runs/*/iql_pacman_*
+/benchmarl_setup/runs/*/vdn_pacman_*
+/benchmarl_setup/runs/*/qmix_pacman_*
+/benchmarl_setup/runs/*/live_progress.csvl
+/benchmarl_setup/runs/*/benchmark_summary.csv
 
 # Render screenshots
 /benchmarl_setup/runs/pacman_render*.png
@@ -36,3 +36,4 @@ benchmarl_setup/runs/*/benchmark_summary.csv
 /custom_environment/env/domain/.constant.py.un~
 /..gitignore.un~
 .venv/
+_output/tmp/*
