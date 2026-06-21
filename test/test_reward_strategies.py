@@ -13,6 +13,7 @@ from custom_environment.env.rewards import (
     load_reward_strategy,
 )
 from custom_environment.env.rewards.current import CurrentTeamReward
+from my_rewards.movement_bonus import StrongerMovementReward
 
 
 def _context() -> RewardContext:
@@ -95,3 +96,13 @@ def test_current_strategy_reset_clears_episode_history():
     strategy.reset(context)
     repeated_first = strategy.compute(context)
     assert first.breakdown == repeated_first.breakdown
+
+
+def test_stronger_movement_variant_changes_only_one_weight():
+    baseline = CurrentTeamReward().weights
+    variant = StrongerMovementReward().weights
+    assert variant.valid_move == 0.10
+    assert baseline.valid_move == 0.05
+    for field_name in baseline.__dataclass_fields__:
+        if field_name != "valid_move":
+            assert getattr(variant, field_name) == getattr(baseline, field_name)

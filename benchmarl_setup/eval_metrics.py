@@ -316,7 +316,7 @@ def evaluate(
 
 
 def evaluate_jobs(
-    jobs_path: Path,
+    jobs_paths: list[Path],
     episodes: int,
     eval_seed_base: int,
     max_steps: int,
@@ -325,10 +325,12 @@ def evaluate_jobs(
 ) -> list[dict]:
     """Evaluate the exact final checkpoint recorded for each successful matrix job."""
 
-    if not jobs_path.exists():
-        raise FileNotFoundError(f"Benchmark jobs CSV not found: {jobs_path}")
-    with jobs_path.open("r", newline="", encoding="utf-8") as handle:
-        jobs = list(csv.DictReader(handle))
+    jobs: list[dict] = []
+    for jobs_path in jobs_paths:
+        if not jobs_path.exists():
+            raise FileNotFoundError(f"Benchmark jobs CSV not found: {jobs_path}")
+        with jobs_path.open("r", newline="", encoding="utf-8") as handle:
+            jobs.extend(csv.DictReader(handle))
 
     rows: list[dict] = []
     pooled: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -563,8 +565,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--jobs-path",
         type=Path,
+        nargs="+",
         default=None,
-        help="Benchmark jobs CSV; when supplied, evaluate its exact final checkpoints.",
+        help="One or more benchmark jobs CSVs; evaluate their exact final checkpoints together.",
     )
     parser.add_argument("--episodes", type=int, default=100, help="Eval episodes per training seed.")
     parser.add_argument(
@@ -623,7 +626,7 @@ def main() -> None:
 
     if args.jobs_path is not None:
         evaluate_jobs(
-            jobs_path=args.jobs_path,
+            jobs_paths=args.jobs_path,
             episodes=args.episodes,
             eval_seed_base=args.eval_seed_base,
             max_steps=args.max_steps,

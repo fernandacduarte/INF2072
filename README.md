@@ -518,6 +518,10 @@ The behavior-compatible default is
 create a zero-argument `RewardStrategy` subclass with a unique `strategy_id`; no
 central registry edit is required.
 
+Commands in this section provide two collapsible platform options. Windows is
+expanded by default and uses the Python launcher `py -3.11`; macOS/Linux uses
+`python`. Run all commands from the project root.
+
 #### Understanding `module.path:ClassName`
 
 A reward class is identified with a Python import path in this format:
@@ -592,11 +596,25 @@ class PursuitReward(RewardStrategy):
 
 Select it with:
 
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-class my_rewards.pursuit:PursuitReward
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
+
 ```bash
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-class my_rewards.pursuit:PursuitReward
 ```
+
+</details>
 
 If the file is directly in the project root as `pursuit_reward.py`, use:
 
@@ -617,13 +635,39 @@ Every CLI-loaded reward class must:
 
 You can verify an import path without starting training:
 
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 -c "from custom_environment.env.rewards import load_reward_strategy; print(load_reward_strategy('my_rewards.pursuit:PursuitReward').strategy_id)"
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
+
 ```bash
 python -c "from custom_environment.env.rewards import load_reward_strategy; print(load_reward_strategy('my_rewards.pursuit:PursuitReward').strategy_id)"
 ```
 
+</details>
+
 The expected output for the example above is `pursuit`.
 
 Paired multi-seed comparison:
+
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-classes team_a.rewards:RewardA,team_b.rewards:RewardB
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
 
 ```bash
 python benchmarl_setup/run_benchmark.py \
@@ -632,11 +676,24 @@ python benchmarl_setup/run_benchmark.py \
   --reward-classes team_a.rewards:RewardA,team_b.rewards:RewardB
 ```
 
+</details>
+
 Runs are isolated under `<runs>/<maze>/<strategy_id>/<device>/`. After training,
 the benchmark evaluates every final checkpoint on the same episode seeds and writes
 capture-rate/time-to-capture comparisons. Raw returns remain diagnostic only because
 reward scales are not comparable between strategies. Use `--eval-episodes 0` to skip
 the automatic objective evaluation.
+
+Objective evaluation is a post-training phase: it loads each final checkpoint and
+runs additional episodes to measure behavior such as capture rate and
+time-to-capture. It does not update the policy or change the completed training run.
+By default, `run_benchmark.py` evaluates every checkpoint for 100 episodes;
+`--eval-episodes N` changes that number, while `--eval-episodes 0` disables the phase.
+This is useful when reward variants are trained in separate commands: the baseline
+and variant commands below use `0` to avoid evaluating each one separately, then a
+single `eval_metrics.py` command evaluates both sets of checkpoints together using
+the same episode seeds. That final paired evaluation is both fairer and avoids
+duplicated work.
 
 #### Regression-check the refactor against `main`
 
@@ -647,9 +704,23 @@ run explicitly selects `CurrentTeamReward`; old `main` uses its built-in reward.
 1. From the project root on the refactor branch, using the project's Python 3.11
    environment, run:
 
+   <details open>
+   <summary><strong>Windows (default)</strong></summary>
+
+   ```cmd
+   py -3.11 scripts\run_refactored_reward_regression.py
+   ```
+
+   </details>
+
+   <details>
+   <summary><strong>macOS/Linux</strong></summary>
+
    ```bash
    python scripts/run_refactored_reward_regression.py
    ```
+
+   </details>
 
    Results are written outside the repository under the system temporary directory,
    in `inf2072_reward_regression/refactored`. The script also copies the baseline
@@ -662,28 +733,161 @@ run explicitly selects `CurrentTeamReward`; old `main` uses its built-in reward.
    git switch main
    ```
 
-3. Run the exact baseline command printed by step 1. On macOS/Linux it normally
-   looks like:
+3. Run the exact baseline command printed by step 1. Typical paths are:
+
+   <details open>
+   <summary><strong>Windows (default)</strong></summary>
+
+   ```cmd
+   py -3.11 "%TEMP%\inf2072_reward_regression\tools\run_main_reward_regression.py"
+   ```
+
+   </details>
+
+   <details>
+   <summary><strong>macOS/Linux</strong></summary>
 
    ```bash
    python /tmp/inf2072_reward_regression/tools/run_main_reward_regression.py
    ```
 
+   </details>
+
    Use the printed path rather than copying this example; Windows uses its own
    temporary-directory path. The baseline script refuses to run unless the current
    branch is `main` and the worktree is clean.
 
-4. Run the comparator command printed by the baseline script. It normally looks like:
+4. Run the comparator command printed by the baseline script:
+
+   <details open>
+   <summary><strong>Windows (default)</strong></summary>
+
+   ```cmd
+   py -3.11 "%TEMP%\inf2072_reward_regression\tools\compare_reward_regression.py"
+   ```
+
+   </details>
+
+   <details>
+   <summary><strong>macOS/Linux</strong></summary>
 
    ```bash
    python /tmp/inf2072_reward_regression/tools/compare_reward_regression.py
    ```
+
+   </details>
 
 The comparator checks every common non-timing BenchMARL scalar series, including
 step rewards, episode returns, loss, gradient norm, and frame counters. `SAME` means
 the maximum absolute difference is at most `1e-8`; timing metrics are intentionally
 ignored. If repeating the experiment, remove or rename the prior temporary output
 first—the runners refuse to mix multiple runs in one comparison directory.
+
+#### Compare the default reward with a one-weight variant
+
+`StrongerMovementReward` is an example experimental strategy. It inherits the full
+current reward and changes only `valid_move`, from `0.05` to `0.10`. Its import path is:
+
+```text
+my_rewards.movement_bonus:StrongerMovementReward
+```
+
+First train the current reward baseline:
+
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --reward-classes custom_environment.env.rewards.current:CurrentTeamReward --seeds 0,1,2 --max-frames 60000 --maze default --devices cpu --save-folder benchmarl_setup\runs\reward_weight_study --jobs-out benchmarl_setup\runs\reward_weight_study\current_jobs.csv --summary-out benchmarl_setup\runs\reward_weight_study\current_training_summary.csv --eval-episodes 0 --no-liveplot-report
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
+
+```bash
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --reward-classes custom_environment.env.rewards.current:CurrentTeamReward \
+  --seeds 0,1,2 \
+  --max-frames 60000 \
+  --maze default \
+  --devices cpu \
+  --save-folder benchmarl_setup/runs/reward_weight_study \
+  --jobs-out benchmarl_setup/runs/reward_weight_study/current_jobs.csv \
+  --summary-out benchmarl_setup/runs/reward_weight_study/current_training_summary.csv \
+  --eval-episodes 0 \
+  --no-liveplot-report
+```
+
+</details>
+
+Then train the one-weight variant with the same algorithms, seeds, frame budget,
+maze, and device:
+
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --reward-classes my_rewards.movement_bonus:StrongerMovementReward --seeds 0,1,2 --max-frames 60000 --maze default --devices cpu --save-folder benchmarl_setup\runs\reward_weight_study --jobs-out benchmarl_setup\runs\reward_weight_study\valid_move_010_jobs.csv --summary-out benchmarl_setup\runs\reward_weight_study\valid_move_010_training_summary.csv --eval-episodes 0 --no-liveplot-report
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
+
+```bash
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --reward-classes my_rewards.movement_bonus:StrongerMovementReward \
+  --seeds 0,1,2 \
+  --max-frames 60000 \
+  --maze default \
+  --devices cpu \
+  --save-folder benchmarl_setup/runs/reward_weight_study \
+  --jobs-out benchmarl_setup/runs/reward_weight_study/valid_move_010_jobs.csv \
+  --summary-out benchmarl_setup/runs/reward_weight_study/valid_move_010_training_summary.csv \
+  --eval-episodes 0 \
+  --no-liveplot-report
+```
+
+</details>
+
+Finally, evaluate the already-trained checkpoints together on the same 100 episode
+seeds:
+
+<details open>
+<summary><strong>Windows (default)</strong></summary>
+
+```cmd
+py -3.11 benchmarl_setup\eval_metrics.py --jobs-path benchmarl_setup\runs\reward_weight_study\current_jobs.csv benchmarl_setup\runs\reward_weight_study\valid_move_010_jobs.csv --episodes 100 --eval-seed-base 10000 --device cpu --out benchmarl_setup\runs\reward_weight_study\reward_comparison.csv
+```
+
+</details>
+
+<details>
+<summary><strong>macOS/Linux</strong></summary>
+
+```bash
+python benchmarl_setup/eval_metrics.py \
+  --jobs-path \
+    benchmarl_setup/runs/reward_weight_study/current_jobs.csv \
+    benchmarl_setup/runs/reward_weight_study/valid_move_010_jobs.csv \
+  --episodes 100 \
+  --eval-seed-base 10000 \
+  --device cpu \
+  --out benchmarl_setup/runs/reward_weight_study/reward_comparison.csv
+```
+
+</details>
+
+Use `reward_comparison_by_variant.csv` for the final comparison. Capture-rate mean
+and time-to-capture mean are the decision metrics; raw return values are diagnostic
+only because changing a reward weight also changes the return scale. For a quicker
+smoke experiment, replace `--max-frames 60000` with `--max-frames 10000` in both
+training commands.
 
 ### Python Environment
 
