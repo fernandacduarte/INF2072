@@ -126,8 +126,8 @@ class LiveComparisonPlotter:
         }
 
         self.style_map = {
-            "cpu": "-",
-            "cuda": "--",
+            "cpu": "--",
+            "cuda": "-",
             "default": "-",
         }
 
@@ -140,6 +140,14 @@ class LiveComparisonPlotter:
         self.ax.grid(True, alpha=0.3)
         plt.ion()
         plt.show(block=False)
+
+    def _line_style_for_device(self, device_key: str) -> str:
+        key = (device_key or "").strip().lower()
+        if key.startswith("cuda"):
+            return "-"
+        if key.startswith("cpu"):
+            return "--"
+        return self.style_map.get(key, "-")
 
     def update_from_file(self, progress_file: Path) -> None:
         data = _parse_progress_file(progress_file)
@@ -168,7 +176,7 @@ class LiveComparisonPlotter:
 
                 frames, mean_rewards, std_rewards, n_runs = aggregated
                 color = self.color_map.get(algorithm, "#1f77b4")
-                line_style = self.style_map.get(device_key, "-.")
+                line_style = self._line_style_for_device(device_key)
                 series_key = f"{algorithm}@{device_key}"
                 active_keys.add(series_key)
                 legend_label = f"{algorithm.upper()}@{device_key} (n={n_runs})"
