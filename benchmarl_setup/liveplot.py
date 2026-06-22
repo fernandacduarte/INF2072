@@ -109,14 +109,29 @@ def _aggregate_algorithm_runs(
 
 
 class LiveComparisonPlotter:
-    def __init__(self, algorithms: list[str], window: int, device_selector: str) -> None:
+    def __init__(
+        self,
+        algorithms: list[str],
+        window: int,
+        device_selector: str,
+        epsilon_max_frames: int,
+        epsilon_init: float,
+        epsilon_end: float,
+        epsilon_anneal_ratio: float,
+    ) -> None:
         self.algorithms = algorithms
         self.window = window
         self.device_selector = device_selector
+        self.epsilon_max_frames = max(1, int(epsilon_max_frames))
+        self.epsilon_init = float(epsilon_init)
+        self.epsilon_end = float(epsilon_end)
+        self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
+        self.ax_eps = self.ax.twinx()
         self.lines: dict[str, any] = {}
         self.fills: dict[str, any] = {}
+        self.epsilon_line = None
 
         self.color_map = {
             "iql": "#1f77b4",
@@ -138,6 +153,9 @@ class LiveComparisonPlotter:
         self.ax.set_xlabel("Total frames")
         self.ax.set_ylabel("Reward")
         self.ax.grid(True, alpha=0.3)
+        self.ax_eps.set_ylabel("Epsilon", color="red")
+        self.ax_eps.set_ylim(0.0, 1.05)
+        self.ax_eps.tick_params(axis="y", colors="red")
         plt.ion()
         plt.show(block=False)
 
@@ -149,6 +167,33 @@ class LiveComparisonPlotter:
             return "--"
         return self.style_map.get(key, "-")
 
+    def _epsilon_for_frames(self, frames: np.ndarray) -> np.ndarray:
+        anneal_frames = max(1.0, float(self.epsilon_max_frames) * self.epsilon_anneal_ratio)
+        span = self.epsilon_init - self.epsilon_end
+        eps = self.epsilon_init - span * np.minimum(frames, anneal_frames) / anneal_frames
+        return np.maximum(eps, self.epsilon_end)
+
+    def _update_epsilon_curve(self, max_display_frame: float, show: bool) -> None:
+        if not show or max_display_frame <= 0:
+            if self.epsilon_line is not None:
+                self.epsilon_line.remove()
+                self.epsilon_line = None
+            return
+
+        x = np.linspace(0.0, max_display_frame, 256, dtype=np.float64)
+        y = self._epsilon_for_frames(x)
+        if self.epsilon_line is None:
+            (self.epsilon_line,) = self.ax_eps.plot(
+                x,
+                y,
+                color="red",
+                linewidth=2,
+                linestyle="-",
+                label="epsilon",
+            )
+        else:
+            self.epsilon_line.set_data(x, y)
+
     def update_from_file(self, progress_file: Path) -> None:
         data = _parse_progress_file(progress_file)
 
@@ -158,6 +203,7 @@ class LiveComparisonPlotter:
         self.fills.clear()
 
         active_keys: set[str] = set()
+        max_display_frame = 0.0
         for algorithm in self.algorithms:
             by_device = data.get(algorithm, {})
             if not by_device:
@@ -175,6 +221,8 @@ class LiveComparisonPlotter:
                     continue
 
                 frames, mean_rewards, std_rewards, n_runs = aggregated
+                if frames.size:
+                    max_display_frame = max(max_display_frame, float(np.nanmax(frames)))
                 color = self.color_map.get(algorithm, "#1f77b4")
                 line_style = self._line_style_for_device(device_key)
                 series_key = f"{algorithm}@{device_key}"
@@ -214,8 +262,16 @@ class LiveComparisonPlotter:
                 fill.remove()
 
         # Keep legend current with active algorithms.
-        if self.lines:
-            self.ax.legend()
+        show_epsilon = "iql" in self.algorithms
+        self._update_epsilon_curve(max_display_frame, show=show_epsilon)
+
+        handles, labels = self.ax.get_legend_handles_labels()
+        if self.epsilon_line is not None:
+            eps_handles, eps_labels = self.ax_eps.get_legend_handles_labels()
+            handles += eps_handles
+            labels += eps_labels
+        if handles:
+            self.ax.legend(handles, labels)
 
         self.ax.relim()
         self.ax.autoscale_view()
@@ -276,6 +332,30 @@ def parse_args() -> argparse.Namespace:
             "Use 'all' to show all device labels present in the file."
         ),
     )
+    parser.add_argument(
+        "--epsilon-max-frames",
+        type=int,
+        default=100000,
+        help="Frame budget used for epsilon schedule overlay.",
+    )
+    parser.add_argument(
+        "--epsilon-init",
+        type=float,
+        default=1.0,
+        help="Initial epsilon for overlay.",
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=0.05,
+        help="Final epsilon floor for overlay.",
+    )
+    parser.add_argument(
+        "--epsilon-anneal-ratio",
+        type=float,
+        default=0.8,
+        help="Fraction of epsilon-max-frames used for linear anneal.",
+    )
     return parser.parse_args()
 
 
@@ -302,15 +382,30 @@ def main() -> None:
 
     if args.window < 1:
         raise ValueError("--window must be >= 1")
+    if args.epsilon_max_frames < 1:
+        raise ValueError("--epsilon-max-frames must be >= 1")
+    if not (0.0 <= args.epsilon_end <= args.epsilon_init <= 1.0):
+        raise ValueError("--epsilon values must satisfy 0 <= epsilon-end <= epsilon-init <= 1")
+    if not (0.0 < args.epsilon_anneal_ratio <= 1.0):
+        raise ValueError("--epsilon-anneal-ratio must be in (0, 1]")
 
     print(f"[LivePlot] Watching: {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
     print(f"[LivePlot] Device selector: {device_selector}")
+    print(
+        "[LivePlot] Epsilon overlay: "
+        f"init={args.epsilon_init} end={args.epsilon_end} "
+        f"anneal_ratio={args.epsilon_anneal_ratio} max_frames={args.epsilon_max_frames}"
+    )
 
     plotter = LiveComparisonPlotter(
         algorithms=algorithms,
         window=max(1, args.window),
         device_selector=device_selector,
+        epsilon_max_frames=args.epsilon_max_frames,
+        epsilon_init=args.epsilon_init,
+        epsilon_end=args.epsilon_end,
+        epsilon_anneal_ratio=args.epsilon_anneal_ratio,
     )
     try:
         while True:
