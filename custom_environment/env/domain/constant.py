@@ -10,10 +10,10 @@ class Observation(Enum):
     WALL = auto()
 
 class Action(Enum):
-    MOVE_RIGHT = auto()
-    MOVE_LEFT = auto()
-    MOVE_UP = auto()
-    MOVE_DOWN = auto()
+    MOVE_RIGHT = 0
+    MOVE_LEFT = 1
+    MOVE_UP = 2
+    MOVE_DOWN = 3
 
     @classmethod
     def choose_random(cls) -> 'Action':

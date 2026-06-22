@@ -266,6 +266,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             and int(self._pellet_mask.sum()) == 0
         )
         pacman_win_happened = pallets_all_eaten and not capture_happened
+        game_over_happened = bool(capture_happened or timeout_happened or pacman_win_happened)
 
         any_visible, seen_positions = self._collect_visible_pacman_positions()
         if any_visible:
@@ -290,8 +291,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Shared reward is broadcast to every ghost.
         for ghost in self.ghosts:
             rewards[ghost.id] = float(team_reward)
-            terminations[ghost.id] = bool(capture_happened)
-            truncations[ghost.id] = bool(timeout_happened or pacman_win_happened)
+            terminations[ghost.id] = game_over_happened
+            truncations[ghost.id] = False
             infos[ghost.id] = {
                 "last_pacman_sighting_position": self.last_pacman_sighting_position,
                 "last_pacman_sighting_step": self.last_pacman_sighting_step,
@@ -301,7 +302,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             }
 
         # If episode ended, clear active agents list according to PettingZoo convention.
-        if any(terminations.values()) or all(truncations.values()):
+        if any(terminations.values()):
             self.agents = []
 
         # Return full transition tuple expected by ParallelEnv step API.
@@ -570,12 +571,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             return action
 
         action_int = int(action)
-        # Prefer 0-based index decoding for policy outputs from Discrete(4).
+        # Ghost actions follow Gym Discrete(4): integers in [0, 3].
         if 0 <= action_int < len(Action):
-            return list(Action)[action_int]
-        if any(action_int == item.value for item in Action):
             return Action(action_int)
-        raise ValueError(f"Invalid action token for ghost policy: {action}")
+        raise ValueError(f"Invalid action token for ghost policy: {action}. Expected int in [0, 3].")
 
     # Compute the (view_size x view_size) local observation for one ghost.
     def _get_observation(self, ghost: Ghost) -> np.ndarray:

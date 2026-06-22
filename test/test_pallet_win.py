@@ -1,8 +1,8 @@
 """Smoke tests for the pallet-win mechanic (plan-000003).
 
 Pacman wins when every pallet on the board is eaten. The ghost team then
-receives the selected strategy's pallet-win reward and the episode truncates, symmetric
-with the existing timeout-loss outcome.
+receives the selected strategy's pallet-win reward and the episode terminates,
+symmetric with the existing timeout-loss outcome.
 
 These tests build a ``MazeSpec`` via ``parse_layout`` rather than a raw grid:
 the constructor's back-compat ``spec_from_grid`` path assigns out-of-bounds
@@ -83,7 +83,7 @@ def test_pallets_remaining_norm_drops_to_zero():
 
 
 def test_pacman_win_terminates_with_penalty():
-    """Step 3: when all pallets are eaten, the episode truncates and the team
+    """Step 3: when all pallets are eaten, the episode terminates and the team
     takes the PACMAN_WIN_PALLETS penalty (capture not happening)."""
     env = _make_env(PalletTerminalOnlyReward())
     env.reset()
@@ -95,8 +95,8 @@ def test_pacman_win_terminates_with_penalty():
     actions = {ghost.id: Action.MOVE_LEFT for ghost in env.ghosts}
     _, rewards, terminations, truncations, _ = env.step(actions)
 
-    assert all(truncations.values()), "pallet exhaustion must truncate the episode"
-    assert not any(terminations.values()), "no capture should be flagged"
+    assert all(terminations.values()), "pallet exhaustion must terminate the episode"
+    assert not any(truncations.values()), "game-rule endings should not truncate"
     for ghost_id in rewards:
         assert rewards[ghost_id] == -20.0
     # PettingZoo convention: active agents cleared once the episode ends.

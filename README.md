@@ -229,14 +229,15 @@ into a `MazeSpec` (grid + spawns + cosmetic pellet mask). The map itself declare
 entity starts, so there are no hardcoded spawn positions. Characters:
 
 - `%` or `#` — wall
-- `.` — pellet (cosmetic only);  `o` — power pellet (treated as a pellet for now)
+- `.` — pellet;  `o` — power pellet (treated as a pellet for now)
 - `G` — ghost spawn (the number of ghosts equals the number of `G`s)
 - `P` — Pac-Man spawn (exactly one)
 - space (or any other char) — empty, no pellet
 
 `parse_layout` validates a single `P`, at least one `G`, a solid border, and full connectivity
-(`assert_connected`). Pellets are **cosmetic** — they do not affect observations, reward, or
-termination. To add a maze, define a new layout list + register it in the `MAZES` dict.
+(`assert_connected`). Pellets do not alter per-step local observations, but they do affect
+episode outcomes: Pacman wins when all pellets are eaten, which applies the configured
+terminal reward outcome. To add a maze, define a new layout list + register it in the `MAZES` dict.
 
 The selected maze is supported by training, benchmarking, and the render demo:
 
