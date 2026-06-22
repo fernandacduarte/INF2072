@@ -32,11 +32,13 @@ class PacmanTaskClass(TaskClass):
         include_global_state = bool(config.get("include_global_state", False))
         map_name = str(config.get("map_name", "default"))
         ghost_view_size = config.get("ghost_view_size", None)
+        reward_class = config.get("reward_class", None)
 
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
                 global_view=build_maze(name=map_name, size=grid_size),
                 ghost_view_size=ghost_view_size,
+                reward_strategy=reward_class,
             )
             return PettingZooWrapper(
                 env=env,

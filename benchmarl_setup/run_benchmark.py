@@ -21,6 +21,11 @@ from summarize_benchmark_runs import summarize_runs
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = PROJECT_ROOT / "benchmarl_setup" / "run_pacman_benchmarl.py"
+EVAL_METRICS_PATH = PROJECT_ROOT / "benchmarl_setup" / "eval_metrics.py"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from custom_environment.env.rewards import DEFAULT_REWARD_CLASS, load_reward_strategy
 
 
 def _parse_seeds(raw: str) -> list[int]:
@@ -44,6 +49,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="iql,vdn,qmixlocal,qmixglobal",
         help="Comma-separated algorithms to run (for example: iql,vdn,qmixlocal,qmixglobal).",
+    )
+    parser.add_argument(
+        "--reward-classes",
+        type=str,
+        default=DEFAULT_REWARD_CLASS,
+        help="Comma-separated reward implementations as module:Class.",
     )
     parser.add_argument(
         "--seeds",
@@ -146,6 +157,24 @@ def parse_args() -> argparse.Namespace:
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_jobs.csv").resolve()),
         help="Output CSV path for per-job wall-clock timing records.",
     )
+    parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=100,
+        help="Paired objective-evaluation episodes per trained checkpoint (0 disables).",
+    )
+    parser.add_argument(
+        "--eval-seed-base",
+        type=int,
+        default=0,
+        help="First objective-evaluation seed, shared across all reward variants.",
+    )
+    parser.add_argument(
+        "--eval-out",
+        type=str,
+        default=None,
+        help="Objective evaluation CSV (default: <save-folder>/<maze>/reward_eval.csv).",
+    )
     return parser.parse_args()
 
 
@@ -155,6 +184,7 @@ def _build_command(
     seed: int,
     requested_device: str,
     save_folder: Path,
+    reward_class: str,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -179,6 +209,8 @@ def _build_command(
         str(args.grid_size),
         "--maze",
         str(args.maze),
+        "--reward-class",
+        reward_class,
         "--save-folder",
         str(save_folder),
         "--save-folder-includes-maze",
@@ -386,6 +418,8 @@ def _write_job_records(path: Path, records: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "algorithm",
+        "reward_id",
+        "reward_class",
         "seed",
         "requested_device",
         "resolved_device",
@@ -409,10 +443,12 @@ def _run_algorithm_serial_seeds(
     algorithm: str,
     device_config: dict[str, str],
     save_folder: Path,
+    reward_id: str,
+    reward_class: str,
     seeds: list[int],
     stop_event: threading.Event,
-) -> tuple[list[tuple[str, int, int, str]], list[dict[str, str]]]:
-    failures: list[tuple[str, int, int, str]] = []
+) -> tuple[list[tuple[str, str, int, int, str]], list[dict[str, str]]]:
+    failures: list[tuple[str, str, int, int, str]] = []
     job_records: list[dict[str, str]] = []
     for seed in seeds:
         if args.stop_on_error and stop_event.is_set():
@@ -425,9 +461,10 @@ def _run_algorithm_serial_seeds(
             seed=seed,
             requested_device=device_config["requested"],
             save_folder=save_folder,
+            reward_class=reward_class,
         )
         print(
-            f"[algorithm={algorithm}] seed={seed} "
+            f"[algorithm={algorithm}] reward={reward_id} seed={seed} "
             f"requested_device={device_config['requested']} resolved_device={device_config['resolved']}"
         )
         print(" ".join(cmd))
@@ -451,6 +488,8 @@ def _run_algorithm_serial_seeds(
         job_records.append(
             {
                 "algorithm": algorithm,
+                "reward_id": reward_id,
+                "reward_class": reward_class,
                 "seed": str(seed),
                 "requested_device": device_config["requested"],
                 "resolved_device": device_config["resolved"],
@@ -470,7 +509,15 @@ def _run_algorithm_serial_seeds(
                 f"algorithm={algorithm} seed={seed} "
                 f"device={device_config['resolved']} returncode={completed.returncode}"
             )
-            failures.append((algorithm, seed, completed.returncode, device_config["resolved"]))
+            failures.append(
+                (
+                    algorithm,
+                    reward_id,
+                    seed,
+                    completed.returncode,
+                    device_config["resolved"],
+                )
+            )
             if args.stop_on_error:
                 stop_event.set()
                 break
@@ -490,6 +537,23 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
+    reward_specs: list[tuple[str, str]] = []
+    reward_ids: set[str] = set()
+    for class_path in (item.strip() for item in args.reward_classes.split(",")):
+        if not class_path:
+            continue
+        strategy = load_reward_strategy(class_path)
+        if strategy.strategy_id in reward_ids:
+            raise ValueError(f"Duplicate reward strategy_id: {strategy.strategy_id!r}")
+        reward_ids.add(strategy.strategy_id)
+        reward_specs.append((strategy.strategy_id, class_path))
+    if not reward_specs:
+        raise ValueError("At least one reward class must be provided.")
+    if args.eval_episodes < 0:
+        raise ValueError("--eval-episodes must be non-negative.")
+    if args.eval_episodes and not args.checkpoint_at_end:
+        raise ValueError("Automatic objective evaluation requires --checkpoint-at-end.")
+
     seeds = _parse_seeds(args.seeds)
     maze_runs_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     live_progress_file = (
@@ -502,11 +566,19 @@ def main() -> None:
         if args.summary_out is not None
         else maze_runs_root / "benchmark_summary.csv"
     )
+    eval_out = (
+        Path(args.eval_out)
+        if args.eval_out is not None
+        else maze_runs_root / "reward_eval.csv"
+    )
     device_configs = _build_device_configs(args)
 
     base_save_folder = maze_runs_root
     runs_roots_by_label = {
-        cfg["label"]: _save_folder_for_device(base_save_folder, cfg["resolved"])
+        f"{reward_id}@{cfg['label']}": _save_folder_for_device(
+            base_save_folder / reward_id, cfg["resolved"]
+        )
+        for reward_id, _ in reward_specs
         for cfg in device_configs
     }
     for label, root in runs_roots_by_label.items():
@@ -519,7 +591,7 @@ def main() -> None:
             f"label={cfg['label']} reason={cfg['reason']}"
         )
 
-    failures: list[tuple[str, int, int, str]] = []
+    failures: list[tuple[str, str, int, int, str]] = []
     job_records: list[dict[str, str]] = []
 
     reporter: ProgressReporter | None = None
@@ -533,7 +605,7 @@ def main() -> None:
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")
 
-    total = len(algorithms) * len(seeds) * len(device_configs)
+    total = len(algorithms) * len(reward_specs) * len(seeds) * len(device_configs)
     print(
         "Running benchmark jobs with parallel algorithm-device workers and serial seeds per worker. "
         f"Total jobs: {total}"
@@ -541,7 +613,14 @@ def main() -> None:
 
     stop_event = threading.Event()
     worker_specs = [
-        (algorithm, cfg, runs_roots_by_label[cfg["label"]])
+        (
+            algorithm,
+            reward_id,
+            reward_class,
+            cfg,
+            runs_roots_by_label[f"{reward_id}@{cfg['label']}"],
+        )
+        for reward_id, reward_class in reward_specs
         for cfg in device_configs
         for algorithm in algorithms
     ]
@@ -554,10 +633,12 @@ def main() -> None:
                     algorithm,
                     device_config,
                     save_folder,
+                    reward_id,
+                    reward_class,
                     seeds,
                     stop_event,
-                ): (algorithm, device_config["resolved"])
-                for algorithm, device_config, save_folder in worker_specs
+                ): (algorithm, reward_id, device_config["resolved"])
+                for algorithm, reward_id, reward_class, device_config, save_folder in worker_specs
             }
 
             for future, worker_id in future_map.items():
@@ -566,12 +647,12 @@ def main() -> None:
                     failures.extend(worker_failures)
                     job_records.extend(worker_records)
                 except Exception as exc:
-                    algorithm, resolved_device = worker_id
+                    algorithm, reward_id, resolved_device = worker_id
                     print(
                         "Worker crashed: "
-                        f"algorithm={algorithm} device={resolved_device} error={exc}"
+                        f"algorithm={algorithm} reward={reward_id} device={resolved_device} error={exc}"
                     )
-                    failures.append((algorithm, -1, 1, resolved_device))
+                    failures.append((algorithm, reward_id, -1, 1, resolved_device))
                     if args.stop_on_error:
                         stop_event.set()
     finally:
@@ -584,14 +665,33 @@ def main() -> None:
     print()
     if failures:
         print("Benchmark finished with failures:")
-        for algorithm, seed, returncode, resolved_device in failures:
+        for algorithm, reward_id, seed, returncode, resolved_device in failures:
             print(
-                f"- algorithm={algorithm} seed={seed} device={resolved_device} "
+                f"- algorithm={algorithm} reward={reward_id} seed={seed} device={resolved_device} "
                 f"returncode={returncode}"
             )
         raise SystemExit(1)
 
     print("Benchmark finished successfully.")
+
+    if args.eval_episodes:
+        eval_command = [
+            sys.executable,
+            str(EVAL_METRICS_PATH),
+            "--jobs-path",
+            str(jobs_out),
+            "--episodes",
+            str(args.eval_episodes),
+            "--eval-seed-base",
+            str(args.eval_seed_base),
+            "--out",
+            str(eval_out),
+        ]
+        print("Running paired objective evaluation:")
+        print(" ".join(eval_command))
+        completed_eval = subprocess.run(eval_command, check=False)
+        if completed_eval.returncode != 0:
+            raise SystemExit(completed_eval.returncode)
 
     if args.no_summary:
         print("Summary generation skipped (--no-summary).")
@@ -600,6 +700,7 @@ def main() -> None:
     summarize_runs(
         runs_root=base_save_folder,
         algorithms=algorithms,
+        rewards=[reward_id for reward_id, _ in reward_specs],
         tail_window=args.tail_window,
         out=summary_out,
         devices=[cfg["label"] for cfg in device_configs],

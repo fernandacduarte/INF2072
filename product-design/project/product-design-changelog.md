@@ -6,6 +6,7 @@
 
 | Date | Plan | Change | Description |
 |------|------|--------|-------------|
+| 2026-06-21 | reward-strategy-refactor | Changed | Extracted reward calculation and history into immutable-context `RewardStrategy` classes; added import-path selection, reward-matrix benchmarks, isolated run folders, and paired objective evaluation by capture rate/time-to-capture. |
 | 2026-06-13 | - | initial | Design documentation created via `/design` |
 | 2026-06-20 | plan-000019 | Changed | Added `DEVICE ?= cpu` Makefile variable; wired `--devices $(DEVICE)` to `benchmark`, `--device $(DEVICE)` to `eval-best` and `liveplot`. Source: agent (post-skill). |
 | 2026-06-20 | plan-000014 | Removed | Win-rate evaluation harness (`run_win_rate`, `summarize_win_rate`, `_resolve_checkpoint`, CLI args `--episodes`/`--eval-epsilon`/`--win-rate-out`/`--seed`) removed from `eval.py`. `classify_outcome` retained (used by render path). Source: agent (post-skill). |

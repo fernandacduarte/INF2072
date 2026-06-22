@@ -14,6 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarl_setup.pacman_benchmarl_task import PacmanTask, register_pacman_task
+from custom_environment.env.rewards import (
+    DEFAULT_REWARD_CLASS,
+    load_reward_strategy,
+)
 from benchmarl_setup.algorithm_utils import (
     SUPPORTED_MAZES,
     normalize_algorithm,
@@ -99,6 +103,12 @@ def parse_args() -> argparse.Namespace:
         help="Maze layout to train on.",
     )
     parser.add_argument(
+        "--reward-class",
+        type=str,
+        default=DEFAULT_REWARD_CLASS,
+        help="Reward implementation as module:Class (must be a zero-argument RewardStrategy).",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -139,6 +149,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     algorithm = normalize_algorithm(args.algorithm)
+    reward_strategy = load_reward_strategy(args.reward_class)
     resolved_device, resolution_reason = resolve_device(
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
@@ -153,6 +164,10 @@ def main() -> None:
     full_task_name = register_pacman_task()
     print(f"Registered task: {full_task_name}")
     print(
+        "Reward strategy | "
+        f"id={reward_strategy.strategy_id} | class={args.reward_class}"
+    )
+    print(
         "Device selection | "
         f"requested={args.device} | resolved={resolved_device} | "
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
@@ -163,6 +178,8 @@ def main() -> None:
         "grid_size": args.grid_size,
         "map_name": args.maze,
         "include_global_state": qmix_uses_global_state(algorithm),
+        "reward_class": args.reward_class,
+        "reward_id": reward_strategy.strategy_id,
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)
