@@ -21,14 +21,14 @@ class CurrentRewardWeights:
     pacman_timeout_win: float = -20.0
     pacman_win_pellets: float = -20.0
     newly_spotted: float = 1.0
-    currently_visible: float = 0.3
+    currently_visible: float = 0.2
     enter_recently_unvisited_tile: float = 0.15
     reveal_unseen_local_cells: float = 0.03
     valid_move: float = 0.05
     invalid_move: float = -0.08
     stay_still: float = -0.03
-    repeated_direction_reversal: float = -0.02
-    two_step_cycle: float = -0.03
+    repeated_direction_reversal: float = -0.04
+    two_step_cycle: float = -0.06
     overlap_or_same_corridor: float = -0.05
     timestep: float = -0.01
     potential_shaping_alpha: float = 0.5
@@ -81,25 +81,29 @@ class CurrentTeamReward(RewardStrategy):
         if context.capture_happened:
             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
 
-        if context.pacman_visible:
-            if (
-                not self._last_any_pacman_visible
-                and self._unseen_steps >= w.newly_spotted_min_unseen_steps
-            ):
-                terms.append(RewardTerm("newly_spotted", w.newly_spotted))
-            terms.append(RewardTerm("currently_visible", w.currently_visible))
-            self._unseen_steps = 0
-        else:
-            self._unseen_steps += 1
-
         min_distance = self._minimum_distance(context)
+        visibility_progress = False
         if min_distance is not None:
             potential = -w.potential_shaping_alpha * float(min_distance)
             if self._last_potential is not None:
                 terms.append(
                     RewardTerm("potential_shaping", potential - self._last_potential)
                 )
+            if self._last_potential is None or potential > self._last_potential:
+                visibility_progress = True
             self._last_potential = potential
+
+        if context.pacman_visible:
+            if (
+                not self._last_any_pacman_visible
+                and self._unseen_steps >= w.newly_spotted_min_unseen_steps
+            ):
+                terms.append(RewardTerm("newly_spotted", w.newly_spotted))
+            if visibility_progress:
+                terms.append(RewardTerm("currently_visible", w.currently_visible))
+            self._unseen_steps = 0
+        else:
+            self._unseen_steps += 1
 
         for ghost in context.ghosts:
             moved = ghost.previous_position != ghost.current_position

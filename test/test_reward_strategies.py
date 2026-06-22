@@ -146,7 +146,7 @@ def test_reversal_penalty_applies_on_first_opposite_move():
     reverse = strategy.compute(make_context(step_count=2, previous=(2, 3), current=(2, 2)))
 
     assert "repeated_direction_reversal" not in forward.breakdown
-    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.02)
+    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.04)
 
 
 def test_two_step_cycle_penalty_applies_on_a_b_a_pattern():
@@ -184,8 +184,8 @@ def test_two_step_cycle_penalty_applies_on_a_b_a_pattern():
     strategy.compute(make_context(step_count=1, previous=(2, 2), current=(2, 3)))
     reverse = strategy.compute(make_context(step_count=2, previous=(2, 3), current=(2, 2)))
 
-    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.02)
-    assert reverse.breakdown["two_step_cycle"] == pytest.approx(-0.03)
+    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.04)
+    assert reverse.breakdown["two_step_cycle"] == pytest.approx(-0.06)
 
 
 def test_overlap_penalty_applies_to_adjacent_opposite_direction_pair():

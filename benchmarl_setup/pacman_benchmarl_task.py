@@ -2,9 +2,8 @@ import copy
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-import torch
 from torchrl.data import Composite
-from torchrl.envs import DTypeCastTransform, EnvBase, PettingZooWrapper, Transform
+from torchrl.envs import EnvBase, PettingZooWrapper, Transform
 
 from benchmarl.environments.common import Task, TaskClass
 from benchmarl.utils import DEVICE_TYPING
@@ -62,7 +61,7 @@ class PacmanTaskClass(TaskClass):
         return int(self.config.get("max_cycles", 200))
 
     def get_env_transforms(self, env: EnvBase) -> List[Transform]:
-        return [DTypeCastTransform(dtype_in=torch.uint8, dtype_out=torch.float32)]
+        return []
 
     def has_render(self, env: EnvBase) -> bool:
         return False

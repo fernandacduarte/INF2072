@@ -192,7 +192,17 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._total_pallets = int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0
 
         # --- Build initial observations and info dicts for all ghosts ---
-        observations = {ghost.id: self._get_observation(ghost) for ghost in self.ghosts}
+        for ghost in self.ghosts:
+            self._get_local_patch(ghost)
+        any_visible, seen_positions = self._collect_visible_pacman_positions()
+        if any_visible:
+            self.last_pacman_sighting_position = seen_positions[0]
+            self.last_pacman_sighting_step = self.step_count
+        shared_features = self._shared_memory_features(any_visible, seen_positions)
+        observations = {
+            ghost.id: self._compose_observation(ghost.view, shared_features)
+            for ghost in self.ghosts
+        }
         initial_context = self._build_reward_context(
             actions={},
             pellets_before=self._remaining_pellets(),
@@ -251,9 +261,17 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # One environment transition completed.
         self.step_count += 1
 
-        # Update local observation for all ghosts after movement.
+        # Refresh local patches, shared memory and composed observations.
         for ghost in self.ghosts:
-            observations[ghost.id] = self._get_observation(ghost)
+            self._get_local_patch(ghost)
+
+        any_visible, seen_positions = self._collect_visible_pacman_positions()
+        if any_visible:
+            self.last_pacman_sighting_position = seen_positions[0]
+            self.last_pacman_sighting_step = self.step_count
+        shared_features = self._shared_memory_features(any_visible, seen_positions)
+        for ghost in self.ghosts:
+            observations[ghost.id] = self._compose_observation(ghost.view, shared_features)
 
         capture_happened = self._is_capture_state()
         timeout_happened = (self.step_count >= self.max_steps) and (not capture_happened)
@@ -267,11 +285,6 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         )
         pacman_win_happened = pallets_all_eaten and not capture_happened
         game_over_happened = bool(capture_happened or timeout_happened or pacman_win_happened)
-
-        any_visible, seen_positions = self._collect_visible_pacman_positions()
-        if any_visible:
-            self.last_pacman_sighting_position = seen_positions[0]
-            self.last_pacman_sighting_step = self.step_count
 
         reward_context = self._build_reward_context(
             actions=decoded_actions,
@@ -420,18 +433,13 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     @functools.lru_cache(maxsize=None)
     # Return observation space for one agent.
     def observation_space(self, agent: AgentID):
-        """
-        Returns the partial information available for the given agent.
-        A local view of a (view_size x view_size) grid centered on the agent's
-        position (view_size = GHOST_VIEW_SIZE), with the following encoded values:
-            (1) Capture;
-            (2) Empty;
-            (3) Ghost;
-            (4) PAC-MAN;
-            (5) Wall.
-        """
-        # Encoded values span [1, 5], with uint8 storage.
-        return Box(low=1, high=5, shape=(self.view_size, self.view_size), dtype=np.uint8)
+        """Return local patch plus one shared-memory feature row."""
+        return Box(
+            low=-1.0,
+            high=5.0,
+            shape=(self.view_size + 1, self.view_size),
+            dtype=np.float32,
+        )
 
     # Cache action spaces because they are static by agent ID.
     @functools.lru_cache(maxsize=None)
@@ -576,8 +584,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             return Action(action_int)
         raise ValueError(f"Invalid action token for ghost policy: {action}. Expected int in [0, 3].")
 
-    # Compute the (view_size x view_size) local observation for one ghost.
-    def _get_observation(self, ghost: Ghost) -> np.ndarray:
+    # Compute the (view_size x view_size) local patch for one ghost.
+    def _get_local_patch(self, ghost: Ghost) -> np.ndarray:
         # Read ghost position and view geometry.
         x, y = ghost.current_position
         r, size = self.view_radius, self.view_size
@@ -592,8 +600,52 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Copy the in-bounds overlap into the correctly offset slice of the patch.
         patch[sx0 - x0:sx1 - x0, sy0 - y0:sy1 - y0] = self.global_view[sx0:sx1, sy0:sy1]
         ghost.view = patch
-        # Return local view.
-        return ghost.view
+        return patch
+
+    def _shared_memory_features(
+        self,
+        any_visible: bool | None = None,
+        seen_positions: list[tuple[int, int]] | None = None,
+    ) -> np.ndarray:
+        if any_visible is None or seen_positions is None:
+            any_visible, seen_positions = self._collect_visible_pacman_positions()
+
+        rows, cols = self.global_view.shape
+        row_den = float(max(rows - 1, 1))
+        col_den = float(max(cols - 1, 1))
+        max_steps = max(1, int(self.max_steps))
+        target_position = seen_positions[0] if any_visible else self.last_pacman_sighting_position
+
+        features = np.full((self.view_size,), -1.0, dtype=np.float32)
+        features[0] = 1.0 if any_visible else 0.0
+        if target_position is not None:
+            features[1] = float(target_position[0]) / row_den
+            features[2] = float(target_position[1]) / col_den
+            if any_visible or self.last_pacman_sighting_step is None:
+                features[3] = 0.0
+            else:
+                since_last_seen = max(0, self.step_count - int(self.last_pacman_sighting_step))
+                features[3] = min(float(since_last_seen) / float(max_steps), 1.0)
+        else:
+            features[1] = -1.0
+            features[2] = -1.0
+            features[3] = 1.0
+        if self.view_size > 4:
+            features[4] = min(float(self.step_count) / float(max_steps), 1.0)
+        return features
+
+    def _compose_observation(
+        self, local_patch: np.ndarray, shared_features: np.ndarray
+    ) -> np.ndarray:
+        local = np.asarray(local_patch, dtype=np.float32)
+        shared = np.asarray(shared_features, dtype=np.float32).reshape(1, self.view_size)
+        return np.vstack((local, shared))
+
+    # Compute the composed observation for one ghost.
+    def _get_observation(self, ghost: Ghost) -> np.ndarray:
+        local_patch = self._get_local_patch(ghost)
+        shared_features = self._shared_memory_features()
+        return self._compose_observation(local_patch, shared_features)
 
     def _remaining_pellets(self) -> int:
         return int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0

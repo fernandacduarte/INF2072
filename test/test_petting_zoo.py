@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import numpy as np
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -34,3 +35,19 @@ def test_decode_action_accepts_only_zero_based_indices(token, expected):
 def test_decode_action_rejects_out_of_range_indices(token):
     with pytest.raises(ValueError, match=r"Expected int in \[0, 3\]"):
         PacManEnvironment._decode_action(token)
+
+
+def test_observation_contains_shared_memory_row():
+    env = PacManEnvironment(global_view=create_grid())
+    observations, _ = env.reset()
+    first_agent = env.possible_agents[0]
+    observation = observations[first_agent]
+
+    assert observation.shape == (env.view_size + 1, env.view_size)
+    assert observation.dtype == np.float32
+    shared_row = observation[-1]
+    assert np.all(shared_row >= -1.0)
+    assert np.all(shared_row <= 1.0)
+    assert shared_row[0] in (0.0, 1.0)
+
+    env.close()
