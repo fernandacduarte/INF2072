@@ -546,6 +546,14 @@ The behavior-compatible default is
 create a zero-argument `RewardStrategy` subclass with a unique `strategy_id`; no
 central registry edit is required.
 
+Current behavior note: the `repeated_direction_reversal` term is applied from the
+first opposite-direction move (for example `A -> B -> A`), then scales with
+consecutive reversals up to its existing cap. The strategy also penalizes
+explicit two-step cycles (`A -> B -> A`) and opposite-direction adjacent
+ghost pairs to reduce local ping-pong loops in multi-ghost play. The
+`overlap_or_same_corridor` penalty now scales with the number of offending
+ghost pairs in the same step.
+
 Commands in this section provide two collapsible platform options. Windows is
 expanded by default and uses the Python launcher `py -3.11`; macOS/Linux uses
 `python`. Run all commands from the project root.

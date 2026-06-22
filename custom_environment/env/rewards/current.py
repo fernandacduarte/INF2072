@@ -28,6 +28,7 @@ class CurrentRewardWeights:
     invalid_move: float = -0.08
     stay_still: float = -0.03
     repeated_direction_reversal: float = -0.02
+    two_step_cycle: float = -0.03
     overlap_or_same_corridor: float = -0.05
     timestep: float = -0.01
     potential_shaping_alpha: float = 0.5
@@ -47,6 +48,7 @@ class CurrentTeamReward(RewardStrategy):
         self._unseen_steps = self.weights.newly_spotted_min_unseen_steps
         self._last_move_direction: dict[str, Position | None] = {}
         self._reverse_streak: dict[str, int] = {}
+        self._recent_positions: dict[str, deque[Position]] = {}
         self._seen_local_cells: dict[str, set[Position]] = {}
         self._last_tile_visit_step: dict[str, dict[Position, int]] = {}
 
@@ -56,6 +58,10 @@ class CurrentTeamReward(RewardStrategy):
         self._unseen_steps = self.weights.newly_spotted_min_unseen_steps
         self._last_move_direction = {ghost.ghost_id: None for ghost in initial_context.ghosts}
         self._reverse_streak = {ghost.ghost_id: 0 for ghost in initial_context.ghosts}
+        self._recent_positions = {
+            ghost.ghost_id: deque([ghost.current_position], maxlen=2)
+            for ghost in initial_context.ghosts
+        }
         self._seen_local_cells = {
             ghost.ghost_id: self._local_cells(ghost.current_position)
             for ghost in initial_context.ghosts
@@ -108,14 +114,16 @@ class CurrentTeamReward(RewardStrategy):
                         )
                     )
                 reverse_streak = self._update_movement_history(ghost)
-                if reverse_streak >= 2:
-                    factor = min(reverse_streak - 1, 4)
+                if reverse_streak >= 1:
+                    factor = min(reverse_streak, 4)
                     terms.append(
                         RewardTerm(
                             "repeated_direction_reversal",
                             w.repeated_direction_reversal * float(factor),
                         )
                     )
+                if self._is_two_step_cycle(ghost):
+                    terms.append(RewardTerm("two_step_cycle", w.two_step_cycle))
 
             if self._reveals_unseen_cells(ghost):
                 terms.append(
@@ -125,9 +133,18 @@ class CurrentTeamReward(RewardStrategy):
                     )
                 )
 
-        if self._has_overlap_or_same_corridor(context.ghosts):
+            # Keep a short trajectory memory so the next step can detect A->B->A.
+            self._recent_positions.setdefault(ghost.ghost_id, deque(maxlen=2)).append(
+                ghost.current_position
+            )
+
+        pair_violations = self._count_overlap_or_same_corridor_violations(context.ghosts)
+        if pair_violations > 0:
             terms.append(
-                RewardTerm("overlap_or_same_corridor", w.overlap_or_same_corridor)
+                RewardTerm(
+                    "overlap_or_same_corridor",
+                    w.overlap_or_same_corridor * float(pair_violations),
+                )
             )
 
         if context.timeout_happened:
@@ -170,27 +187,33 @@ class CurrentTeamReward(RewardStrategy):
         self._last_move_direction[ghost.ghost_id] = direction
         return self._reverse_streak[ghost.ghost_id]
 
+    def _is_two_step_cycle(self, ghost: GhostTransition) -> bool:
+        history = self._recent_positions.get(ghost.ghost_id)
+        if history is None or len(history) < 2:
+            return False
+        # Detect immediate AB->A returns: previous was B and two steps ago was A.
+        return ghost.current_position == history[0] and ghost.previous_position == history[1]
+
     @staticmethod
     def _direction(previous: Position, current: Position) -> Position:
         return current[0] - previous[0], current[1] - previous[1]
 
     @classmethod
-    def _has_overlap_or_same_corridor(
+    def _count_overlap_or_same_corridor_violations(
         cls, ghosts: tuple[GhostTransition, ...]
-    ) -> bool:
-        positions = [ghost.current_position for ghost in ghosts]
-        if len(set(positions)) < len(positions):
-            return True
+    ) -> int:
+        violations = 0
         for index, ghost_a in enumerate(ghosts):
             for ghost_b in ghosts[index + 1 :]:
+                if ghost_a.current_position == ghost_b.current_position:
+                    violations += 1
+                    continue
                 if ghost_a.previous_position == ghost_a.current_position:
                     continue
                 if ghost_b.previous_position == ghost_b.current_position:
                     continue
                 dir_a = cls._direction(ghost_a.previous_position, ghost_a.current_position)
                 dir_b = cls._direction(ghost_b.previous_position, ghost_b.current_position)
-                if dir_a != dir_b:
-                    continue
                 same_row = ghost_a.current_position[0] == ghost_b.current_position[0]
                 same_col = ghost_a.current_position[1] == ghost_b.current_position[1]
                 if not (same_row or same_col):
@@ -199,9 +222,12 @@ class CurrentTeamReward(RewardStrategy):
                     abs(a - b)
                     for a, b in zip(ghost_a.current_position, ghost_b.current_position)
                 )
-                if distance <= 2:
-                    return True
-        return False
+                if dir_a == dir_b and distance <= 2:
+                    violations += 1
+                # Also penalize adjacent ghosts ping-ponging in opposite directions.
+                elif dir_a == (-dir_b[0], -dir_b[1]) and distance <= 1:
+                    violations += 1
+        return violations
 
     def _minimum_distance(self, context: RewardContext) -> int | None:
         distances = [
