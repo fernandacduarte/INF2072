@@ -153,9 +153,9 @@ class LiveComparisonPlotter:
         self.ax.set_xlabel("Total frames")
         self.ax.set_ylabel("Reward")
         self.ax.grid(True, alpha=0.3)
-        self.ax_eps.set_ylabel("Epsilon", color="red")
+        self.ax_eps.set_ylabel("Epsilon", color="black")
         self.ax_eps.set_ylim(0.0, 1.05)
-        self.ax_eps.tick_params(axis="y", colors="red")
+        self.ax_eps.tick_params(axis="y", colors="black")
         plt.ion()
         plt.show(block=False)
 
@@ -186,10 +186,10 @@ class LiveComparisonPlotter:
             (self.epsilon_line,) = self.ax_eps.plot(
                 x,
                 y,
-                color="red",
+                color="black",
                 linewidth=2,
                 linestyle="-",
-                label="epsilon",
+                label="Epsilon",
             )
         else:
             self.epsilon_line.set_data(x, y)
