@@ -32,7 +32,7 @@ def main() -> None:
         description="Render a Pacman episode until every pellet is eaten."
     )
     parser.add_argument("--delay", type=float, default=0.10, help="Seconds between frames.")
-    parser.add_argument("--maze", default="pinklike", choices=["default", "pinklike"])
+    parser.add_argument("--maze", default="pinklike", choices=["default", "pinklike", "pinklike3"])
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument("--cap", type=int, default=20000, help="Safety step cap.")

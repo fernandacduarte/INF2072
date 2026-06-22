@@ -100,7 +100,6 @@ def run_demo(
     tile_size: int,
     fps: int,
     grid_size: int,
-    number_ghosts: int,
     seed: int | None,
     screenshot_out: Path | None,
     show_observations: bool,
@@ -112,7 +111,6 @@ def run_demo(
 
     env = PacManEnvironment(
         global_view=build_maze(name=maze, size=grid_size),
-        number_ghosts=number_ghosts,
         render_mode=None if render_mode == "ascii" else render_mode,
         tile_size=tile_size,
         fps=fps,
@@ -265,12 +263,11 @@ def main() -> None:
     parser.add_argument("--tile-size", type=int, default=28)
     parser.add_argument("--fps", type=int, default=12)
     parser.add_argument("--grid-size", type=int, default=20)
-    parser.add_argument("--number-ghosts", type=int, default=2)
     parser.add_argument(
         "--maze",
         type=str,
         default="default",
-        choices=["default", "pinklike"],
+        choices=["default", "pinklike", "pinklike3"],
         help="Maze layout to render.",
     )
     parser.add_argument("--seed", type=int, default=None)
@@ -294,7 +291,6 @@ def main() -> None:
         tile_size=args.tile_size,
         fps=args.fps,
         grid_size=args.grid_size,
-        number_ghosts=args.number_ghosts,
         seed=args.seed,
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,

@@ -187,20 +187,31 @@ Useful optional rendering parameters for the random-policy demo
 
 ```bash
 --render-mode ascii|human|rgb_array --max-steps 200 --delay 0.0 --tile-size 28 --fps 12
---grid-size 20 --number-ghosts 2 --seed 0 --screenshot-out path\to\frame.png --hide-observations
+--grid-size 20 --seed 0 --screenshot-out path\to\frame.png --hide-observations
 ```
 
 Outputs are saved under `benchmarl_setup/runs/<maze>` by default.
 
 ### Mazes (Map Selection)
 
-Two maze layouts are available via `--maze`:
+### How to Set Number of Ghosts
+
+The number of ghosts is currently defined by the maze layout itself: it equals the number of `G` spawn markers in the selected map.
+
+How to change it:
+
+1. Edit the layout in `custom_environment/utils.py` (`DEFAULT_LAYOUT` or `PINKLIKE_LAYOUT`), or create new layouts.
+2. Add or remove `G` characters.
+3. Run with that maze (`--maze default`, `--maze pinklike`, or `--maze pinklike3`).
+
+Three maze layouts are available via `--maze`:
 
 - `default`: a 20x20 lattice maze.
 - `pinklike`: a 20x20 maze resembling the classic "Pink" Pacman maze, without portals.
+- `pinklike3`: a `pinklike`-style 20x20 map variant with three ghost spawns.
 
 **Layout notation (map-authored spawns + pellets).** Mazes are defined as ASCII layouts in
-`custom_environment/utils.py` (`DEFAULT_LAYOUT`, `PINKLIKE_LAYOUT`) and parsed by `parse_layout`
+`custom_environment/utils.py` (`DEFAULT_LAYOUT`, `PINKLIKE_LAYOUT`, `PINKLIKE_LAYOUT3`) and parsed by `parse_layout`
 into a `MazeSpec` (grid + spawns + cosmetic pellet mask). The map itself declares where every
 entity starts, so there are no hardcoded spawn positions. Characters:
 
@@ -220,6 +231,7 @@ The selected maze is supported by training, benchmarking, and the render demo:
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --maze pinklike
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --maze pinklike
 py -3.11 custom_environment\render_demo.py --render-mode human --maze pinklike
+py -3.11 custom_environment\render_demo.py --render-mode human --maze pinklike3
 ```
 
 Use the same `--maze` at evaluation/plot time so the command reads from the matching
@@ -231,9 +243,12 @@ subfolder.
 ```bash
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze default
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze pinklike
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --maze pinklike3
 
 py -3.11 custom_environment\eval.py --learner iql --maze pinklike
+py -3.11 custom_environment\eval.py --learner iql --maze pinklike3
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --maze pinklike
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --maze pinklike3
 ```
 
 New mazes can be registered in `custom_environment/utils.py` via the `MAZES` registry

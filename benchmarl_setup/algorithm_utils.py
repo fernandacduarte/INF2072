@@ -1,7 +1,7 @@
 from pathlib import Path
 
 SUPPORTED_ALGORITHMS = ("iql", "vdn", "qmixlocal", "qmixglobal")
-SUPPORTED_MAZES = ("default", "pinklike")
+SUPPORTED_MAZES = ("default", "pinklike", "pinklike3")
 
 
 def normalize_algorithm(name: str) -> str:

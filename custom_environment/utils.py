@@ -183,6 +183,29 @@ PINKLIKE_LAYOUT = [
 #    "%%%%%%%%%%%%%%%%%%%%",
 ]
 
+PINKLIKE_LAYOUT3 = [
+    "%%%%%%%%%%%%%%%%%%%%",
+    "%..................%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%....%%......%%....%",
+    "%.%%%%%.%%%%.%%%%%.%",
+    "%.%%%%%.%%%%.%%%%%.%",
+    "%G...%%..G...%%...G%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%.%%....%%%%....%%.%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%....%%.%%%%.%%....%",
+    "%.%%.%%......%%.%%.%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%.%%.%%.%%%%.%%.%%.%",
+    "%....%%......%%....%",
+    "%.%%.%%%.%%.%%%.%%.%",
+    "%.%%.%%%.%%.%%%.%%.%",
+    "%.........P........%",
+    "%%%%%%%%%%%%%%%%%%%%",
+]
+
 WALL_CHARS = {"%", "#"}
 PELLET_CHARS = {".", "o"}
 
@@ -267,11 +290,12 @@ def spec_from_grid(grid: np.ndarray) -> MazeSpec:
 MAZES = {
     "default": lambda size=20: parse_layout(DEFAULT_LAYOUT),
     "pinklike": lambda size=20: parse_layout(PINKLIKE_LAYOUT),
+    "pinklike3": lambda size=20: parse_layout(PINKLIKE_LAYOUT3),
 }
 
 
 def build_maze(name: str = "default", size: int = 20) -> MazeSpec:
-    """Build a MazeSpec by registry name ('default' or 'pinklike')."""
+    """Build a MazeSpec by registry name (for example 'default', 'pinklike', 'pinklike3')."""
     key = name.strip().lower()
     if key not in MAZES:
         raise ValueError(f"Unknown maze '{name}'. Available: {sorted(MAZES)}")
