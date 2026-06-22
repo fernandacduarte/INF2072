@@ -161,7 +161,8 @@ py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,
 py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --device-label auto --checkpoint-select best --episodes 30
 ```
 
-This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per learner:
+This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` plus an
+`evaluation_report_by_variant.csv` across-training-seed summary. The detailed report includes:
 
 - `ghost_win_rate`
 - `pacman_win_rate`
@@ -169,6 +170,10 @@ This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` and prints, per 
 - `std_episode_return`
 - `median_episode_return`
 - `mean_steps`
+- `capture_rate`, `timeout_rate`, `pellet_win_rate`, and `evaluation_cutoff_rate`
+- `mean_steps_to_capture` and `median_steps_to_capture`
+- `frac_steps_visible` and `mean_newly_spotted_count`
+- `mean_shaping_return` and `mean_terminal_return`
 
 Useful options for deterministic report evaluation (`custom_environment\eval_report.py`):
 
@@ -177,10 +182,18 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 --learner qmixglobal --checkpoint-select latest
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
 --device-label auto|cpu|cuda|cuda_0
+--reward-id current --train-seeds 0,1,2
+--device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--jobs-path path\to\benchmark_jobs.csv
 --ghost-view-size 3|5|7 --verbose
 ```
 
-Use this report to compare final policy quality across algorithms under deterministic action selection (evaluation-time), instead of relying only on training scalar curves.
+Reward-aware runs are discovered under `runs/<maze>/<reward_id>/<device>/`; the
+legacy pre-strategy layout remains supported for `--reward-id current`. Use this
+report to compare final policy quality across algorithms under deterministic action
+selection instead of relying only on training scalar curves. Capture rate and
+time-to-capture are the primary behavioral metrics; reward returns are diagnostic
+because their scales may differ between reward strategies.
 
 Useful optional rendering parameters for the random-policy demo
 (`custom_environment\render_demo.py`):
@@ -693,20 +706,20 @@ python benchmarl_setup/run_benchmark.py \
 
 </details>
 
-Runs are isolated under `<runs>/<maze>/<strategy_id>/<device>/`. After training,
-the benchmark evaluates every final checkpoint on the same episode seeds and writes
+Runs are isolated under `<runs>/<maze>/<strategy_id>/<device>/`. Post-training
+objective evaluation is opt-in: pass a positive value such as `--eval-episodes 100`
+to evaluate every final checkpoint on the same episode seeds and write
 capture-rate/time-to-capture comparisons. Raw returns remain diagnostic only because
-reward scales are not comparable between strategies. Use `--eval-episodes 0` to skip
-the automatic objective evaluation.
+reward scales are not comparable between strategies.
 
 Objective evaluation is a post-training phase: it loads each final checkpoint and
 runs additional episodes to measure behavior such as capture rate and
 time-to-capture. It does not update the policy or change the completed training run.
-By default, `run_benchmark.py` evaluates every checkpoint for 100 episodes;
-`--eval-episodes N` changes that number, while `--eval-episodes 0` disables the phase.
+By default, `--eval-episodes 0` disables this phase. Set `--eval-episodes N` to a
+positive number to evaluate every checkpoint for `N` episodes after training.
 This is useful when reward variants are trained in separate commands: the baseline
-and variant commands below use `0` to avoid evaluating each one separately, then a
-single `eval_metrics.py` command evaluates both sets of checkpoints together using
+and variant commands below keep evaluation disabled, then a
+single `eval_report.py` command evaluates both sets of checkpoints together using
 the same episode seeds. That final paired evaluation is both fairer and avoids
 duplicated work.
 
@@ -877,7 +890,7 @@ seeds:
 <summary><strong>Windows (default)</strong></summary>
 
 ```cmd
-py -3.11 benchmarl_setup\eval_metrics.py --jobs-path benchmarl_setup\runs\reward_weight_study\current_jobs.csv benchmarl_setup\runs\reward_weight_study\valid_move_010_jobs.csv --episodes 100 --eval-seed-base 10000 --device cpu --out benchmarl_setup\runs\reward_weight_study\reward_comparison.csv
+py -3.11 custom_environment\eval_report.py --jobs-path benchmarl_setup\runs\reward_weight_study\current_jobs.csv benchmarl_setup\runs\reward_weight_study\valid_move_010_jobs.csv --episodes 100 --eval-seed-base 10000 --device cpu --out benchmarl_setup\runs\reward_weight_study\reward_comparison.csv
 ```
 
 </details>
@@ -886,7 +899,7 @@ py -3.11 benchmarl_setup\eval_metrics.py --jobs-path benchmarl_setup\runs\reward
 <summary><strong>macOS/Linux</strong></summary>
 
 ```bash
-python benchmarl_setup/eval_metrics.py \
+python custom_environment/eval_report.py \
   --jobs-path \
     benchmarl_setup/runs/reward_weight_study/current_jobs.csv \
     benchmarl_setup/runs/reward_weight_study/valid_move_010_jobs.csv \

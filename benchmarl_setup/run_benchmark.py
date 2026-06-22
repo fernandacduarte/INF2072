@@ -21,7 +21,7 @@ from summarize_benchmark_runs import summarize_runs
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = PROJECT_ROOT / "benchmarl_setup" / "run_pacman_benchmarl.py"
-EVAL_METRICS_PATH = PROJECT_ROOT / "benchmarl_setup" / "eval_metrics.py"
+EVAL_REPORT_PATH = PROJECT_ROOT / "custom_environment" / "eval_report.py"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -160,8 +160,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--eval-episodes",
         type=int,
-        default=100,
-        help="Paired objective-evaluation episodes per trained checkpoint (0 disables).",
+        default=0,
+        help=(
+            "Paired objective-evaluation episodes per trained checkpoint "
+            "(default: 0; set a positive value to enable)."
+        ),
     )
     parser.add_argument(
         "--eval-seed-base",
@@ -677,7 +680,7 @@ def main() -> None:
     if args.eval_episodes:
         eval_command = [
             sys.executable,
-            str(EVAL_METRICS_PATH),
+            str(EVAL_REPORT_PATH),
             "--jobs-path",
             str(jobs_out),
             "--episodes",
