@@ -339,6 +339,7 @@ def run_episode(
     screenshot_out: Path | None,
     show_observations: bool,
     ghost_view_size: int | None,
+    reward_id: str,
     requested_device: str,
     allow_cpu_fallback: bool,
 ) -> None:
@@ -347,7 +348,10 @@ def run_episode(
         requested_device=requested_device,
         allow_cpu_fallback=allow_cpu_fallback,
     )
-    runs_root_for_device = runs_root / device_label(resolved_device)
+    reward_root = runs_root / reward_id
+    if not reward_root.exists() and reward_id == "current":
+        reward_root = runs_root  # Legacy layout before reward strategies.
+    runs_root_for_device = reward_root / device_label(resolved_device)
 
     if checkpoint is not None:
         checkpoint_path = checkpoint
@@ -590,6 +594,12 @@ def main() -> None:
         help="Odd local observation width/height for ghosts. Useful for legacy checkpoints.",
     )
     parser.add_argument(
+        "--reward-id",
+        type=str,
+        default="current",
+        help="Reward strategy folder used for checkpoint discovery.",
+    )
+    parser.add_argument(
         "--checkpoint",
         type=Path,
         default=None,
@@ -673,6 +683,7 @@ def main() -> None:
         screenshot_out=args.screenshot_out,
         show_observations=not args.hide_observations,
         ghost_view_size=args.ghost_view_size,
+        reward_id=args.reward_id,
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
     )

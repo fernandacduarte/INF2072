@@ -8,7 +8,7 @@ __pycache__/
 *.pyd
 /.vscode
 
-/benchmarl_setup/*
+/benchmarl_setup/runs/*
 /benchmarl_setup/runs/iql_pacman_*
 /benchmarl_setup/runs/vdn_pacman_*
 /benchmarl_setup/runs/qmix_pacman_*

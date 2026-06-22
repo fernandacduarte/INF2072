@@ -19,13 +19,15 @@ SEEDS   ?= 0,1,2,3,4
 FRAMES  ?= 200000
 LEARNER ?= qmixglobal
 DEVICE  ?= cpu
+REWARDS ?= custom_environment.env.rewards.current:CurrentTeamReward
+REWARD_ID ?= current
 
 .DEFAULT_GOAL := help
 
 .PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark liveplot eval-best
 
 help: ## Show this help
-	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed benchmark training (all algorithms, parallel)','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE GHOSTS  (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE  (e.g. make benchmark ALGOS=iql,vdn DEVICE=cuda)','Eval vars:  LEARNER DEVICE               (e.g. make eval-best LEARNER=vdn DEVICE=cuda)']))"
+	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE GHOSTS  (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARDS','Eval vars:  LEARNER DEVICE REWARD_ID']))"
 
 demo: ## Live Pygame window: defense-first Pacman vs random ghosts
 	$(PYTHON) custom_environment/render_demo.py --render-mode human --delay $(DELAY) --maze $(MAZE) --number-ghosts $(GHOSTS) --seed $(SEED)
@@ -46,10 +48,10 @@ screenshot: ## Save a PNG of the last rendered frame into _output/
 	$(PYTHON) custom_environment/render_demo.py --render-mode rgb_array --max-steps 80 --maze $(MAZE) --seed $(SEED) --screenshot-out _output/pacman_demo.png
 
 eval-latest: ## Watch trained ghosts (latest checkpoint) in a Pygame window
-	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select latest --device $(DEVICE) --maze $(MAZE)
+	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select latest --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
-	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE)
+	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-classes $(REWARDS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE)
 
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)

@@ -28,7 +28,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from custom_environment.env.pacman_environment import PacManEnvironment
 from custom_environment.env.domain.constant import (
     Observation,
-    POTENTIAL_SHAPING_ALPHA,
 )
 from custom_environment.utils import create_grid
 
@@ -111,16 +110,30 @@ def _setup_pivot_env():
 def _reward_for_move(env, mover, dest, base_dist):
     """Prime the potential baseline at `base_dist`, apply a single transition
     (mover -> dest, or stay when dest equals the current cell), return the reward."""
-    env.last_potential = -POTENTIAL_SHAPING_ALPHA * float(base_dist)
     for ghost in env.ghosts:
         ghost.prev_position = ghost.current_position  # default: stayed
+    baseline = env._build_reward_context(
+        actions={},
+        pellets_before=env._remaining_pellets(),
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    env.reward_strategy.compute(baseline)
     if dest != mover.current_position:
         old = mover.current_position
         mover.prev_position = old
         env.global_view[old] = Observation.EMPTY.value
         env.global_view[dest] = Observation.GHOST.value
         mover.current_position = dest
-    return env._compute_team_reward(capture_happened=False)
+    transition = env._build_reward_context(
+        actions={},
+        pellets_before=env._remaining_pellets(),
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    return env.reward_strategy.compute(transition).total
 
 
 def _scenario_reward(move):

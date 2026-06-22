@@ -1,7 +1,7 @@
 """Smoke tests for the pallet-win mechanic (plan-000003).
 
 Pacman wins when every pallet on the board is eaten. The ghost team then
-receives ``Reward.PACMAN_WIN_PALLETS`` and the episode truncates, symmetric
+receives the selected strategy's pallet-win reward and the episode truncates, symmetric
 with the existing timeout-loss outcome.
 
 These tests build a ``MazeSpec`` via ``parse_layout`` rather than a raw grid:
@@ -17,8 +17,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from custom_environment.env.domain.constant import Action, Reward
+from custom_environment.env.domain.constant import Action
 from custom_environment.env.pacman_environment import PacManEnvironment
+from custom_environment.env.rewards import RewardResult, RewardStrategy, RewardTerm
 from custom_environment.utils import parse_layout
 
 
@@ -34,8 +35,25 @@ LAYOUT = [
 EXPECTED_PALLETS = 4
 
 
-def _make_env() -> PacManEnvironment:
-    return PacManEnvironment(global_view=parse_layout(LAYOUT))
+class PalletTerminalOnlyReward(RewardStrategy):
+    strategy_id = "test-pallet-terminal"
+
+    def reset(self, initial_context):
+        pass
+
+    def compute(self, context):
+        terms = (
+            (RewardTerm("PACMAN_WIN_PALLETS", -20.0, "terminal"),)
+            if context.pacman_win_happened
+            else ()
+        )
+        return RewardResult(terms)
+
+
+def _make_env(reward_strategy=None) -> PacManEnvironment:
+    return PacManEnvironment(
+        global_view=parse_layout(LAYOUT), reward_strategy=reward_strategy
+    )
 
 
 def test_total_pallets_tracked_on_reset():
@@ -67,13 +85,11 @@ def test_pallets_remaining_norm_drops_to_zero():
 def test_pacman_win_terminates_with_penalty():
     """Step 3: when all pallets are eaten, the episode truncates and the team
     takes the PACMAN_WIN_PALLETS penalty (capture not happening)."""
-    env = _make_env()
+    env = _make_env(PalletTerminalOnlyReward())
     env.reset()
 
-    # Eat everything, then isolate the win penalty from movement shaping so the
-    # reward assertion is exact.
+    # Eat everything; the injected strategy isolates the terminal term.
     env._pellet_mask[:] = False
-    env._compute_team_reward = lambda capture_happened: 0.0
 
     # Move both ghosts away from Pacman so no capture can occur this step.
     actions = {ghost.id: Action.MOVE_LEFT for ghost in env.ghosts}
@@ -82,6 +98,6 @@ def test_pacman_win_terminates_with_penalty():
     assert all(truncations.values()), "pallet exhaustion must truncate the episode"
     assert not any(terminations.values()), "no capture should be flagged"
     for ghost_id in rewards:
-        assert rewards[ghost_id] == Reward.PACMAN_WIN_PALLETS.value
+        assert rewards[ghost_id] == -20.0
     # PettingZoo convention: active agents cleared once the episode ends.
     assert env.agents == []
