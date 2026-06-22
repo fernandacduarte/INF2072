@@ -58,7 +58,8 @@ Algorithm variants:
 1200` for quick smoke runs). For `--algorithm iql` the runner also applies
 convergence-oriented hyperparameters with no CLI flag of their own (a longer
 epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
-VDN/QMIX keep BenchMARL's stock schedule.
+VDN and QMIX now use the same tuned schedule (`epsilon 1.0 → 0.05` over 80% of
+the budget, `lr 1e-4`, `gamma 0.99`) to keep cross-algorithm comparisons fairer.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:

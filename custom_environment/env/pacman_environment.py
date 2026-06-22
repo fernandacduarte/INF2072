@@ -20,7 +20,7 @@ from pettingzoo import ParallelEnv
 from pettingzoo.utils.env import AgentID
 
 # Box, Discrete: Gymnasium spaces for observation/action definitions
-from gymnasium.spaces import Box, Discrete
+from gymnasium.spaces import Box, Dict, Discrete, MultiBinary
 
 # Agent: base class for all agents (ghosts, pacman)
 from custom_environment.env.domain.agent import Agent
@@ -200,7 +200,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             self.last_pacman_sighting_step = self.step_count
         shared_features = self._shared_memory_features(any_visible, seen_positions)
         observations = {
-            ghost.id: self._compose_observation(ghost.view, shared_features)
+            ghost.id: {
+                "observation": self._compose_observation(ghost.view, shared_features),
+                "action_mask": self._build_action_mask(ghost),
+            }
             for ghost in self.ghosts
         }
         initial_context = self._build_reward_context(
@@ -271,7 +274,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             self.last_pacman_sighting_step = self.step_count
         shared_features = self._shared_memory_features(any_visible, seen_positions)
         for ghost in self.ghosts:
-            observations[ghost.id] = self._compose_observation(ghost.view, shared_features)
+            observations[ghost.id] = {
+                "observation": self._compose_observation(ghost.view, shared_features),
+                "action_mask": self._build_action_mask(ghost),
+            }
 
         capture_happened = self._is_capture_state()
         timeout_happened = (self.step_count >= self.max_steps) and (not capture_happened)
@@ -433,12 +439,17 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     @functools.lru_cache(maxsize=None)
     # Return observation space for one agent.
     def observation_space(self, agent: AgentID):
-        """Return local patch plus one shared-memory feature row."""
-        return Box(
-            low=-1.0,
-            high=5.0,
-            shape=(self.view_size + 1, self.view_size),
-            dtype=np.float32,
+        """Return local observation and valid-action mask for one ghost."""
+        return Dict(
+            {
+                "observation": Box(
+                    low=-1.0,
+                    high=5.0,
+                    shape=(self.view_size + 1, self.view_size),
+                    dtype=np.float32,
+                ),
+                "action_mask": MultiBinary(4),
+            }
         )
 
     # Cache action spaces because they are static by agent ID.
@@ -641,11 +652,39 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         shared = np.asarray(shared_features, dtype=np.float32).reshape(1, self.view_size)
         return np.vstack((local, shared))
 
+    def _is_valid_ghost_action(self, ghost: Ghost, action: Action) -> bool:
+        x, y = ghost.current_position
+        if action == Action.MOVE_RIGHT:
+            new_x, new_y = x, y + 1
+        elif action == Action.MOVE_LEFT:
+            new_x, new_y = x, y - 1
+        elif action == Action.MOVE_UP:
+            new_x, new_y = x - 1, y
+        else:
+            new_x, new_y = x + 1, y
+
+        rows, cols = self.global_view.shape
+        if not (0 <= new_x < rows and 0 <= new_y < cols):
+            return False
+
+        target = int(self.global_view[new_x, new_y])
+        return target in (Observation.EMPTY.value, Observation.PAC_MAN.value)
+
+    def _build_action_mask(self, ghost: Ghost) -> np.ndarray:
+        mask = np.zeros((4,), dtype=np.int8)
+        for action in Action:
+            if self._is_valid_ghost_action(ghost, action):
+                mask[action.value] = 1
+        return mask
+
     # Compute the composed observation for one ghost.
-    def _get_observation(self, ghost: Ghost) -> np.ndarray:
+    def _get_observation(self, ghost: Ghost) -> dict[str, np.ndarray]:
         local_patch = self._get_local_patch(ghost)
         shared_features = self._shared_memory_features()
-        return self._compose_observation(local_patch, shared_features)
+        return {
+            "observation": self._compose_observation(local_patch, shared_features),
+            "action_mask": self._build_action_mask(ghost),
+        }
 
     def _remaining_pellets(self) -> int:
         return int(self._pellet_mask.sum()) if self._pellet_mask is not None else 0

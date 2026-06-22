@@ -41,7 +41,9 @@ def test_observation_contains_shared_memory_row():
     env = PacManEnvironment(global_view=create_grid())
     observations, _ = env.reset()
     first_agent = env.possible_agents[0]
-    observation = observations[first_agent]
+    payload = observations[first_agent]
+    observation = payload["observation"]
+    action_mask = payload["action_mask"]
 
     assert observation.shape == (env.view_size + 1, env.view_size)
     assert observation.dtype == np.float32
@@ -49,5 +51,9 @@ def test_observation_contains_shared_memory_row():
     assert np.all(shared_row >= -1.0)
     assert np.all(shared_row <= 1.0)
     assert shared_row[0] in (0.0, 1.0)
+    assert action_mask.shape == (4,)
+    assert np.issubdtype(action_mask.dtype, np.integer)
+    assert np.all(np.isin(action_mask, [0, 1]))
+    assert int(action_mask.sum()) >= 1
 
     env.close()

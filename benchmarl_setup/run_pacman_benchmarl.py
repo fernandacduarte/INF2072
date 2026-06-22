@@ -62,6 +62,24 @@ def _tune_iql_experiment(experiment_config, max_frames: int) -> None:
             setattr(experiment_config, name, value)
 
 
+def _tune_vdn_qmix_experiment(experiment_config, max_frames: int) -> None:
+    """Apply a shared exploration/optimization schedule for VDN and QMIX.
+
+    The values intentionally mirror the tuned schedule used by IQL so algorithm
+    comparisons are less confounded by different epsilon/lr/gamma defaults.
+    """
+    overrides = {
+        "exploration_eps_init": 1.0,
+        "exploration_eps_end": 0.05,
+        "exploration_anneal_frames": int(max_frames * 0.8),
+        "lr": 1e-4,
+        "gamma": 0.99,
+    }
+    for name, value in overrides.items():
+        if hasattr(experiment_config, name):
+            setattr(experiment_config, name, value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BenchMARL on custom Pacman.")
     parser.add_argument(
@@ -215,9 +233,11 @@ def main() -> None:
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
 
-    # IQL-only convergence tuning; VDN/QMIX keep BenchMARL's stock schedule.
+    # Apply algorithm-specific tuning schedules.
     if algorithm == "iql":
         _tune_iql_experiment(experiment_config, args.max_frames)
+    elif algorithm in ("vdn", "qmixlocal", "qmixglobal"):
+        _tune_vdn_qmix_experiment(experiment_config, args.max_frames)
 
     experiment = Experiment(
         task=task,

@@ -45,7 +45,7 @@ class PacmanTaskClass(TaskClass):
                 device=device,
                 seed=seed,
                 return_state=include_global_state,
-                use_mask=False,
+                use_mask=True,
                 done_on_any=True,
             )
 
