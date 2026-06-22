@@ -638,6 +638,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             step_count=int(self.step_count),
             max_steps=int(self.max_steps),
             board_shape=tuple(int(value) for value in self.global_view.shape),
+            ghost_view_radius=int(self.view_radius),
             wall_positions=self._reward_wall_positions,
             ghosts=tuple(ghost_transitions),
             pacman_previous_position=tuple(pacman_previous),

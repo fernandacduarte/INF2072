@@ -63,7 +63,10 @@ class CurrentTeamReward(RewardStrategy):
             for ghost in initial_context.ghosts
         }
         self._seen_local_cells = {
-            ghost.ghost_id: self._local_cells(ghost.current_position)
+            ghost.ghost_id: self._local_cells(
+                ghost.current_position,
+                initial_context.ghost_view_radius,
+            )
             for ghost in initial_context.ghosts
         }
         self._last_tile_visit_step = {
@@ -125,7 +128,7 @@ class CurrentTeamReward(RewardStrategy):
                 if self._is_two_step_cycle(ghost):
                     terms.append(RewardTerm("two_step_cycle", w.two_step_cycle))
 
-            if self._reveals_unseen_cells(ghost):
+            if self._reveals_unseen_cells(ghost, context.ghost_view_radius):
                 terms.append(
                     RewardTerm(
                         "reveal_unseen_local_cells",
@@ -156,13 +159,17 @@ class CurrentTeamReward(RewardStrategy):
         return RewardResult(tuple(terms))
 
     @staticmethod
-    def _local_cells(position: Position) -> set[Position]:
+    def _local_cells(position: Position, radius: int) -> set[Position]:
         x, y = position
-        return {(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+        return {
+            (x + dx, y + dy)
+            for dx in range(-radius, radius + 1)
+            for dy in range(-radius, radius + 1)
+        }
 
-    def _reveals_unseen_cells(self, ghost: GhostTransition) -> bool:
+    def _reveals_unseen_cells(self, ghost: GhostTransition, view_radius: int) -> bool:
         seen = self._seen_local_cells.setdefault(ghost.ghost_id, set())
-        current = self._local_cells(ghost.current_position)
+        current = self._local_cells(ghost.current_position, view_radius)
         revealed = not current.issubset(seen)
         seen.update(current)
         return revealed
