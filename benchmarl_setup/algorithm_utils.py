@@ -85,3 +85,31 @@ def candidate_run_dirs(runs_root: Path, algorithm: str) -> list[Path]:
 
 def runs_root_for_maze(base_runs_root: Path, maze: str) -> Path:
     return base_runs_root / maze
+
+
+def training_exploration_schedule(
+    algorithm: str,
+    maze: str,
+    max_frames: int,
+) -> dict[str, float | int]:
+    normalized_algorithm = normalize_algorithm(algorithm)
+    resolved_max_frames = int(max_frames)
+    if resolved_max_frames < 1:
+        raise ValueError("max_frames must be >= 1")
+
+    eps_init = 1.0
+    eps_end = 0.05
+    anneal_ratio = 0.8
+
+    if normalized_algorithm == "iql" and maze == "pinklike3":
+        eps_end = 0.10
+        anneal_ratio = 0.95
+
+    anneal_frames = int(resolved_max_frames * anneal_ratio)
+    return {
+        "epsilon_init": float(eps_init),
+        "epsilon_end": float(eps_end),
+        "epsilon_anneal_ratio": float(anneal_ratio),
+        "epsilon_anneal_frames": int(anneal_frames),
+        "max_frames": int(resolved_max_frames),
+    }

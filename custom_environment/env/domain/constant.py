@@ -39,12 +39,6 @@ class Reward(Enum):
     PACMAN_TIMEOUT_WIN = _CURRENT_REWARD_WEIGHTS.pacman_timeout_win  # Penalizes the team if it fails to capture before timeout
     PACMAN_WIN_PALLETS = _CURRENT_REWARD_WEIGHTS.pacman_win_pellets  # Penalizes the team if Pacman eats every pallet and wins
     NEWLY_SPOTTED = _CURRENT_REWARD_WEIGHTS.newly_spotted  # Bonus for regaining visual contact after an unseen period
-    # DISTANCE_DECREASE/INCREASE are superseded by potential-based shaping
-    # (POTENTIAL_SHAPING_ALPHA, plan-000021): the old terms fired against a STALE
-    # last-sighting position and created a stay-still trap (research-000012 RC1).
-    # Retained only for backward compatibility; no longer referenced by the reward.
-    DISTANCE_DECREASE = 0.5  # DEPRECATED (superseded by potential shaping)
-    DISTANCE_INCREASE = -0.5  # DEPRECATED (superseded by potential shaping)
     CURRENTLY_VISIBLE = _CURRENT_REWARD_WEIGHTS.currently_visible  # Stronger incentive to keep Pacman visible and sustain tracking
     ENTER_RECENTLY_UNVISITED_TILE = _CURRENT_REWARD_WEIGHTS.enter_recently_unvisited_tile  # Raised (plan-000021/R3) so EV(move) > EV(stay) where the potential gradient is flat
     REVEAL_UNSEEN_LOCAL_CELLS = _CURRENT_REWARD_WEIGHTS.reveal_unseen_local_cells  # Trimmed local-reveal bonus to keep pursuit the dominant signal
@@ -60,8 +54,7 @@ class Reward(Enum):
 # Defines the team-reward potential F(s) = -POTENTIAL_SHAPING_ALPHA * min_bfs_distance
 # from the ghosts to the TRUE Pacman position; the per-step shaping reward is the
 # policy-invariant difference F(s') - F(s) (Ng, Harada & Russell 1999). At 0.5 a
-# one-cell change in min distance yields +/-0.5, matching the magnitude of the
-# former DISTANCE_DECREASE/INCREASE terms it replaces.
+# one-cell change in min distance yields +/-0.5.
 POTENTIAL_SHAPING_ALPHA = _CURRENT_REWARD_WEIGHTS.potential_shaping_alpha
 
 # Defense-first safety target for the PacmanPolicy: the BFS distance (in cells)

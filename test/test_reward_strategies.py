@@ -12,7 +12,11 @@ from custom_environment.env.rewards import (
     RewardTerm,
     load_reward_strategy,
 )
-from custom_environment.env.rewards.current import CurrentTeamReward
+from custom_environment.env.rewards.current import (
+    CurrentGitTeamReward,
+    CurrentTeamReward,
+    CurrentWithOverlapOrSameCorridor,
+)
 from my_rewards.movement_bonus import StrongerMovementReward
 
 
@@ -103,10 +107,87 @@ def test_stronger_movement_variant_changes_only_one_weight():
     baseline = CurrentTeamReward().weights
     variant = StrongerMovementReward().weights
     assert variant.valid_move == 0.10
-    assert baseline.valid_move == 0.05
+    assert baseline.valid_move == 0.03
     for field_name in baseline.__dataclass_fields__:
         if field_name != "valid_move":
             assert getattr(variant, field_name) == getattr(baseline, field_name)
+
+
+def test_team_potential_rewards_coordinated_progress_more_than_solo_progress():
+    def make_context(
+        step_count: int,
+        prev_positions: tuple[tuple[int, int], tuple[int, int]],
+        current_positions: tuple[tuple[int, int], tuple[int, int]],
+    ) -> RewardContext:
+        ghosts = (
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=prev_positions[0],
+                current_position=current_positions[0],
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+            ),
+            GhostTransition(
+                ghost_id="ghost_2",
+                previous_position=prev_positions[1],
+                current_position=current_positions[1],
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+            ),
+        )
+        return RewardContext(
+            step_count=step_count,
+            max_steps=200,
+            board_shape=(5, 5),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=ghosts,
+            pacman_previous_position=(2, 2),
+            pacman_position=(2, 2),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+
+    baseline_prev = ((0, 0), (4, 4))
+    baseline_curr = ((0, 0), (4, 4))
+
+    # Solo progress: ghost_1 moves one step closer; ghost_2 stays.
+    solo_strategy = CurrentTeamReward()
+    solo_strategy.reset(make_context(0, baseline_prev, baseline_curr))
+    solo_strategy.compute(make_context(0, baseline_prev, baseline_curr))
+    solo_result = solo_strategy.compute(
+        make_context(
+            1,
+            prev_positions=baseline_curr,
+            current_positions=((1, 0), (4, 4)),
+        )
+    )
+
+    # Coordinated progress: both ghosts move one step closer.
+    coord_strategy = CurrentTeamReward()
+    coord_strategy.reset(make_context(0, baseline_prev, baseline_curr))
+    coord_strategy.compute(make_context(0, baseline_prev, baseline_curr))
+    coord_result = coord_strategy.compute(
+        make_context(
+            1,
+            prev_positions=baseline_curr,
+            current_positions=((1, 0), (3, 4)),
+        )
+    )
+
+    solo_potential = solo_result.breakdown["potential_shaping"]
+    coord_potential = coord_result.breakdown["potential_shaping"]
+
+    assert solo_potential > 0.0
+    assert coord_potential > solo_potential
 
 
 def test_reversal_penalty_applies_on_first_opposite_move():
@@ -146,7 +227,7 @@ def test_reversal_penalty_applies_on_first_opposite_move():
     reverse = strategy.compute(make_context(step_count=2, previous=(2, 3), current=(2, 2)))
 
     assert "repeated_direction_reversal" not in forward.breakdown
-    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.04)
+    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.05)
 
 
 def test_two_step_cycle_penalty_applies_on_a_b_a_pattern():
@@ -184,11 +265,11 @@ def test_two_step_cycle_penalty_applies_on_a_b_a_pattern():
     strategy.compute(make_context(step_count=1, previous=(2, 2), current=(2, 3)))
     reverse = strategy.compute(make_context(step_count=2, previous=(2, 3), current=(2, 2)))
 
-    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.04)
-    assert reverse.breakdown["two_step_cycle"] == pytest.approx(-0.06)
+    assert reverse.breakdown["repeated_direction_reversal"] == pytest.approx(-0.05)
+    assert reverse.breakdown["two_step_cycle"] == pytest.approx(-0.08)
 
 
-def test_overlap_penalty_applies_to_adjacent_opposite_direction_pair():
+def test_overlap_penalty_is_disabled_for_ablation_adjacent_opposite_direction_pair():
     strategy = CurrentTeamReward()
 
     def make_context(step_count: int, ghosts: tuple[GhostTransition, GhostTransition]) -> RewardContext:
@@ -229,10 +310,10 @@ def test_overlap_penalty_applies_to_adjacent_opposite_direction_pair():
     )
     result = strategy.compute(moved_context)
 
-    assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)
+    assert "overlap_or_same_corridor" not in result.breakdown
 
 
-def test_overlap_penalty_scales_with_multiple_offending_pairs():
+def test_overlap_penalty_is_disabled_for_ablation_multiple_offending_pairs():
     strategy = CurrentTeamReward()
 
     def make_context(step_count: int, ghosts: tuple[GhostTransition, ...]) -> RewardContext:
@@ -276,6 +357,139 @@ def test_overlap_penalty_scales_with_multiple_offending_pairs():
     )
     result = strategy.compute(moved_context)
 
-    # Three pairs violate same-row/same-direction distance<=2:
-    # (ghost_1, ghost_2), (ghost_2, ghost_3), (ghost_1, ghost_3).
-    assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.15)
+    assert "overlap_or_same_corridor" not in result.breakdown
+
+
+def test_overlap_penalty_enabled_variant_adjacent_opposite_direction_pair():
+    strategy = CurrentWithOverlapOrSameCorridor()
+
+    def make_context(step_count: int, ghosts: tuple[GhostTransition, GhostTransition]) -> RewardContext:
+        return RewardContext(
+            step_count=step_count,
+            max_steps=200,
+            board_shape=(6, 6),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=ghosts,
+            pacman_previous_position=(5, 5),
+            pacman_position=(5, 5),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+
+    strategy.reset(
+        make_context(
+            0,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 1), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 4), (2, 4), 0, False, ((1,),)),
+            ),
+        )
+    )
+    result = strategy.compute(
+        make_context(
+            1,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 2), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 4), (2, 3), 1, False, ((1,),)),
+            ),
+        )
+    )
+
+    assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)
+
+
+def test_overlap_penalty_enabled_variant_overlapping_positions():
+    strategy = CurrentWithOverlapOrSameCorridor()
+
+    def make_context(step_count: int, ghosts: tuple[GhostTransition, GhostTransition]) -> RewardContext:
+        return RewardContext(
+            step_count=step_count,
+            max_steps=200,
+            board_shape=(6, 6),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=ghosts,
+            pacman_previous_position=(5, 5),
+            pacman_position=(5, 5),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+
+    strategy.reset(
+        make_context(
+            0,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 1), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 2), (2, 2), 0, False, ((1,),)),
+            ),
+        )
+    )
+    result = strategy.compute(
+        make_context(
+            1,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 2), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 2), (2, 2), 0, True, ((1,),)),
+            ),
+        )
+    )
+
+    assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)
+
+
+def test_current_git_variant_applies_overlap_penalty_for_adjacent_opposite_direction_pair():
+    strategy = CurrentGitTeamReward()
+
+    def make_context(step_count: int, ghosts: tuple[GhostTransition, GhostTransition]) -> RewardContext:
+        return RewardContext(
+            step_count=step_count,
+            max_steps=200,
+            board_shape=(6, 6),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=ghosts,
+            pacman_previous_position=(5, 5),
+            pacman_position=(5, 5),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+
+    strategy.reset(
+        make_context(
+            0,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 1), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 4), (2, 4), 0, False, ((1,),)),
+            ),
+        )
+    )
+    result = strategy.compute(
+        make_context(
+            1,
+            (
+                GhostTransition("ghost_1", (2, 1), (2, 2), 0, False, ((1,),)),
+                GhostTransition("ghost_2", (2, 4), (2, 3), 1, False, ((1,),)),
+            ),
+        )
+    )
+
+    assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)

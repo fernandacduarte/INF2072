@@ -8,7 +8,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from custom_environment.env.pacman_environment import PacManEnvironment
-from custom_environment.env.domain.constant import Action
+from custom_environment.env.domain.constant import Action, Observation
 from pettingzoo.test import parallel_api_test
 from custom_environment.utils import create_grid
 
@@ -55,5 +55,47 @@ def test_observation_contains_shared_memory_row():
     assert np.issubdtype(action_mask.dtype, np.integer)
     assert np.all(np.isin(action_mask, [0, 1]))
     assert int(action_mask.sum()) >= 1
+
+    env.close()
+
+
+def test_execute_action_prevents_ghost_out_of_bounds_wraparound():
+    env = PacManEnvironment(global_view=create_grid())
+    env.reset()
+
+    ghost = env.ghosts[0]
+    ghost.current_position = (0, 0)
+    ghost.prev_position = (0, 0)
+    ghost.invalid_move = False
+
+    env.global_view[0, 0] = Observation.GHOST.value
+    env.global_view[0, -1] = Observation.EMPTY.value
+
+    env._execute_action(ghost, Action.MOVE_LEFT)
+
+    assert ghost.current_position == (0, 0)
+    assert ghost.invalid_move is True
+    assert env.global_view[0, 0] == Observation.GHOST.value
+    assert env.global_view[0, -1] == Observation.EMPTY.value
+
+    env.close()
+
+
+def test_execute_action_prevents_pacman_out_of_bounds_wraparound():
+    env = PacManEnvironment(global_view=create_grid())
+    env.reset()
+
+    pacman = env.pacman
+    pacman.current_position = (0, 0)
+    pacman.prev_position = (0, 0)
+
+    env.global_view[0, 0] = Observation.PAC_MAN.value
+    env.global_view[0, -1] = Observation.EMPTY.value
+
+    env._execute_action(pacman, Action.MOVE_LEFT)
+
+    assert pacman.current_position == (0, 0)
+    assert env.global_view[0, 0] == Observation.PAC_MAN.value
+    assert env.global_view[0, -1] == Observation.EMPTY.value
 
     env.close()

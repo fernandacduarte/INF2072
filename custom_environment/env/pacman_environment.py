@@ -501,6 +501,13 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         else:
             new_x = x + 1
 
+        rows, cols = self.global_view.shape
+        # Guard against numpy negative-index wraparound when a move leaves the board.
+        if not (0 <= new_x < rows and 0 <= new_y < cols):
+            if isinstance(agent, Ghost):
+                agent.invalid_move = True
+            return
+
         # Read the cell content at the proposed destination.
         target_cell = self.global_view[new_x, new_y]
 
