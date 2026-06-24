@@ -386,6 +386,7 @@ def run_episode(
 
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
+    raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None if render_mode == "ascii" else render_mode
     raw_env.tile_size = tile_size
     raw_env.fps = fps

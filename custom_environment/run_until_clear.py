@@ -49,6 +49,7 @@ def main() -> None:
     env = PacManEnvironment(
         global_view=build_maze(name=args.maze, size=args.grid_size),
         render_mode=render_mode, tile_size=28, fps=12, show_observations=True,
+        shared_memory_in_observation_enabled=False,
     )
     env.max_steps = args.cap  # lift the 200-step truncation
     env.reset(seed=args.seed)
