@@ -55,14 +55,9 @@ Algorithm variants:
 
 **IQL tuning (plan-000008).** The default training budget is now `--max-frames
 60000` (a convergence-scale value; pass a smaller number such as `--max-frames
-1200` for quick smoke runs). For `--algorithm iql` the runner also applies
-convergence-oriented hyperparameters with no CLI flag of their own (a longer
-epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
-VDN and QMIX now use the same tuned schedule (`epsilon 1.0 → 0.05` over 80% of
-the budget, `lr 1e-4`, `gamma 0.99`) to keep cross-algorithm comparisons fairer.
-For `--algorithm iql --maze pinklike3`, the runner applies a stabilization
-override focused on exploration persistence: epsilon anneals `1.0 → 0.10` over
-95% of the budget and `--init-random-frames` is floored at 5000.
+1200` for quick smoke runs). IQL, VDN, and QMIX now share the same tuned
+hyperparameters for fairer comparisons: epsilon anneal `1.0 → 0.05` over 80%
+of the budget, `lr 1e-4`, `gamma 0.99`, and default `--init-random-frames 5000`.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
@@ -125,7 +120,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 
 ```bash
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
---init-random-frames 1000
+--init-random-frames 5000
 --ghost-view-size 3|5|7
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
@@ -281,13 +276,13 @@ You can now run a full benchmark with one command using:
 Example (5 seeds, shared training config):
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 60000
 ```
 
 Benchmark now supports device sweeps in one command:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 60000
 ```
 
 If multiple requested devices resolve to the same runtime target (for example `cpu,cuda` when CUDA is unavailable and fallback is enabled), the benchmark now fails fast with an explicit error instead of silently dropping one device leg.
@@ -305,7 +300,7 @@ Execution strategy:
 Useful optional parameters:
 
 ```bash
---algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+--algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 5000
 --ghost-view-size 3|5|7
 --devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
 ```
@@ -373,7 +368,7 @@ Use this protocol for fair comparisons:
 2. Run a shared benchmark command with both devices:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 60000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
 ```
 
 3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
