@@ -102,8 +102,8 @@ def training_exploration_schedule(
         raise ValueError("max_frames must be >= 1")
 
     eps_init = 1.0
-    eps_end = 0.05
-    anneal_ratio = 0.8
+    eps_end = 0.10
+    anneal_ratio = 0.95
 
     anneal_frames = int(resolved_max_frames * anneal_ratio)
     return {

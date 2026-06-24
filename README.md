@@ -56,7 +56,7 @@ Algorithm variants:
 **IQL tuning (plan-000008).** The default training budget is now `--max-frames
 60000` (a convergence-scale value; pass a smaller number such as `--max-frames
 1200` for quick smoke runs). IQL, VDN, and QMIX now share the same tuned
-hyperparameters for fairer comparisons: epsilon anneal `1.0 → 0.05` over 80%
+hyperparameters for fairer comparisons: epsilon anneal `1.0 → 0.10` over 95%
 of the budget, `lr 1e-4`, `gamma 0.99`, and default `--init-random-frames 5000`.
 
 By default, training now saves a checkpoint at the end of the run.
