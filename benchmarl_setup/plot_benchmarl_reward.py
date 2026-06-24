@@ -12,31 +12,10 @@ import numpy as np
 from algorithm_utils import (
     SUPPORTED_ALGORITHMS,
     SUPPORTED_MAZES,
-    candidate_run_dirs,
     normalize_algorithm,
     runs_root_for_maze,
 )
 from device_utils import device_label
-
-
-def _load_two_col_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    x_vals = []
-    y_vals = []
-    with path.open("r", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 2:
-                continue
-            x_vals.append(float(row[0]))
-            y_vals.append(float(row[1]))
-    return np.asarray(x_vals, dtype=float), np.asarray(y_vals, dtype=float)
-
-
-def _capture_pct_proxy_series_from_episode_returns(
-    episode_returns: np.ndarray,
-) -> np.ndarray:
-    # Proxy: episode return > 0.0 is treated as a capture outcome.
-    return np.where(episode_returns > 0.0, 100.0, 0.0).astype(float)
 
 
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
@@ -47,16 +26,6 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
         start = max(0, i - window + 1)
         out[i] = float(np.mean(values[start : i + 1]))
     return out
-
-
-def _resolve_scalars_dir(run_dir: Path) -> Path | None:
-    nested = run_dir / run_dir.name / "scalars"
-    if nested.exists():
-        return nested
-    direct = run_dir / "scalars"
-    if direct.exists():
-        return direct
-    return None
 
 
 def _epsilon_for_frames(
@@ -91,6 +60,60 @@ def _parse_progress_meta(progress_file: Path) -> dict[str, str]:
                     continue
                 meta[parsed_key] = value.strip()
     return meta
+
+
+def _parse_progress_data(
+    progress_file: Path,
+) -> dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]]:
+    # algorithm -> device_label -> run_id -> step -> (frame, capture_pct, reward)
+    data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = {}
+    if not progress_file.exists():
+        return data
+
+    with progress_file.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split(",")
+            if len(parts) not in (5, 6):
+                continue
+
+            if len(parts) == 6:
+                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts
+            else:
+                algorithm_token, run_id, step_s, frame_s, capture_s = parts
+                reward_s = "nan"
+
+            try:
+                step = int(step_s)
+                frame = float(frame_s)
+                capture_pct = float(capture_s)
+                reward = float(reward_s)
+            except ValueError:
+                continue
+
+            if step <= 0:
+                continue
+
+            if "@" in algorithm_token:
+                algorithm, device_label_key = algorithm_token.split("@", 1)
+                device_label_key = device_label_key.strip().lower()
+            else:
+                algorithm = algorithm_token.strip().lower()
+                device_label_key = "default"
+
+            algorithm = algorithm.strip().lower()
+            if not algorithm:
+                continue
+
+            algo_data = data.setdefault(algorithm, {})
+            device_data = algo_data.setdefault(device_label_key, {})
+            run_data = device_data.setdefault(run_id, {})
+            run_data[step] = (frame, capture_pct, reward)
+
+    return data
 
 
 def _resolve_epsilon_from_cli_or_meta(
@@ -213,7 +236,7 @@ def _open_file(path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot capture percentage, average reward, and epsilon across multiple BenchMARL runs."
+        description="Plot true capture snapshots, average reward, and epsilon across benchmark runs."
     )
     parser.add_argument(
         "--algorithm",
@@ -330,6 +353,7 @@ def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
     progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
+    progress_data = _parse_progress_data(progress_file)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():
@@ -414,59 +438,72 @@ def main() -> None:
     }
 
     per_algorithm: dict[str, dict[str, object]] = {}
+    selected_run_names = (
+        {path.name for path in args.run_dir if path is not None}
+        if args.run_dir
+        else None
+    )
 
     for algorithm in algorithms:
-        if args.run_dir:
-            run_dirs = args.run_dir
-        else:
-            run_dirs = candidate_run_dirs(discovery_root, algorithm)
-
-        if not run_dirs:
+        by_device = progress_data.get(algorithm, {})
+        if not by_device:
             print(
-                f"Warning: no run directories found for algorithm={algorithm} "
-                f"in {discovery_root}"
+                f"Warning: no progress data found for algorithm={algorithm} in {progress_file}"
+            )
+            continue
+
+        if requested_device == "auto":
+            selected_devices = sorted(by_device.keys())
+        else:
+            selected_label = device_label(requested_device)
+            selected_devices = [selected_label] if selected_label in by_device else []
+
+        if not selected_devices:
+            print(
+                f"Warning: no progress data found for algorithm={algorithm} "
+                f"and requested device selector={requested_device}."
             )
             continue
 
         series_frames: list[np.ndarray] = []
         series_capture_pct: list[np.ndarray] = []
         series_reward_mean: list[np.ndarray] = []
-        used_run_dirs: list[Path] = []
+        used_run_dirs: list[str] = []
 
-        for run_dir in run_dirs:
-            scalars_dir = _resolve_scalars_dir(run_dir)
-            if scalars_dir is None:
-                continue
+        for device_key in selected_devices:
+            for run_id, step_map in by_device.get(device_key, {}).items():
+                if selected_run_names is not None and run_id not in selected_run_names:
+                    continue
 
-            frames_path = scalars_dir / "counters_total_frames.csv"
-            episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
-            reward_mean_path = scalars_dir / "collection_reward_reward_mean.csv"
-            if not frames_path.exists() or not episode_reward_path.exists() or not reward_mean_path.exists():
-                continue
+                ordered_steps = sorted(step_map.keys())
+                if not ordered_steps:
+                    continue
 
-            _, frames = _load_two_col_csv(frames_path)
-            _, episode_returns = _load_two_col_csv(episode_reward_path)
-            _, reward_means = _load_two_col_csv(reward_mean_path)
-            n = min(len(frames), len(episode_returns), len(reward_means))
-            if n == 0:
-                continue
+                frames = np.asarray([step_map[step][0] for step in ordered_steps], dtype=float)
+                captures = np.asarray([step_map[step][1] for step in ordered_steps], dtype=float)
+                rewards = np.asarray([step_map[step][2] for step in ordered_steps], dtype=float)
 
-            frames = frames[:n]
-            capture_pct = _capture_pct_proxy_series_from_episode_returns(
-                episode_returns[:n]
-            )
-            capture_pct = _moving_average(capture_pct, args.window)
-            reward_mean = _moving_average(reward_means[:n], args.window)
+                # Keep only points with true capture snapshots (NaN marks non-evaluated steps).
+                valid_mask = ~np.isnan(captures)
+                if not np.any(valid_mask):
+                    continue
 
-            series_frames.append(frames)
-            series_capture_pct.append(capture_pct)
-            series_reward_mean.append(reward_mean)
-            used_run_dirs.append(run_dir)
+                frames = frames[valid_mask]
+                captures = captures[valid_mask]
+                rewards = rewards[valid_mask]
+
+                captures = _moving_average(captures, args.window)
+                rewards = _moving_average(rewards, args.window)
+
+                series_frames.append(frames)
+                series_capture_pct.append(captures)
+                series_reward_mean.append(rewards)
+                used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
 
         if not series_capture_pct:
             print(
-                "Warning: no usable scalar files found for algorithm="
-                f"{algorithm} (expected counters_total_frames.csv, collection_reward_episode_reward_mean.csv, and collection_reward_reward_mean.csv)."
+                "Warning: no true capture snapshots found for algorithm="
+                f"{algorithm} in {progress_file}."
             )
             continue
 
@@ -567,9 +604,9 @@ def main() -> None:
     ax_eps.tick_params(axis="y", colors="black")
 
     ax.set_xlabel("Total frames")
-    ax.set_ylabel("Estimated Capture Rate (%)")
+    ax.set_ylabel("True Capture Rate (%)")
     ax.set_ylim(0.0, 100.0)
-    ax.set_title("Benchmark Capture Rate Across Runs")
+    ax.set_title("Benchmark True Capture Rate Across Runs")
     ax.grid(True, alpha=0.3)
     handles, labels = ax.get_legend_handles_labels()
     reward_handles, reward_labels = ax_reward.get_legend_handles_labels()
