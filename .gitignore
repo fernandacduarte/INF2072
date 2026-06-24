@@ -37,3 +37,6 @@ __pycache__/
 /..gitignore.un~
 .venv/
 _output/tmp/*
+/*.un~
+/custom_environment/*.un~
+/custom_environment/env/rewards/*.un~
