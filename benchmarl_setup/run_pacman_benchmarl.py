@@ -189,6 +189,7 @@ def main() -> None:
         "grid_size": args.grid_size,
         "map_name": args.maze,
         "include_global_state": qmix_uses_global_state(algorithm),
+        "shared_memory_in_observation_enabled": True,
         "reward_class": resolved_reward_class,
         "reward_id": reward_strategy.strategy_id,
     }

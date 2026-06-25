@@ -29,6 +29,9 @@ class PacmanTaskClass(TaskClass):
         config = copy.deepcopy(self.config)
         grid_size = int(config.get("grid_size", 20))
         include_global_state = bool(config.get("include_global_state", False))
+        shared_memory_in_observation_enabled = bool(
+            config.get("shared_memory_in_observation_enabled", True)
+        )
         map_name = str(config.get("map_name", "default"))
         ghost_view_size = config.get("ghost_view_size", None)
         reward_class = config.get("reward_class", None)
@@ -37,6 +40,7 @@ class PacmanTaskClass(TaskClass):
             env = PacManEnvironment(
                 global_view=build_maze(name=map_name, size=grid_size),
                 ghost_view_size=ghost_view_size,
+                shared_memory_in_observation_enabled=shared_memory_in_observation_enabled,
                 reward_strategy=reward_class,
             )
             return PettingZooWrapper(
