@@ -13,7 +13,28 @@ from custom_environment.env.rewards.base import RewardStrategy
 DEFAULT_REWARD_CLASS = (
     "custom_environment.env.rewards.current:CurrentTeamReward"
 )
+_REWARD_CLASS_BY_ID = {
+    "current_git": "custom_environment.env.rewards.current:CurrentGitTeamReward",
+    "current": "custom_environment.env.rewards.current:CurrentTeamReward",
+    "current_with_overlap_or_same_corridor": (
+        "custom_environment.env.rewards.current:CurrentWithOverlapOrSameCorridor"
+    ),
+}
 _STRATEGY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def reward_class_from_id(strategy_id: str) -> str:
+    key = str(strategy_id).strip()
+    if not key:
+        raise ValueError("Reward id cannot be empty.")
+    class_path = _REWARD_CLASS_BY_ID.get(key)
+    if class_path is None:
+        known = ", ".join(sorted(_REWARD_CLASS_BY_ID.keys()))
+        raise ValueError(
+            f"Unknown reward id {key!r}. Known ids: {known}. "
+            "Use --reward-class/--reward-classes to pass a custom module:Class path."
+        )
+    return class_path
 
 
 def reward_class_path(strategy: RewardStrategy) -> str:

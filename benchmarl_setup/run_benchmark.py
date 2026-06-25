@@ -14,6 +14,7 @@ from algorithm_utils import (
     candidate_run_dirs,
     normalize_algorithm,
     runs_root_for_maze,
+    training_exploration_schedule,
 )
 from device_utils import device_label, parse_device_list, resolve_device
 from summarize_benchmark_runs import summarize_runs
@@ -25,7 +26,8 @@ EVAL_REPORT_PATH = PROJECT_ROOT / "custom_environment" / "eval_report.py"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from custom_environment.env.rewards import DEFAULT_REWARD_CLASS, load_reward_strategy
+from custom_environment.env.rewards import load_reward_strategy
+from custom_environment.env.rewards.loader import reward_class_from_id
 
 
 def _parse_seeds(raw: str) -> list[int]:
@@ -53,8 +55,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reward-classes",
         type=str,
-        default=DEFAULT_REWARD_CLASS,
+        default=None,
         help="Comma-separated reward implementations as module:Class.",
+    )
+    parser.add_argument(
+        "--reward-ids",
+        type=str,
+        default="current",
+        help=(
+            "Comma-separated reward strategy ids (for example: current,current_git,current_with_overlap_or_same_corridor). "
+            "Ignored when --reward-classes is provided."
+        ),
     )
     parser.add_argument(
         "--seeds",
@@ -268,6 +279,15 @@ def _load_two_col_csv(path: Path) -> tuple[list[float], list[float]]:
     return x_vals, y_vals
 
 
+def _capture_pct_proxy_from_episode_return(episode_return: float) -> float:
+    """Estimate capture outcome as a binary percentage from episode return.
+
+    This is a lightweight proxy for live training visualization when no direct
+    per-collection capture scalar is available in BenchMARL CSV logs.
+    """
+    return 100.0 if float(episode_return) > 0.0 else 0.0
+
+
 class ProgressReporter:
     def __init__(
         self,
@@ -275,11 +295,22 @@ class ProgressReporter:
         algorithms: list[str],
         output_file: Path,
         interval_seconds: float,
+        max_frames: int,
+        maze: str,
+        epsilon_algorithm: str,
     ) -> None:
         self.runs_roots_by_label = runs_roots_by_label
         self.algorithms = algorithms
         self.output_file = output_file
         self.interval_seconds = max(0.2, interval_seconds)
+        self.max_frames = int(max_frames)
+        self.maze = maze
+        self.epsilon_algorithm = normalize_algorithm(epsilon_algorithm)
+        self.epsilon_schedule = training_exploration_schedule(
+            self.epsilon_algorithm,
+            self.maze,
+            self.max_frames,
+        )
         self._last_step_by_run: dict[tuple[str, str, str], int] = {}
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -294,7 +325,19 @@ class ProgressReporter:
 
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
         # Truncate at the beginning of a new benchmark session.
-        self.output_file.write_text("", encoding="utf-8")
+        self.output_file.write_text(
+            "#meta,"
+            f"max_frames={self.epsilon_schedule['max_frames']},"
+            f"epsilon_init={self.epsilon_schedule['epsilon_init']},"
+            f"epsilon_end={self.epsilon_schedule['epsilon_end']},"
+            f"epsilon_anneal_ratio={self.epsilon_schedule['epsilon_anneal_ratio']},"
+            f"epsilon_anneal_frames={self.epsilon_schedule['epsilon_anneal_frames']},"
+            f"epsilon_algorithm={self.epsilon_algorithm},"
+            f"maze={self.maze},"
+            "metric=capture_pct_proxy,"
+            "reward=collection_reward_reward_mean\n",
+            encoding="utf-8",
+        )
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -319,11 +362,13 @@ class ProgressReporter:
                         continue
 
                     frames_path = scalars_dir / "counters_total_frames.csv"
+                    episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
                     reward_path = scalars_dir / "collection_reward_reward_mean.csv"
                     _, frames = _load_two_col_csv(frames_path)
+                    _, episode_returns = _load_two_col_csv(episode_reward_path)
                     _, rewards = _load_two_col_csv(reward_path)
 
-                    n = min(len(frames), len(rewards))
+                    n = min(len(frames), len(episode_returns), len(rewards))
                     if n <= 0:
                         continue
 
@@ -339,9 +384,12 @@ class ProgressReporter:
 
                     for step in range(last_step + 1, n + 1):
                         frame_value = frames[step - 1]
+                        capture_pct = _capture_pct_proxy_from_episode_return(
+                            episode_returns[step - 1]
+                        )
                         reward_value = rewards[step - 1]
                         lines.append(
-                            f"{algorithm}@{label},{run_dir.name},{step},{frame_value},{reward_value}\n"
+                            f"{algorithm}@{label},{run_dir.name},{step},{frame_value},{capture_pct},{reward_value}\n"
                         )
 
                     self._last_step_by_run[run_key] = n
@@ -541,14 +589,25 @@ def main() -> None:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
     reward_specs: list[tuple[str, str]] = []
-    reward_ids: set[str] = set()
-    for class_path in (item.strip() for item in args.reward_classes.split(",")):
+    reward_ids_seen: set[str] = set()
+    if args.reward_classes and str(args.reward_classes).strip():
+        reward_class_inputs = [
+            item.strip() for item in str(args.reward_classes).split(",") if item.strip()
+        ]
+    else:
+        reward_class_inputs = [
+            reward_class_from_id(item.strip())
+            for item in str(args.reward_ids).split(",")
+            if item.strip()
+        ]
+
+    for class_path in reward_class_inputs:
         if not class_path:
             continue
         strategy = load_reward_strategy(class_path)
-        if strategy.strategy_id in reward_ids:
+        if strategy.strategy_id in reward_ids_seen:
             raise ValueError(f"Duplicate reward strategy_id: {strategy.strategy_id!r}")
-        reward_ids.add(strategy.strategy_id)
+        reward_ids_seen.add(strategy.strategy_id)
         reward_specs.append((strategy.strategy_id, class_path))
     if not reward_specs:
         raise ValueError("At least one reward class must be provided.")
@@ -599,11 +658,15 @@ def main() -> None:
 
     reporter: ProgressReporter | None = None
     if not args.no_liveplot_report:
+        epsilon_algorithm = "iql" if "iql" in algorithms else algorithms[0]
         reporter = ProgressReporter(
             runs_roots_by_label=runs_roots_by_label,
             algorithms=algorithms,
             output_file=live_progress_file,
             interval_seconds=args.report_interval_seconds,
+            max_frames=args.max_frames,
+            maze=args.maze,
+            epsilon_algorithm=epsilon_algorithm,
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")

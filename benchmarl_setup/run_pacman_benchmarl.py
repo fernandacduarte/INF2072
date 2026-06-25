@@ -15,18 +15,20 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from benchmarl_setup.pacman_benchmarl_task import PacmanTask, register_pacman_task
 from custom_environment.env.rewards import (
-    DEFAULT_REWARD_CLASS,
     load_reward_strategy,
 )
+from custom_environment.env.rewards.loader import reward_class_from_id
 from benchmarl_setup.algorithm_utils import (
     SUPPORTED_MAZES,
     normalize_algorithm,
     qmix_uses_global_state,
     runs_root_for_maze,
+    training_exploration_schedule,
 )
 from benchmarl_setup.device_utils import resolve_device
 
 
+IQL_PINKLIKE3_MIN_INIT_RANDOM_FRAMES = 5000
 def _algorithm_config(name: str):
     algorithm = normalize_algorithm(name)
     if algorithm == "iql":
@@ -38,7 +40,7 @@ def _algorithm_config(name: str):
     raise ValueError(f"Unsupported algorithm: {name}")
 
 
-def _tune_iql_experiment(experiment_config, max_frames: int) -> None:
+def _tune_iql_experiment(experiment_config, max_frames: int, maze: str) -> None:
     """Apply IQL-specific exploration/optimization tuning for convergence (plan-000008).
 
     These fields have no CLI flags, so overriding them here cannot conflict with
@@ -46,15 +48,34 @@ def _tune_iql_experiment(experiment_config, max_frames: int) -> None:
     robust to BenchMARL field renames. Only the IQL path calls this; VDN/QMIX
     keep BenchMARL's stock schedule.
     """
+    schedule = training_exploration_schedule("iql", maze, max_frames)
     overrides = {
         # Anneal epsilon from full exploration down to a small floor over most of
         # the budget so the team explores early then commits to a pursuit policy.
-        "exploration_eps_init": 1.0,
-        "exploration_eps_end": 0.05,
-        "exploration_anneal_frames": int(max_frames * 0.8),
+        "exploration_eps_init": schedule["epsilon_init"],
+        "exploration_eps_end": schedule["epsilon_end"],
+        "exploration_anneal_frames": schedule["epsilon_anneal_frames"],
         # A slightly higher LR than the stock 5e-5 speeds convergence at this scale.
         "lr": 1e-4,
         # Standard discount for episodic pursuit.
+        "gamma": 0.99,
+    }
+    for name, value in overrides.items():
+        if hasattr(experiment_config, name):
+            setattr(experiment_config, name, value)
+
+def _tune_vdn_qmix_experiment(experiment_config, max_frames: int, maze: str) -> None:
+    """Apply a shared exploration/optimization schedule for VDN and QMIX.
+
+    The values intentionally mirror the tuned schedule used by IQL so algorithm
+    comparisons are less confounded by different epsilon/lr/gamma defaults.
+    """
+    schedule = training_exploration_schedule("vdn", maze, max_frames)
+    overrides = {
+        "exploration_eps_init": schedule["epsilon_init"],
+        "exploration_eps_end": schedule["epsilon_end"],
+        "exploration_anneal_frames": schedule["epsilon_anneal_frames"],
+        "lr": 1e-4,
         "gamma": 0.99,
     }
     for name, value in overrides.items():
@@ -105,8 +126,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reward-class",
         type=str,
-        default=DEFAULT_REWARD_CLASS,
+        default=None,
         help="Reward implementation as module:Class (must be a zero-argument RewardStrategy).",
+    )
+    parser.add_argument(
+        "--reward-id",
+        type=str,
+        default="current",
+        help=(
+            "Reward strategy id alias (for example: current, current_git, current_with_overlap_or_same_corridor). "
+            "Ignored when --reward-class is provided."
+        ),
     )
     parser.add_argument(
         "--save-folder",
@@ -149,7 +179,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     algorithm = normalize_algorithm(args.algorithm)
-    reward_strategy = load_reward_strategy(args.reward_class)
+    resolved_reward_class = (
+        str(args.reward_class).strip()
+        if args.reward_class is not None and str(args.reward_class).strip()
+        else reward_class_from_id(args.reward_id)
+    )
+    reward_strategy = load_reward_strategy(resolved_reward_class)
     resolved_device, resolution_reason = resolve_device(
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
@@ -165,7 +200,7 @@ def main() -> None:
     print(f"Registered task: {full_task_name}")
     print(
         "Reward strategy | "
-        f"id={reward_strategy.strategy_id} | class={args.reward_class}"
+        f"id={reward_strategy.strategy_id} | class={resolved_reward_class}"
     )
     print(
         "Device selection | "
@@ -178,7 +213,7 @@ def main() -> None:
         "grid_size": args.grid_size,
         "map_name": args.maze,
         "include_global_state": qmix_uses_global_state(algorithm),
-        "reward_class": args.reward_class,
+        "reward_class": resolved_reward_class,
         "reward_id": reward_strategy.strategy_id,
     }
     if args.ghost_view_size is not None:
@@ -210,14 +245,21 @@ def main() -> None:
     experiment_config.off_policy_train_batch_size = args.train_batch_size
     experiment_config.off_policy_memory_size = args.memory_size
     experiment_config.off_policy_init_random_frames = args.init_random_frames
+    if algorithm == "iql" and args.maze == "pinklike3":
+        experiment_config.off_policy_init_random_frames = max(
+            int(experiment_config.off_policy_init_random_frames),
+            IQL_PINKLIKE3_MIN_INIT_RANDOM_FRAMES,
+        )
 
     experiment_config.save_folder = str(save_root)
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
 
-    # IQL-only convergence tuning; VDN/QMIX keep BenchMARL's stock schedule.
+    # Apply algorithm-specific tuning schedules.
     if algorithm == "iql":
-        _tune_iql_experiment(experiment_config, args.max_frames)
+        _tune_iql_experiment(experiment_config, args.max_frames, args.maze)
+    elif algorithm in ("vdn", "qmixlocal", "qmixglobal"):
+        _tune_vdn_qmix_experiment(experiment_config, args.max_frames, args.maze)
 
     experiment = Experiment(
         task=task,

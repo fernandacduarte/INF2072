@@ -34,6 +34,7 @@ class RewardContext:
     step_count: int
     max_steps: int
     board_shape: tuple[int, int]
+    ghost_view_radius: int
     wall_positions: frozenset[Position]
     ghosts: tuple[GhostTransition, ...]
     pacman_previous_position: Position

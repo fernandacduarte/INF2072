@@ -7,7 +7,7 @@ from custom_environment.env.rewards.current import (
 
 
 class StrongerMovementReward(CurrentTeamReward):
-    """Current reward with VALID_MOVE increased from 0.05 to 0.10."""
+    """Current reward with VALID_MOVE increased from 0.01 to 0.10."""
 
     strategy_id = "valid-move-010"
 

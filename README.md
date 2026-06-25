@@ -58,7 +58,11 @@ Algorithm variants:
 1200` for quick smoke runs). For `--algorithm iql` the runner also applies
 convergence-oriented hyperparameters with no CLI flag of their own (a longer
 epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
-VDN/QMIX keep BenchMARL's stock schedule.
+VDN and QMIX now use the same tuned schedule (`epsilon 1.0 → 0.05` over 80% of
+the budget, `lr 1e-4`, `gamma 0.99`) to keep cross-algorithm comparisons fairer.
+For `--algorithm iql --maze pinklike3`, the runner applies a stabilization
+override focused on exploration persistence: epsilon anneals `1.0 → 0.10` over
+95% of the budget and `--init-random-frames` is floored at 5000.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
@@ -229,14 +233,15 @@ into a `MazeSpec` (grid + spawns + cosmetic pellet mask). The map itself declare
 entity starts, so there are no hardcoded spawn positions. Characters:
 
 - `%` or `#` — wall
-- `.` — pellet (cosmetic only);  `o` — power pellet (treated as a pellet for now)
+- `.` — pellet;  `o` — power pellet (treated as a pellet for now)
 - `G` — ghost spawn (the number of ghosts equals the number of `G`s)
 - `P` — Pac-Man spawn (exactly one)
 - space (or any other char) — empty, no pellet
 
 `parse_layout` validates a single `P`, at least one `G`, a solid border, and full connectivity
-(`assert_connected`). Pellets are **cosmetic** — they do not affect observations, reward, or
-termination. To add a maze, define a new layout list + register it in the `MAZES` dict.
+(`assert_connected`). Pellets do not alter per-step local observations, but they do affect
+episode outcomes: Pacman wins when all pellets are eaten, which applies the configured
+terminal reward outcome. To add a maze, define a new layout list + register it in the `MAZES` dict.
 
 The selected maze is supported by training, benchmarking, and the render demo:
 
@@ -381,8 +386,23 @@ Training now reports live progress to:
 
 - `benchmarl_setup/runs/<maze>/live_progress.csvl`
 
-Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with mean ± std curves per algorithm.
+Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
+- y1: rolling estimated capture percentage (mean ± std)
+- y2: rolling average reward
+- y3: epsilon schedule overlay
+
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
+When `iql` is included, the epsilon overlay is resolved from benchmark metadata
+written to `live_progress.csvl` (for example:
+`#meta,max_frames=...,epsilon_init=...,epsilon_end=...,epsilon_anneal_ratio=...`).
+There are no built-in epsilon fallback defaults in plotting anymore.
+If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
+
+Capture metric note: liveplot reads a lightweight capture-percentage proxy
+stream from benchmark progress. The proxy maps `collection_reward_episode_reward_mean`
+to binary outcomes (`episode return > 0` -> capture) and then plots rolling
+mean percentage. Reward is also emitted in the same progress stream and shown
+on the second y-axis.
 
 Start live monitor:
 
@@ -411,23 +431,46 @@ py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
-### Plot Benchmark Reward in One Figure (IQL, VDN, QMIX Local, QMIX Global)
+### Plot Benchmark Capture % in One Figure (IQL, VDN, QMIX Local, QMIX Global)
 
 Use:
 
 - `benchmarl_setup/plot_benchmarl_reward.py`
 
-This script can aggregate runs from multiple algorithms and plot all of them in the same figure:
+This script can aggregate runs from multiple algorithms and plot all of them in the same figure with three y-axes:
 
-- Mean reward curve per algorithm
-- Standard deviation band per algorithm
+- mean estimated capture percentage curve per algorithm (+/- std band)
+- mean reward curve per algorithm
+- epsilon overlay when `iql` is included
 
 Examples:
 
 ```bash
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn --show-runs
 py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixlocal,qmixglobal --show-runs
+py -3.11 benchmarl_setup\plot_benchmarl_reward.py --algorithms iql,vdn,qmixglobal --maze pinklike3 --reward-id current --device cuda
 ```
+
+Useful options:
+
+```bash
+--reward-id current --device auto|cpu|cuda|cuda:0
+--progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
+--epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
+--maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
+```
+
+By default, this script now reads from `--reward-id current` and `--device auto`
+(all device labels under the selected reward root). Use `--device cuda` or
+`--device cpu` to force one device folder. Epsilon overlay values are resolved
+from `live_progress.csvl` metadata (`max_frames`, `epsilon_init`,
+`epsilon_end`, `epsilon_anneal_ratio`) with optional `--epsilon-*` overrides.
+There are no built-in epsilon fallback defaults in this script; if metadata is
+missing/incomplete, pass all required `--epsilon-*` values explicitly.
+
+Capture metric note: this plot uses the same lightweight capture proxy as
+liveplot (`collection_reward_episode_reward_mean > 0` -> captured episode),
+then applies the configured rolling window.
 
 ### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
 
@@ -480,16 +523,10 @@ State vector order:
 
 Policy observations remain local (5x5 by default) for all algorithms; only `qmixglobal` mixer uses this centralized state.
 
-Optional parameters:
-
-```bash
---maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
-```
-
 If no `--out` is provided, the default output is:
 
-- `benchmarl_setup/runs/<maze>/benchmark_reward_multiseed_mean_std.png` (when plotting multiple algorithms)
-- `benchmarl_setup/runs/<maze>/<algorithm>_reward_multiseed_mean_std.png` (when plotting one algorithm)
+- `benchmarl_setup/runs/<maze>/<reward_id>/benchmark_capture_multiseed_mean_std.png` (when plotting multiple algorithms)
+- `benchmarl_setup/runs/<maze>/<reward_id>/<algorithm>_capture_multiseed_mean_std.png` (when plotting one algorithm)
 
 ### Plot de Reward IQL (Passo a Passo)
 
@@ -545,6 +582,39 @@ The behavior-compatible default is
 `custom_environment.env.rewards.current:CurrentTeamReward`. To add an experiment,
 create a zero-argument `RewardStrategy` subclass with a unique `strategy_id`; no
 central registry edit is required.
+
+Current behavior note: the `repeated_direction_reversal` term is applied from the
+first opposite-direction move (for example `A -> B -> A`), then scales with
+consecutive reversals up to its existing cap. The strategy also penalizes
+explicit two-step cycles (`A -> B -> A`) and opposite-direction adjacent
+ghost pairs to reduce local ping-pong loops in multi-ghost play. For the
+current ablation run, the `overlap_or_same_corridor` penalty and its pairwise
+logic are temporarily disabled to isolate their effect on reward trends as
+exploration decreases. Exploration terms were intentionally reduced
+(`recently_unvisited_tile` and `reveal_unseen_local_cells`) so they do not
+dominate returns when capture progress is poor. The strategy also provides a
+`currently_visible` bonus whenever Pacman is visible to keep early training
+signal dense for pursuit learning. Potential shaping now uses a team-aware
+distance metric based on the two closest reachable ghosts (`d1 + 0.5*d2`,
+falling back to `d1` when only one ghost is reachable) to reduce single-ghost
+free-riding and reward coordinated closing pressure.
+
+To re-enable that term as an explicit experiment, use
+`custom_environment.env.rewards.current:CurrentWithOverlapOrSameCorridor`
+(`strategy_id = current_with_overlap_or_same_corridor`). This keeps
+`CurrentTeamReward` unchanged as the ablation baseline while enabling a clean
+A/B comparison.
+
+Three-way comparison setup:
+
+- `custom_environment.env.rewards.current:CurrentGitTeamReward`
+  (`strategy_id = current_git`): git baseline rewards and logic.
+- `custom_environment.env.rewards.current:CurrentTeamReward`
+  (`strategy_id = current`): locally modified rewards/logic without
+  overlap-or-same-corridor penalty.
+- `custom_environment.env.rewards.current:CurrentWithOverlapOrSameCorridor`
+  (`strategy_id = current_with_overlap_or_same_corridor`): locally modified
+  rewards/logic with overlap-or-same-corridor penalty enabled.
 
 Commands in this section provide two collapsible platform options. Windows is
 expanded by default and uses the Python launcher `py -3.11`; macOS/Linux uses
@@ -631,6 +701,12 @@ Select it with:
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-class my_rewards.pursuit:PursuitReward
 ```
 
+Or use a built-in reward id alias:
+
+```cmd
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id current_with_overlap_or_same_corridor
+```
+
 </details>
 
 <details>
@@ -640,6 +716,14 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-class 
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-class my_rewards.pursuit:PursuitReward
+```
+
+Or use a built-in reward id alias:
+
+```bash
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id current_with_overlap_or_same_corridor
 ```
 
 </details>
@@ -692,6 +776,12 @@ Paired multi-seed comparison:
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-classes team_a.rewards:RewardA,team_b.rewards:RewardB
 ```
 
+Built-in reward ids can also be passed directly:
+
+```cmd
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-ids current,current_with_overlap_or_same_corridor
+```
+
 </details>
 
 <details>
@@ -702,6 +792,15 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql,vdn \
   --seeds 0,1,2 \
   --reward-classes team_a.rewards:RewardA,team_b.rewards:RewardB
+```
+
+Built-in reward ids can also be passed directly:
+
+```bash
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql,vdn \
+  --seeds 0,1,2 \
+  --reward-ids current,current_with_overlap_or_same_corridor
 ```
 
 </details>
@@ -814,7 +913,7 @@ first—the runners refuse to mix multiple runs in one comparison directory.
 #### Compare the default reward with a one-weight variant
 
 `StrongerMovementReward` is an example experimental strategy. It inherits the full
-current reward and changes only `valid_move`, from `0.05` to `0.10`. Its import path is:
+current reward and changes only `valid_move`, from `0.01` to `0.10`. Its import path is:
 
 ```text
 my_rewards.movement_bonus:StrongerMovementReward
