@@ -385,6 +385,7 @@ def _evaluate_checkpoint(
     )
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
+    raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None
     actual_reward_id = str(getattr(raw_env, "reward_strategy_id", "current"))
     actual_reward_class = str(getattr(raw_env, "reward_strategy_class", ""))
