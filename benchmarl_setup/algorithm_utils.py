@@ -93,17 +93,17 @@ def training_exploration_schedule(
     max_frames: int,
 ) -> dict[str, float | int]:
     normalized_algorithm = normalize_algorithm(algorithm)
+    if normalized_algorithm not in SUPPORTED_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
+
+    _ = maze
     resolved_max_frames = int(max_frames)
     if resolved_max_frames < 1:
         raise ValueError("max_frames must be >= 1")
 
     eps_init = 1.0
-    eps_end = 0.05
-    anneal_ratio = 0.8
-
-    if normalized_algorithm == "iql" and maze == "pinklike3":
-        eps_end = 0.10
-        anneal_ratio = 0.95
+    eps_end = 0.10
+    anneal_ratio = 0.95
 
     anneal_frames = int(resolved_max_frames * anneal_ratio)
     return {

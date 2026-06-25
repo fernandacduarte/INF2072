@@ -28,7 +28,6 @@ from benchmarl_setup.algorithm_utils import (
 from benchmarl_setup.device_utils import resolve_device
 
 
-IQL_PINKLIKE3_MIN_INIT_RANDOM_FRAMES = 5000
 def _algorithm_config(name: str):
     algorithm = normalize_algorithm(name)
     if algorithm == "iql":
@@ -40,37 +39,14 @@ def _algorithm_config(name: str):
     raise ValueError(f"Unsupported algorithm: {name}")
 
 
-def _tune_iql_experiment(experiment_config, max_frames: int, maze: str) -> None:
-    """Apply IQL-specific exploration/optimization tuning for convergence (plan-000008).
-
-    These fields have no CLI flags, so overriding them here cannot conflict with
-    user-supplied arguments. Each attribute is guarded with ``hasattr`` to stay
-    robust to BenchMARL field renames. Only the IQL path calls this; VDN/QMIX
-    keep BenchMARL's stock schedule.
-    """
-    schedule = training_exploration_schedule("iql", maze, max_frames)
-    overrides = {
-        # Anneal epsilon from full exploration down to a small floor over most of
-        # the budget so the team explores early then commits to a pursuit policy.
-        "exploration_eps_init": schedule["epsilon_init"],
-        "exploration_eps_end": schedule["epsilon_end"],
-        "exploration_anneal_frames": schedule["epsilon_anneal_frames"],
-        # A slightly higher LR than the stock 5e-5 speeds convergence at this scale.
-        "lr": 1e-4,
-        # Standard discount for episodic pursuit.
-        "gamma": 0.99,
-    }
-    for name, value in overrides.items():
-        if hasattr(experiment_config, name):
-            setattr(experiment_config, name, value)
-
-def _tune_vdn_qmix_experiment(experiment_config, max_frames: int, maze: str) -> None:
-    """Apply a shared exploration/optimization schedule for VDN and QMIX.
-
-    The values intentionally mirror the tuned schedule used by IQL so algorithm
-    comparisons are less confounded by different epsilon/lr/gamma defaults.
-    """
-    schedule = training_exploration_schedule("vdn", maze, max_frames)
+def _tune_shared_experiment(
+    experiment_config,
+    algorithm: str,
+    max_frames: int,
+    maze: str,
+) -> None:
+    """Apply one shared exploration/optimization schedule across MARL algorithms."""
+    schedule = training_exploration_schedule(algorithm, maze, max_frames)
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
         "exploration_eps_end": schedule["epsilon_end"],
@@ -106,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--init-random-frames",
         type=int,
-        default=2000,
+        default=5000,
         help="Initial random interaction frames before learning starts.",
     )
     parser.add_argument("--grid-size", type=int, default=20)
@@ -245,21 +221,13 @@ def main() -> None:
     experiment_config.off_policy_train_batch_size = args.train_batch_size
     experiment_config.off_policy_memory_size = args.memory_size
     experiment_config.off_policy_init_random_frames = args.init_random_frames
-    if algorithm == "iql" and args.maze == "pinklike3":
-        experiment_config.off_policy_init_random_frames = max(
-            int(experiment_config.off_policy_init_random_frames),
-            IQL_PINKLIKE3_MIN_INIT_RANDOM_FRAMES,
-        )
 
     experiment_config.save_folder = str(save_root)
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
 
-    # Apply algorithm-specific tuning schedules.
-    if algorithm == "iql":
-        _tune_iql_experiment(experiment_config, args.max_frames, args.maze)
-    elif algorithm in ("vdn", "qmixlocal", "qmixglobal"):
-        _tune_vdn_qmix_experiment(experiment_config, args.max_frames, args.maze)
+    # Apply one shared schedule so common hyperparameters stay aligned.
+    _tune_shared_experiment(experiment_config, algorithm, args.max_frames, args.maze)
 
     experiment = Experiment(
         task=task,

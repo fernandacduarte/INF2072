@@ -73,12 +73,12 @@ def parse_args() -> argparse.Namespace:
         default="0,1,2,3,4",
         help="Comma-separated seeds.",
     )
-    parser.add_argument("--max-frames", type=int, default=50000)
+    parser.add_argument("--max-frames", type=int, default=60000)
     parser.add_argument("--frames-per-batch", type=int, default=200)
     parser.add_argument("--optimizer-steps", type=int, default=10)
     parser.add_argument("--train-batch-size", type=int, default=128)
     parser.add_argument("--memory-size", type=int, default=10000)
-    parser.add_argument("--init-random-frames", type=int, default=1000)
+    parser.add_argument("--init-random-frames", type=int, default=5000)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
