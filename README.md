@@ -82,6 +82,17 @@ original ASCII terminal rendering, use:
 py -3.11 custom_environment\eval.py --learner iql --render-mode ascii --delay 0.08
 ```
 
+For step-by-step debugging of low/zero capture behavior, you can emit one JSON
+diagnostics object per step in ASCII mode:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --maze pinklike3 --render-mode ascii --delay 0 --show-reward-breakdown --ascii-step-json
+```
+
+Each JSON line includes action/reward by ghost, Pacman and ghost positions,
+visibility and sighting memory, capture/timeout/pacman-win flags, pellet counts,
+and reward decomposition.
+
 The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
@@ -129,6 +140,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 
 ```bash
 --delay 0.25 --max-steps 200 --maze default --checkpoint-select best --show-reward-breakdown
+--ascii-step-json
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --ghost-view-size 3|5|7
