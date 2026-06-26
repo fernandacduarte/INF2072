@@ -73,12 +73,12 @@ def parse_args() -> argparse.Namespace:
         default="0,1,2,3,4",
         help="Comma-separated seeds.",
     )
-    parser.add_argument("--max-frames", type=int, default=50000)
+    parser.add_argument("--max-frames", type=int, default=60000)
     parser.add_argument("--frames-per-batch", type=int, default=200)
     parser.add_argument("--optimizer-steps", type=int, default=10)
     parser.add_argument("--train-batch-size", type=int, default=128)
     parser.add_argument("--memory-size", type=int, default=10000)
-    parser.add_argument("--init-random-frames", type=int, default=1000)
+    parser.add_argument("--init-random-frames", type=int, default=5000)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
@@ -175,6 +175,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Paired objective-evaluation episodes per trained checkpoint "
             "(default: 0; set a positive value to enable)."
+        ),
+    )
+    parser.add_argument(
+        "--live-capture-eval-episodes",
+        type=int,
+        default=100,
+        help=(
+            "Deterministic eval_report episodes used to periodically backfill true capture% "
+            "in live progress (set 0 to disable)."
         ),
     )
     parser.add_argument(
@@ -279,13 +288,89 @@ def _load_two_col_csv(path: Path) -> tuple[list[float], list[float]]:
     return x_vals, y_vals
 
 
-def _capture_pct_proxy_from_episode_return(episode_return: float) -> float:
-    """Estimate capture outcome as a binary percentage from episode return.
+def _resolve_checkpoints_dir(run_dir: Path) -> Path | None:
+    nested = run_dir / run_dir.name / "checkpoints"
+    if nested.exists():
+        return nested
+    direct = run_dir / "checkpoints"
+    if direct.exists():
+        return direct
+    return None
 
-    This is a lightweight proxy for live training visualization when no direct
-    per-collection capture scalar is available in BenchMARL CSV logs.
-    """
-    return 100.0 if float(episode_return) > 0.0 else 0.0
+
+def _latest_checkpoint_path(run_dir: Path) -> Path | None:
+    checkpoints_dir = _resolve_checkpoints_dir(run_dir)
+    if checkpoints_dir is None:
+        return None
+    checkpoints = sorted(
+        checkpoints_dir.glob("checkpoint_*.pt"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return checkpoints[0] if checkpoints else None
+
+
+def _read_capture_pct_from_eval_csv(path: Path) -> float | None:
+    if not path.exists():
+        return None
+
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            raw_capture_rate = (row.get("capture_rate") or "").strip()
+            if not raw_capture_rate:
+                continue
+            try:
+                return float(raw_capture_rate) * 100.0
+            except ValueError:
+                continue
+    return None
+
+
+def _run_eval_capture_snapshot(
+    *,
+    algorithm: str,
+    reward_id: str,
+    run_dir: Path,
+    checkpoint_path: Path,
+    episodes: int,
+    eval_seed_base: int,
+    device: str,
+    allow_cpu_fallback: bool,
+) -> float | None:
+    out_csv = run_dir / "evaluation_report_live_capture.csv"
+    command = [
+        sys.executable,
+        str(EVAL_REPORT_PATH),
+        "--learner",
+        algorithm,
+        "--checkpoint",
+        str(checkpoint_path),
+        "--reward-id",
+        reward_id,
+        "--episodes",
+        str(episodes),
+        "--eval-seed-base",
+        str(eval_seed_base),
+        "--device",
+        device,
+        "--out",
+        str(out_csv),
+    ]
+    command.append("--allow-cpu-fallback" if allow_cpu_fallback else "--no-allow-cpu-fallback")
+
+    completed = subprocess.run(command, check=False)
+    if completed.returncode != 0:
+        print(
+            "Live capture snapshot failed: "
+            f"algorithm={algorithm} reward={reward_id} checkpoint={checkpoint_path} "
+            f"returncode={completed.returncode}"
+        )
+        return None
+
+    capture_pct = _read_capture_pct_from_eval_csv(out_csv)
+    if capture_pct is None:
+        print(f"Live capture snapshot missing capture_rate in {out_csv}")
+    return capture_pct
 
 
 class ProgressReporter:
@@ -298,6 +383,10 @@ class ProgressReporter:
         max_frames: int,
         maze: str,
         epsilon_algorithm: str,
+        live_capture_eval_episodes: int,
+        eval_seed_base: int,
+        allow_cpu_fallback: bool,
+        eval_device_by_label: dict[str, str],
     ) -> None:
         self.runs_roots_by_label = runs_roots_by_label
         self.algorithms = algorithms
@@ -311,11 +400,17 @@ class ProgressReporter:
             self.maze,
             self.max_frames,
         )
+        self.live_capture_eval_episodes = int(live_capture_eval_episodes)
+        self.eval_seed_base = int(eval_seed_base)
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        self.eval_device_by_label = eval_device_by_label
         self._last_step_by_run: dict[tuple[str, str, str], int] = {}
+        self._last_eval_checkpoint_by_run: dict[tuple[str, str, str], str] = {}
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._existing_run_ids: set[tuple[str, str, str]] = set()
         self._tracked_run_ids: set[tuple[str, str, str]] = set()
+        self._io_lock = threading.Lock()
 
     def start(self) -> None:
         for label, runs_root in self.runs_roots_by_label.items():
@@ -334,7 +429,7 @@ class ProgressReporter:
             f"epsilon_anneal_frames={self.epsilon_schedule['epsilon_anneal_frames']},"
             f"epsilon_algorithm={self.epsilon_algorithm},"
             f"maze={self.maze},"
-            "metric=capture_pct_proxy,"
+            "metric=capture_pct_eval,"
             "reward=collection_reward_reward_mean\n",
             encoding="utf-8",
         )
@@ -362,13 +457,11 @@ class ProgressReporter:
                         continue
 
                     frames_path = scalars_dir / "counters_total_frames.csv"
-                    episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
                     reward_path = scalars_dir / "collection_reward_reward_mean.csv"
                     _, frames = _load_two_col_csv(frames_path)
-                    _, episode_returns = _load_two_col_csv(episode_reward_path)
                     _, rewards = _load_two_col_csv(reward_path)
 
-                    n = min(len(frames), len(episode_returns), len(rewards))
+                    n = min(len(frames), len(rewards))
                     if n <= 0:
                         continue
 
@@ -384,9 +477,7 @@ class ProgressReporter:
 
                     for step in range(last_step + 1, n + 1):
                         frame_value = frames[step - 1]
-                        capture_pct = _capture_pct_proxy_from_episode_return(
-                            episode_returns[step - 1]
-                        )
+                        capture_pct = float("nan")
                         reward_value = rewards[step - 1]
                         lines.append(
                             f"{algorithm}@{label},{run_dir.name},{step},{frame_value},{capture_pct},{reward_value}\n"
@@ -394,9 +485,46 @@ class ProgressReporter:
 
                     self._last_step_by_run[run_key] = n
 
+                    if self.live_capture_eval_episodes <= 0:
+                        continue
+
+                    checkpoint_path = _latest_checkpoint_path(run_dir)
+                    if checkpoint_path is None:
+                        continue
+
+                    checkpoint_key = str(checkpoint_path.resolve())
+                    if self._last_eval_checkpoint_by_run.get(run_key) == checkpoint_key:
+                        continue
+
+                    reward_id, _, _device_label = label.partition("@")
+                    eval_device = self.eval_device_by_label.get(label)
+                    if not reward_id or not eval_device:
+                        continue
+
+                    capture_pct = _run_eval_capture_snapshot(
+                        algorithm=algorithm,
+                        reward_id=reward_id,
+                        run_dir=run_dir,
+                        checkpoint_path=checkpoint_path,
+                        episodes=self.live_capture_eval_episodes,
+                        eval_seed_base=self.eval_seed_base,
+                        device=eval_device,
+                        allow_cpu_fallback=self.allow_cpu_fallback,
+                    )
+                    if capture_pct is None:
+                        continue
+
+                    frame_value = frames[n - 1]
+                    reward_value = rewards[n - 1]
+                    lines.append(
+                        f"{algorithm}@{label},{run_dir.name},{n},{frame_value},{capture_pct},{reward_value}\n"
+                    )
+                    self._last_eval_checkpoint_by_run[run_key] = checkpoint_key
+
         if lines:
-            with self.output_file.open("a", encoding="utf-8") as f:
-                f.writelines(lines)
+            with self._io_lock:
+                with self.output_file.open("a", encoding="utf-8") as f:
+                    f.writelines(lines)
 
 
 def _save_folder_for_device(base_save_folder: Path, resolved_device: str) -> Path:
@@ -613,8 +741,17 @@ def main() -> None:
         raise ValueError("At least one reward class must be provided.")
     if args.eval_episodes < 0:
         raise ValueError("--eval-episodes must be non-negative.")
-    if args.eval_episodes and not args.checkpoint_at_end:
-        raise ValueError("Automatic objective evaluation requires --checkpoint-at-end.")
+    if args.live_capture_eval_episodes < 0:
+        raise ValueError("--live-capture-eval-episodes must be non-negative.")
+    if (args.eval_episodes or args.live_capture_eval_episodes) and not args.checkpoint_at_end:
+        raise ValueError(
+            "Automatic objective evaluation and live capture snapshots require --checkpoint-at-end."
+        )
+    if args.live_capture_eval_episodes and args.checkpoint_interval <= 0:
+        print(
+            "Live capture snapshots enabled with --checkpoint-interval=0; "
+            "updates will occur only when end-of-run checkpoints are produced."
+        )
 
     seeds = _parse_seeds(args.seeds)
     maze_runs_root = runs_root_for_maze(Path(args.save_folder), args.maze)
@@ -643,6 +780,11 @@ def main() -> None:
         for reward_id, _ in reward_specs
         for cfg in device_configs
     }
+    eval_device_by_label = {
+        f"{reward_id}@{cfg['label']}": cfg["resolved"]
+        for reward_id, _ in reward_specs
+        for cfg in device_configs
+    }
     for label, root in runs_roots_by_label.items():
         root.mkdir(parents=True, exist_ok=True)
 
@@ -667,6 +809,10 @@ def main() -> None:
             max_frames=args.max_frames,
             maze=args.maze,
             epsilon_algorithm=epsilon_algorithm,
+            live_capture_eval_episodes=args.live_capture_eval_episodes,
+            eval_seed_base=args.eval_seed_base,
+            allow_cpu_fallback=args.allow_cpu_fallback,
+            eval_device_by_label=eval_device_by_label,
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")

@@ -59,6 +59,28 @@ def test_observation_contains_shared_memory_row():
     env.close()
 
 
+def test_execution_mode_neutralizes_shared_memory_row_but_keeps_shape():
+    env = PacManEnvironment(
+        global_view=create_grid(),
+        shared_memory_in_observation_enabled=False,
+    )
+    observations, _ = env.reset()
+    first_agent = env.possible_agents[0]
+    payload = observations[first_agent]
+    observation = payload["observation"]
+
+    assert observation.shape == (env.view_size + 1, env.view_size)
+    shared_row = observation[-1]
+    assert np.allclose(shared_row, -1.0)
+
+    actions = {agent: int(env.action_space(agent).sample()) for agent in env.agents}
+    next_obs, *_ = env.step(actions)
+    next_shared_row = next_obs[first_agent]["observation"][-1]
+    assert np.allclose(next_shared_row, -1.0)
+
+    env.close()
+
+
 def test_execute_action_prevents_ghost_out_of_bounds_wraparound():
     env = PacManEnvironment(global_view=create_grid())
     env.reset()
