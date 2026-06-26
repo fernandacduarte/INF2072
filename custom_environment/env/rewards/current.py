@@ -60,6 +60,45 @@ class CurrentRewardWeightsV2:
     no_progress_visible_grace_steps: int = 2
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentRewardWeightsV3:
+    """Pursuit-first rebalance (plan-000028 / research-000027).
+
+    research-000027 found the converged greedy policies captured ~0%, timed out
+    100%, and earned a strongly *negative* shaping return (~-140/episode): the
+    anti-oscillation/movement penalties dominated and punished the exploratory
+    cornering needed to catch a fleeing defensive Pacman, while the telescoping
+    potential signal was too weak. These weights make shaping net-positive toward
+    pursuit: the movement penalties are slashed (but not all zeroed, so an in-place
+    ping-pong that keeps Pacman visible is still not net-positive), the potential
+    gradient is strengthened, and ``currently_visible`` is lowered so the per-episode
+    visible-stalking shaping budget stays well below ``get_pacman`` (no stalking
+    optimum). Terminal weights/signs are unchanged so the terminal-penalty smoke
+    tests stay valid. Initial values -- to be confirmed by the Step 6 A/B benchmark.
+    """
+
+    get_pacman: float = 40.0
+    pacman_timeout_win: float = -35.0
+    pacman_win_pellets: float = -35.0
+    newly_spotted: float = 0.5
+    currently_visible: float = 0.08
+    enter_recently_unvisited_tile: float = 0.03
+    reveal_unseen_local_cells: float = 0.01
+    valid_move: float = 0.05
+    invalid_move: float = -0.02
+    stay_still: float = -0.02
+    repeated_direction_reversal: float = 0.0
+    two_step_cycle: float = -0.02
+    no_progress_visible: float = 0.0
+    overlap_or_same_corridor: float = -0.05
+    timestep: float = -0.01
+    potential_shaping_alpha: float = 2.0
+    potential_second_ghost_weight: float = 0.5
+    recently_unvisited_window: int = 10
+    newly_spotted_min_unseen_steps: int = 6
+    no_progress_visible_grace_steps: int = 2
+
+
 class CurrentGitTeamReward(RewardStrategy):
     """Reward strategy matching git baseline weights and logic."""
 
@@ -477,3 +516,20 @@ class CurrentWithOverlapOrSameCorridor(CurrentTeamReward):
                 ),
             )
         )
+
+
+class PursuitFirstTeamReward(CurrentTeamReward):
+    """Pursuit-first rebalance of the V2 team reward (plan-000028 / research-000027).
+
+    Reuses ``CurrentTeamReward.compute()`` unchanged; only the weights differ
+    (``CurrentRewardWeightsV3``), so shaping becomes net-positive toward pursuit.
+    ``CurrentTeamReward.reset()`` reads ``self.weights`` without re-instantiating
+    it, so overriding ``__init__`` alone is sufficient to inject the V3 weights.
+    Kept as a separate ``strategy_id`` so the V1/V2 baselines stay reproducible
+    for A/B comparison.
+    """
+
+    strategy_id = "current_v3"
+
+    def __init__(self, weights: CurrentRewardWeightsV3 | None = None) -> None:
+        super().__init__(weights or CurrentRewardWeightsV3())

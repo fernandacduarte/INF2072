@@ -16,6 +16,7 @@ DEFAULT_REWARD_CLASS = (
 _REWARD_CLASS_BY_ID = {
     "current_git": "custom_environment.env.rewards.current:CurrentGitTeamReward",
     "current": "custom_environment.env.rewards.current:CurrentTeamReward",
+    "current_v3": "custom_environment.env.rewards.current:PursuitFirstTeamReward",
     "current_with_overlap_or_same_corridor": (
         "custom_environment.env.rewards.current:CurrentWithOverlapOrSameCorridor"
     ),
