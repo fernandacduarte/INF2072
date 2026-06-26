@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-26 13:01 UTC | STARTED | 2026-06-26 12:55 UTC | research | ERROR: All algorithms (benchmark + liveplot) fail to learn capture — capture rate decreasing from ~80% to ~20% across training frames
+
 DONE | 2026-06-26 12:29 UTC | STARTED | 2026-06-26 12:26 UTC | implement | plan-000026 | PLAN | 000026
 
 DONE | 2026-06-26 12:25 UTC | STARTED | 2026-06-26 12:24 UTC | plan | Fix liveplot.py blank-plot regression (3-part token parser) | PLAN | 000026
