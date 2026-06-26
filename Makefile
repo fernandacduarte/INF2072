@@ -10,7 +10,7 @@
 PYTHON ?= .venv/Scripts/python.exe
 DELAY  ?= 0.12
 SEED   ?= 11
-MAZE   ?= pinklike
+MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
 ALGOS   ?= iql,vdn,qmixlocal,qmixglobal
@@ -18,8 +18,12 @@ SEEDS   ?= 0,1,2,3,4
 FRAMES  ?= 200000
 LEARNER ?= qmixglobal
 DEVICE  ?= cpu
-REWARDS ?= custom_environment.env.rewards.current:CurrentTeamReward
-REWARD_ID ?= current
+# Pursuit-first reward (plan-000028 / research-000027). Previous default was
+# the V2 reward, kept here for one-line A/B reversion:
+#   REWARDS ?= custom_environment.env.rewards.current:CurrentTeamReward
+#   REWARD_ID ?= current
+REWARDS ?= custom_environment.env.rewards.current:PursuitFirstTeamReward
+REWARD_ID ?= current_v3
 
 .DEFAULT_GOAL := help
 
