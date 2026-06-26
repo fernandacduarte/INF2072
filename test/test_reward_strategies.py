@@ -14,9 +14,13 @@ from custom_environment.env.rewards import (
 )
 from custom_environment.env.rewards.current import (
     CurrentGitTeamReward,
+    CurrentRewardWeightsV2,
+    CurrentRewardWeightsV3,
     CurrentTeamReward,
     CurrentWithOverlapOrSameCorridor,
+    PursuitFirstTeamReward,
 )
+from custom_environment.env.rewards.loader import reward_class_from_id
 from my_rewards.movement_bonus import StrongerMovementReward
 
 
@@ -448,6 +452,124 @@ def test_overlap_penalty_enabled_variant_overlapping_positions():
     )
 
     assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)
+
+
+# --- current_v3 pursuit-first variant (plan-000028 / research-000027) ---
+
+
+def _v3_context(
+    *,
+    step_count: int,
+    ghost_prev: tuple[int, int],
+    ghost_curr: tuple[int, int],
+    pacman_position: tuple[int, int],
+    pacman_visible: bool,
+    invalid_move: bool = False,
+    capture_happened: bool = False,
+) -> RewardContext:
+    """Single-ghost context on a 5x5 open board for v3 calibration/guardrail tests."""
+    ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=ghost_prev,
+        current_position=ghost_curr,
+        action=0,
+        invalid_move=invalid_move,
+        local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+    )
+    return RewardContext(
+        step_count=step_count,
+        max_steps=200,
+        board_shape=(5, 5),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(ghost,),
+        pacman_previous_position=pacman_position,
+        pacman_position=pacman_position,
+        pacman_visible=pacman_visible,
+        visible_pacman_positions=((pacman_position,) if pacman_visible else ()),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=capture_happened,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+
+def test_current_v3_registers_and_loads_with_v3_weights():
+    path = reward_class_from_id("current_v3")
+    assert path == "custom_environment.env.rewards.current:PursuitFirstTeamReward"
+    strategy = load_reward_strategy(path)
+    assert isinstance(strategy, PursuitFirstTeamReward)
+    assert strategy.strategy_id == "current_v3"
+    assert isinstance(strategy.weights, CurrentRewardWeightsV3)
+
+
+def test_current_v3_terminal_weights_match_v2():
+    v2 = CurrentRewardWeightsV2()
+    v3 = CurrentRewardWeightsV3()
+    assert v3.get_pacman == v2.get_pacman == 40.0
+    assert v3.pacman_timeout_win == v2.pacman_timeout_win == -35.0
+    assert v3.pacman_win_pellets == v2.pacman_win_pellets == -35.0
+
+
+def _v3_step_reward(ghost_dest: tuple[int, int]) -> float:
+    """Prime the potential baseline with the ghost at the pivot, then score a
+    single transition (pivot -> dest, or stay when dest == pivot). Pacman is kept
+    not-visible so visibility terms are identical across scenarios and cancel out,
+    isolating the movement + potential-shaping contribution."""
+    pacman = (0, 0)
+    pivot = (2, 0)  # BFS distance 2 from Pacman on the open board
+    strategy = PursuitFirstTeamReward()
+    baseline = _v3_context(
+        step_count=0, ghost_prev=pivot, ghost_curr=pivot,
+        pacman_position=pacman, pacman_visible=False,
+    )
+    strategy.reset(baseline)
+    strategy.compute(baseline)  # primes _last_potential
+    transition = _v3_context(
+        step_count=1, ghost_prev=pivot, ghost_curr=ghost_dest,
+        pacman_position=pacman, pacman_visible=False,
+    )
+    return strategy.compute(transition).total
+
+
+def test_current_v3_move_toward_beats_stay_and_move_away():
+    reward_toward = _v3_step_reward((1, 0))  # one cell closer (dist 1)
+    reward_stay = _v3_step_reward((2, 0))    # unchanged (dist 2)
+    reward_away = _v3_step_reward((3, 0))    # one cell farther (dist 3)
+    assert reward_toward > reward_stay, (reward_toward, reward_stay)
+    assert reward_toward > reward_away, (reward_toward, reward_away)
+
+
+def test_current_v3_visible_stalk_shaping_stays_below_capture_reward():
+    """A 200-step Pacman-visible-every-step episode (the worst case for the
+    unconditional currently_visible bonus) must accrue less non-terminal shaping
+    than a single capture (get_pacman), so stalking never rivals capturing."""
+    strategy = PursuitFirstTeamReward()
+    pacman = (2, 2)
+    cells = [(2, 0), (2, 1)]  # oscillate near Pacman, min distance 1 (never captures)
+    reset_ctx = _v3_context(
+        step_count=0, ghost_prev=cells[0], ghost_curr=cells[0],
+        pacman_position=pacman, pacman_visible=True,
+    )
+    strategy.reset(reset_ctx)
+    strategy.compute(reset_ctx)
+
+    total_shaping = 0.0
+    prev = cells[0]
+    for step in range(1, 201):
+        curr = cells[step % 2]
+        result = strategy.compute(
+            _v3_context(
+                step_count=step, ghost_prev=prev, ghost_curr=curr,
+                pacman_position=pacman, pacman_visible=True,
+            )
+        )
+        total_shaping += result.category_totals["shaping"]
+        prev = curr
+
+    assert total_shaping < CurrentRewardWeightsV3().get_pacman, total_shaping
 
 
 def test_current_git_variant_applies_overlap_penalty_for_adjacent_opposite_direction_pair():
