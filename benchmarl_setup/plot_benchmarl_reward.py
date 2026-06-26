@@ -12,98 +12,20 @@ import numpy as np
 from algorithm_utils import (
     SUPPORTED_ALGORITHMS,
     SUPPORTED_MAZES,
-    candidate_run_dirs,
     normalize_algorithm,
     runs_root_for_maze,
 )
 from device_utils import device_label
 
 
-def _load_two_col_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    x_vals = []
-    y_vals = []
-    with path.open("r", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 2:
-                continue
-            x_vals.append(float(row[0]))
-            y_vals.append(float(row[1]))
-    return np.asarray(x_vals, dtype=float), np.asarray(y_vals, dtype=float)
-
-
-def _capture_pct_proxy_series_from_episode_returns(
-    episode_returns: np.ndarray,
-) -> np.ndarray:
-    # Proxy: episode return > 0.0 is treated as a capture outcome.
-    return np.where(episode_returns > 0.0, 100.0, 0.0).astype(float)
-
-
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
-    out = np.full_like(values, np.nan, dtype=np.float64)
+    out = np.zeros_like(values)
     for i in range(len(values)):
         start = max(0, i - window + 1)
-        window_values = values[start : i + 1]
-        if np.all(np.isnan(window_values)):
-            out[i] = np.nan
-        else:
-            out[i] = float(np.nanmean(window_values))
+        out[i] = float(np.mean(values[start : i + 1]))
     return out
-
-
-def _aggregate_algorithm_runs(
-    run_steps: dict[str, dict[int, tuple[float, float, float]]],
-    window: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int] | None:
-    if not run_steps:
-        return None
-
-    max_step = max((max(step_map.keys()) for step_map in run_steps.values() if step_map), default=0)
-    if max_step <= 0:
-        return None
-
-    n_runs = len(run_steps)
-    frames_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
-    captures_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
-    rewards_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
-
-    for run_idx, step_map in enumerate(run_steps.values()):
-        for step, values in step_map.items():
-            if 1 <= step <= max_step:
-                frame, capture_pct, reward = values
-                frames_mat[run_idx, step - 1] = frame
-                captures_mat[run_idx, step - 1] = capture_pct
-                rewards_mat[run_idx, step - 1] = reward
-
-    mean_captures = np.nanmean(captures_mat, axis=0)
-    std_captures = np.nanstd(captures_mat, axis=0)
-    mean_rewards = np.nanmean(rewards_mat, axis=0)
-    std_rewards = np.nanstd(rewards_mat, axis=0)
-    mean_frames = np.nanmean(frames_mat, axis=0)
-
-    invalid_frames = np.isnan(mean_frames)
-    if np.any(invalid_frames):
-        step_axis = np.arange(1, max_step + 1, dtype=np.float64)
-        mean_frames[invalid_frames] = step_axis[invalid_frames]
-
-    mean_captures = _moving_average(mean_captures, window)
-    std_captures = _moving_average(std_captures, window)
-    mean_rewards = _moving_average(mean_rewards, window)
-    std_rewards = _moving_average(std_rewards, window)
-
-    return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, captures_mat, n_runs
-
-
-def _resolve_scalars_dir(run_dir: Path) -> Path | None:
-    nested = run_dir / run_dir.name / "scalars"
-    if nested.exists():
-        return nested
-    direct = run_dir / "scalars"
-    if direct.exists():
-        return direct
-    return None
 
 
 def _epsilon_for_frames(
@@ -176,16 +98,8 @@ def _parse_progress_data(
                 continue
 
             if "@" in algorithm_token:
-                token_parts = [part.strip().lower() for part in algorithm_token.split("@") if part.strip()]
-                algorithm = token_parts[0] if token_parts else ""
-                if len(token_parts) >= 3:
-                    # New format: algorithm@reward_id@device_label
-                    device_label_key = token_parts[-1]
-                elif len(token_parts) == 2:
-                    # Legacy format: algorithm@device_label
-                    device_label_key = token_parts[1]
-                else:
-                    device_label_key = "default"
+                algorithm, device_label_key = algorithm_token.split("@", 1)
+                device_label_key = device_label_key.strip().lower()
             else:
                 algorithm = algorithm_token.strip().lower()
                 device_label_key = "default"
@@ -200,6 +114,7 @@ def _parse_progress_data(
             run_data[step] = (frame, capture_pct, reward)
 
     return data
+
 
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
@@ -321,7 +236,7 @@ def _open_file(path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot capture percentage, average reward, and epsilon across multiple BenchMARL runs."
+        description="Plot true capture snapshots, average reward, and epsilon across benchmark runs."
     )
     parser.add_argument(
         "--algorithm",
@@ -482,28 +397,9 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
-    progress_meta = _parse_progress_meta(progress_file)
-    epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
-    epsilon_algorithm = (
-        normalize_algorithm(epsilon_algorithm_raw)
-        if epsilon_algorithm_raw.strip()
-        else ""
-    )
-    has_cli_epsilon_override = any(
-        value is not None
-        for value in (
-            args.epsilon_max_frames,
-            args.epsilon_init,
-            args.epsilon_end,
-            args.epsilon_anneal_ratio,
-        )
-    )
-    show_epsilon = (
-        (epsilon_algorithm in algorithms)
-        or (not epsilon_algorithm and "iql" in algorithms)
-        or has_cli_epsilon_override
-    )
+    show_epsilon = "iql" in algorithms
     if show_epsilon:
+        progress_meta = _parse_progress_meta(progress_file)
         epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = _resolve_epsilon_from_cli_or_meta(
             args,
             progress_meta,
@@ -542,6 +438,11 @@ def main() -> None:
     }
 
     per_algorithm: dict[str, dict[str, object]] = {}
+    selected_run_names = (
+        {path.name for path in args.run_dir if path is not None}
+        if args.run_dir
+        else None
+    )
 
     for algorithm in algorithms:
         by_device = progress_data.get(algorithm, {})
@@ -564,41 +465,63 @@ def main() -> None:
             )
             continue
 
-        run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
+        series_frames: list[np.ndarray] = []
+        series_capture_pct: list[np.ndarray] = []
+        series_reward_mean: list[np.ndarray] = []
         used_run_dirs: list[str] = []
-
-        selected_run_names = (
-            {path.name for path in args.run_dir if path is not None}
-            if args.run_dir
-            else None
-        )
 
         for device_key in selected_devices:
             for run_id, step_map in by_device.get(device_key, {}).items():
                 if selected_run_names is not None and run_id not in selected_run_names:
                     continue
-                run_key = f"{device_key}:{run_id}"
-                run_steps[run_key] = step_map
+
+                ordered_steps = sorted(step_map.keys())
+                if not ordered_steps:
+                    continue
+
+                frames = np.asarray([step_map[step][0] for step in ordered_steps], dtype=float)
+                captures = np.asarray([step_map[step][1] for step in ordered_steps], dtype=float)
+                rewards = np.asarray([step_map[step][2] for step in ordered_steps], dtype=float)
+
+                # Keep only points with true capture snapshots (NaN marks non-evaluated steps).
+                valid_mask = ~np.isnan(captures)
+                if not np.any(valid_mask):
+                    continue
+
+                frames = frames[valid_mask]
+                captures = captures[valid_mask]
+                rewards = rewards[valid_mask]
+
+                captures = _moving_average(captures, args.window)
+                rewards = _moving_average(rewards, args.window)
+
+                series_frames.append(frames)
+                series_capture_pct.append(captures)
+                series_reward_mean.append(rewards)
                 used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
 
-        aggregated = _aggregate_algorithm_runs(run_steps, args.window)
-        if aggregated is None:
+        if not series_capture_pct:
             print(
                 "Warning: no true capture snapshots found for algorithm="
                 f"{algorithm} in {progress_file}."
             )
             continue
 
-        frames, capture_mean, capture_std, reward_mean, reward_std, captures_mat, n_runs = aggregated
+        min_len = min(
+            min(len(arr) for arr in series_capture_pct),
+            min(len(arr) for arr in series_reward_mean),
+        )
+        captures_mat = np.vstack([arr[:min_len] for arr in series_capture_pct])
+        rewards_mat = np.vstack([arr[:min_len] for arr in series_reward_mean])
+        frames_mat = np.vstack([arr[:min_len] for arr in series_frames])
 
         per_algorithm[algorithm] = {
-            "frames": frames,
-            "capture_mean": capture_mean,
-            "capture_std": capture_std,
+            "frames": np.mean(frames_mat, axis=0),
+            "capture_mean": np.mean(captures_mat, axis=0),
+            "capture_std": np.std(captures_mat, axis=0),
             "captures_mat": captures_mat,
-            "reward_mean": reward_mean,
-            "reward_std": reward_std,
-            "n_runs": n_runs,
+            "reward_mean": np.mean(rewards_mat, axis=0),
+            "reward_std": np.std(rewards_mat, axis=0),
             "used_run_dirs": used_run_dirs,
             "color": color_map.get(algorithm, "#1f77b4"),
         }
@@ -623,40 +546,33 @@ def main() -> None:
         reward_mean = payload["reward_mean"]
         color = payload["color"]
 
-        valid_capture_mask = ~np.isnan(capture_mean)
-        valid_frames = frames[valid_capture_mask]
-        valid_captures = capture_mean[valid_capture_mask]
-        valid_stds = capture_std[valid_capture_mask]
-
         if args.show_runs:
             for capture_series in captures_mat:
                 ax.plot(frames, capture_series, color=color, linewidth=1, alpha=0.18)
 
         ax.plot(
-            valid_frames,
-            valid_captures,
-            label=f"{algorithm.upper()} mean capture % (n={payload['n_runs']})",
+            frames,
+            capture_mean,
+            label=f"{algorithm.upper()} mean capture % (n={captures_mat.shape[0]})",
             color=color,
             linewidth=2,
         )
-        if np.any(valid_capture_mask):
-            ax.fill_between(
-                valid_frames,
-                np.maximum(valid_captures - valid_stds, 0.0),
-                np.minimum(valid_captures + valid_stds, 100.0),
-                color=color,
-                alpha=0.14,
-            )
+        ax.fill_between(
+            frames,
+            np.maximum(capture_mean - capture_std, 0.0),
+            np.minimum(capture_mean + capture_std, 100.0),
+            color=color,
+            alpha=0.14,
+        )
 
-        if not np.all(np.isnan(reward_mean)):
-            ax_reward.plot(
-                frames,
-                reward_mean,
-                label=f"{algorithm.upper()} mean reward",
-                color=color,
-                linewidth=1.8,
-                linestyle=":",
-            )
+        ax_reward.plot(
+            frames,
+            reward_mean,
+            label=f"{algorithm.upper()} mean reward",
+            color=color,
+            linewidth=1.8,
+            linestyle=":",
+        )
 
     max_display_frame = max(
         float(np.nanmax(payload["frames"]))
@@ -688,9 +604,9 @@ def main() -> None:
     ax_eps.tick_params(axis="y", colors="black")
 
     ax.set_xlabel("Total frames")
-    ax.set_ylabel("Estimated Capture Rate (%)")
+    ax.set_ylabel("True Capture Rate (%)")
     ax.set_ylim(0.0, 100.0)
-    ax.set_title("Benchmark Capture Rate Across Runs")
+    ax.set_title("Benchmark True Capture Rate Across Runs")
     ax.grid(True, alpha=0.3)
     handles, labels = ax.get_legend_handles_labels()
     reward_handles, reward_labels = ax_reward.get_legend_handles_labels()

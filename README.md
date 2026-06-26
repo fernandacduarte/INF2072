@@ -55,14 +55,9 @@ Algorithm variants:
 
 **IQL tuning (plan-000008).** The default training budget is now `--max-frames
 60000` (a convergence-scale value; pass a smaller number such as `--max-frames
-1200` for quick smoke runs). For `--algorithm iql` the runner also applies
-convergence-oriented hyperparameters with no CLI flag of their own (a longer
-epsilon anneal `1.0 → 0.05` over 80% of the budget, `lr 1e-4`, `gamma 0.99`);
-VDN and QMIX now use the same tuned schedule (`epsilon 1.0 → 0.05` over 80% of
-the budget, `lr 1e-4`, `gamma 0.99`) to keep cross-algorithm comparisons fairer.
-For `--algorithm iql --maze pinklike3`, the runner applies a stabilization
-override focused on exploration persistence: epsilon anneals `1.0 → 0.10` over
-95% of the budget and `--init-random-frames` is floored at 5000.
+1200` for quick smoke runs). IQL, VDN, and QMIX now share the same tuned
+hyperparameters for fairer comparisons: epsilon anneal `1.0 → 0.10` over 95%
+of the budget, `lr 1e-4`, `gamma 0.99`, and default `--init-random-frames 5000`.
 
 By default, training now saves a checkpoint at the end of the run.
 You can disable this with:
@@ -86,6 +81,17 @@ original ASCII terminal rendering, use:
 ```bash
 py -3.11 custom_environment\eval.py --learner iql --render-mode ascii --delay 0.08
 ```
+
+For step-by-step debugging of low/zero capture behavior, you can emit one JSON
+diagnostics object per step in ASCII mode:
+
+```bash
+py -3.11 custom_environment\eval.py --learner iql --maze pinklike3 --render-mode ascii --delay 0 --show-reward-breakdown --ascii-step-json
+```
+
+Each JSON line includes action/reward by ghost, Pacman and ghost positions,
+visibility and sighting memory, capture/timeout/pacman-win flags, pellet counts,
+and reward decomposition.
 
 The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
@@ -125,7 +131,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 
 ```bash
 --max-frames 5000 --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000
---init-random-frames 1000
+--init-random-frames 5000
 --ghost-view-size 3|5|7
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 ```
@@ -134,6 +140,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 
 ```bash
 --delay 0.25 --max-steps 200 --maze default --checkpoint-select best --show-reward-breakdown
+--ascii-step-json
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --ghost-view-size 3|5|7
@@ -281,13 +288,13 @@ You can now run a full benchmark with one command using:
 Example (5 seeds, shared training config):
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 50000
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --max-frames 60000
 ```
 
 Benchmark now supports device sweeps in one command:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 60000
 ```
 
 If multiple requested devices resolve to the same runtime target (for example `cpu,cuda` when CUDA is unavailable and fallback is enabled), the benchmark now fails fast with an explicit error instead of silently dropping one device leg.
@@ -305,7 +312,7 @@ Execution strategy:
 Useful optional parameters:
 
 ```bash
---algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 1000
+--algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 5000
 --ghost-view-size 3|5|7
 --devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
 ```
@@ -373,7 +380,7 @@ Use this protocol for fair comparisons:
 2. Run a shared benchmark command with both devices:
 
 ```bash
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 50000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --devices cpu,cuda --max-frames 60000 --summary-out benchmarl_setup\runs\default\benchmark_summary_cpu_gpu.csv
 ```
 
 3. Compare `duration_seconds` and `frames_per_second` by `algorithm` + `device` in the summary CSV.
@@ -387,7 +394,7 @@ Training now reports live progress to:
 - `benchmarl_setup/runs/<maze>/live_progress.csvl`
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
-- y1: rolling estimated capture percentage (mean ± std)
+- y1: rolling true capture snapshot percentage (mean ± std)
 - y2: rolling average reward
 - y3: epsilon schedule overlay
 
@@ -398,11 +405,15 @@ written to `live_progress.csvl` (for example:
 There are no built-in epsilon fallback defaults in plotting anymore.
 If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
 
-Capture metric note: liveplot reads a lightweight capture-percentage proxy
-stream from benchmark progress. The proxy maps `collection_reward_episode_reward_mean`
-to binary outcomes (`episode return > 0` -> capture) and then plots rolling
-mean percentage. Reward is also emitted in the same progress stream and shown
-on the second y-axis.
+Capture metric note: liveplot reads true capture snapshots generated by
+deterministic objective evaluation over checkpoints (`eval_report.py`).
+Non-evaluated training steps are written with `NaN` capture and ignored by
+the capture curve. Reward is still emitted in the same progress stream and
+shown on the second y-axis.
+
+Live snapshot cadence note: periodic updates require checkpoints. When
+`--checkpoint-interval` is greater than zero, snapshots can appear during
+training; when it is zero, snapshots appear only at end-of-run checkpoints.
 
 Start live monitor:
 
@@ -421,6 +432,7 @@ Then run benchmark normally:
 
 ```bash
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 100
 ```
 
 Useful options:
@@ -439,7 +451,7 @@ Use:
 
 This script can aggregate runs from multiple algorithms and plot all of them in the same figure with three y-axes:
 
-- mean estimated capture percentage curve per algorithm (+/- std band)
+- mean true capture snapshot percentage curve per algorithm (+/- std band)
 - mean reward curve per algorithm
 - epsilon overlay when `iql` is included
 

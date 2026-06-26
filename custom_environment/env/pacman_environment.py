@@ -80,6 +80,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         fps: int = 12,  # Target frames per second for human rendering
         show_observations: bool = True,  # Whether to tint each ghost's local view in visual renders
         ghost_view_size: int | None = None,  # Optional override for local observation size
+        shared_memory_in_observation_enabled: bool = True,
         reward_strategy: str | RewardStrategy | None = None,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
@@ -145,6 +146,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.tile_size = int(tile_size)
         self.fps = int(fps)
         self.show_observations = bool(show_observations)
+        self.shared_memory_in_observation_enabled = bool(shared_memory_in_observation_enabled)
         self._renderer = None
         # Episode-level pallet count, set on reset(); guards state() before first reset.
         self._total_pallets = 0
@@ -625,6 +627,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         any_visible: bool | None = None,
         seen_positions: list[tuple[int, int]] | None = None,
     ) -> np.ndarray:
+        if not self.shared_memory_in_observation_enabled:
+            return np.full((self.view_size,), -1.0, dtype=np.float32)
+
         if any_visible is None or seen_positions is None:
             any_visible, seen_positions = self._collect_visible_pacman_positions()
 
