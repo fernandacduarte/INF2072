@@ -15,6 +15,9 @@ DEFAULT_REWARD_CLASS = (
 )
 _REWARD_CLASS_BY_ID = {
     "capture_v0": "custom_environment.env.rewards.current:CaptureV0Reward",
+    "capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action": (
+        "custom_environment.env.rewards.current:CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction"
+    ),
     "current_git": "custom_environment.env.rewards.current:CurrentGitTeamReward",
     "current": "custom_environment.env.rewards.current:CurrentTeamReward",
     "current_with_overlap_or_same_corridor": (

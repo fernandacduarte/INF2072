@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import csv
 import random
 import re
@@ -299,6 +300,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
     newly_spotted_counts: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
+    reward_breakdown_per_step_values: dict[str, list[float]] = defaultdict(list)
     for episode in episodes:
         steps = max(int(episode["steps"]), 1)
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
@@ -306,6 +308,14 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
+        for key, total_value in episode["reward_breakdown"].items():
+            reward_breakdown_per_step_values[str(key)].append(float(total_value) / float(steps))
+
+    reward_breakdown_per_step_mean = {
+        key: _safe_mean(values)
+        for key, values in reward_breakdown_per_step_values.items()
+        if values
+    }
 
     capture_rate = len(captures) / count if count else float("nan")
     timeout_rate = (
@@ -354,6 +364,11 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
         "mean_terminal_return": _safe_mean(terminal_returns),
+        # Per-step mean reward_breakdown values encoded as JSON object.
+        "reward_breakdown_per_step_mean_json": json.dumps(
+            reward_breakdown_per_step_mean,
+            sort_keys=True,
+        ),
     }
 
 
@@ -520,6 +535,7 @@ REPORT_FIELDS = [
     "mean_newly_spotted_count",
     "mean_shaping_return",
     "mean_terminal_return",
+    "reward_breakdown_per_step_mean_json",
 ]
 
 VARIANT_FIELDS = [

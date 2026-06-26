@@ -395,7 +395,7 @@ Training now reports live progress to:
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
 - y1: rolling true capture snapshot percentage (mean ± std)
-- y2: rolling average reward
+- y2: rolling average reward plus rolling averages for individual reward terms
 - y3: epsilon schedule overlay
 
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
@@ -410,6 +410,16 @@ deterministic objective evaluation over checkpoints (`eval_report.py`).
 Non-evaluated training steps are written with `NaN` capture and ignored by
 the capture curve. Reward is still emitted in the same progress stream and
 shown on the second y-axis.
+
+Reward terms note: benchmark live progress now appends per-term reward scalars
+when available from deterministic `eval_report.py` snapshots using
+`reward_breakdown_per_step_mean_json` (keys match your RewardStrategy
+breakdown terms such as `timestep`, `reverse_action`, and
+`pacman_legal_moves_delta`).
+The metadata header includes `reward_terms=...`, and both live/offline plotters
+consume these columns to draw term-specific averages alongside total reward.
+`--reward-terms` is optional and only filters what is displayed; default is
+`all` (show every emitted breakdown key).
 
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
@@ -440,6 +450,8 @@ Useful options:
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
+py -3.11 benchmarl_setup\liveplot.py --reward-terms all
+py -3.11 benchmarl_setup\liveplot.py --reward-terms timestep,potential_shaping
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
@@ -452,7 +464,7 @@ Use:
 This script can aggregate runs from multiple algorithms and plot all of them in the same figure with three y-axes:
 
 - mean true capture snapshot percentage curve per algorithm (+/- std band)
-- mean reward curve per algorithm
+- mean reward curve per algorithm plus per-term mean reward curves
 - epsilon overlay when `iql` is included
 
 Examples:
@@ -469,6 +481,7 @@ Useful options:
 --reward-id current --device auto|cpu|cuda|cuda:0
 --progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
 --epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
+--reward-terms all|timestep,potential_shaping
 --maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
@@ -480,9 +493,12 @@ from `live_progress.csvl` metadata (`max_frames`, `epsilon_init`,
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
 
-Capture metric note: this plot uses the same lightweight capture proxy as
-liveplot (`collection_reward_episode_reward_mean > 0` -> captured episode),
-then applies the configured rolling window.
+Capture metric note: this plot reads capture values from `live_progress.csvl`.
+For current benchmark runs, these capture points are true deterministic eval
+snapshots (with non-evaluated steps as `NaN`).
+
+Reward terms note: use `--reward-terms all` (default) to show all available
+term averages, or provide a comma list to focus on selected terms.
 
 ### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
 
@@ -626,6 +642,12 @@ Four-way comparison setup:
   terms, and adds a +1 reward when Pacman legal moves are reduced on steps
   where Pacman is visible.
 
+- `custom_environment.env.rewards.current:CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction`
+  (`strategy_id = capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action`):
+  capture_v0 variant with stronger terminal rewards, smooth legal-moves delta
+  shaping (`0.2 * (prev_legal_moves - curr_legal_moves)` when visible), and a
+  small penalty for immediate reverse ghost actions.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -725,6 +747,7 @@ Or use a built-in reward id alias:
 ```cmd
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id current_with_overlap_or_same_corridor
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -747,6 +770,9 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_v0
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -804,6 +830,7 @@ Built-in reward ids can also be passed directly:
 ```cmd
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-ids current,current_with_overlap_or_same_corridor
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -829,6 +856,10 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql \
   --seeds 0,1,2 \
   --reward-ids current_git,capture_v0
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
