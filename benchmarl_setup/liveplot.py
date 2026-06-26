@@ -14,10 +14,14 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
 
-    out = np.zeros_like(values)
+    out = np.full_like(values, np.nan, dtype=np.float64)
     for i in range(len(values)):
         start = max(0, i - window + 1)
-        out[i] = float(np.mean(values[start : i + 1]))
+        window_values = values[start : i + 1]
+        if np.all(np.isnan(window_values)):
+            out[i] = np.nan
+        else:
+            out[i] = float(np.nanmean(window_values))
     return out
 
 
@@ -240,6 +244,7 @@ class LiveComparisonPlotter:
         self.lines_capture: dict[str, any] = {}
         self.lines_reward: dict[str, any] = {}
         self.fills_capture: dict[str, any] = {}
+        self.marker_scatter_capture: dict[str, any] = {}
         self.epsilon_line = None
 
         self.color_map = {
@@ -258,10 +263,11 @@ class LiveComparisonPlotter:
         self._init_plot()
 
     def _init_plot(self) -> None:
-        self.ax.set_title("Live Benchmark Comparison (Rolling Capture %)")
+        self.ax.set_title("Live Benchmark Comparison (True Capture Snapshots)")
         self.ax.set_xlabel("Total frames")
-        self.ax.set_ylabel("Estimated Capture Rate (%)")
-        self.ax.set_ylim(0.0, 100.0)
+        self.ax.set_ylabel("True Capture Rate (%)")
+        # Keep a small negative margin so zero-valued capture lines/markers are visible above the axis frame.
+        self.ax.set_ylim(-1.0, 100.0)
         self.ax.grid(True, alpha=0.3)
         self.ax_reward.set_ylabel("Average Reward", color="dimgray")
         self.ax_reward.tick_params(axis="y", colors="dimgray")
@@ -327,6 +333,10 @@ class LiveComparisonPlotter:
             fill.remove()
         self.fills_capture.clear()
 
+        for scatter in self.marker_scatter_capture.values():
+            scatter.remove()
+        self.marker_scatter_capture.clear()
+
         active_keys: set[str] = set()
         max_display_frame = 0.0
         for algorithm in self.algorithms:
@@ -352,32 +362,54 @@ class LiveComparisonPlotter:
                 line_style = self._line_style_for_device(device_key)
                 series_key = f"{algorithm}@{device_key}"
                 active_keys.add(series_key)
-                legend_capture = f"{algorithm.upper()}@{device_key} capture% (n={n_runs})"
+                legend_capture = f"{algorithm.upper()}@{device_key} capture snapshot% (n={n_runs})"
                 legend_reward = f"{algorithm.upper()}@{device_key} reward"
+                valid_mask = ~np.isnan(mean_captures)
+                valid_frames = frames[valid_mask]
+                valid_captures = mean_captures[valid_mask]
+                valid_stds = std_captures[valid_mask]
 
                 if series_key not in self.lines_capture:
                     (line,) = self.ax.plot(
-                        frames,
-                        mean_captures,
+                        valid_frames,
+                        valid_captures,
                         color=color,
                         linestyle=line_style,
-                        linewidth=2,
+                        linewidth=2.6,
+                        alpha=1.0,
+                        zorder=6,
                         label=legend_capture,
                     )
                     self.lines_capture[series_key] = line
                 else:
                     line = self.lines_capture[series_key]
-                    line.set_data(frames, mean_captures)
+                    line.set_data(valid_frames, valid_captures)
                     line.set_label(legend_capture)
                     line.set_linestyle(line_style)
+                    line.set_linewidth(2.6)
+                    line.set_alpha(1.0)
+                    line.set_zorder(6)
 
-                self.fills_capture[series_key] = self.ax.fill_between(
-                    frames,
-                    np.maximum(mean_captures - std_captures, 0.0),
-                    np.minimum(mean_captures + std_captures, 100.0),
-                    color=color,
-                    alpha=0.15,
-                )
+                if np.any(valid_mask):
+                    self.fills_capture[series_key] = self.ax.fill_between(
+                        valid_frames,
+                        np.maximum(valid_captures - valid_stds, 0.0),
+                        np.minimum(valid_captures + valid_stds, 100.0),
+                        color=color,
+                        alpha=0.15,
+                    )
+                    self.marker_scatter_capture[series_key] = self.ax.scatter(
+                        valid_frames,
+                        valid_captures,
+                        s=44,
+                        marker="o",
+                        color=color,
+                        edgecolors="black",
+                        linewidths=0.5,
+                        alpha=1.0,
+                        zorder=8,
+                        clip_on=False,
+                    )
 
                 if not np.all(np.isnan(mean_rewards)):
                     if series_key not in self.lines_reward:
@@ -405,6 +437,9 @@ class LiveComparisonPlotter:
             fill = self.fills_capture.pop(key, None)
             if fill is not None:
                 fill.remove()
+            marker_scatter = self.marker_scatter_capture.pop(key, None)
+            if marker_scatter is not None:
+                marker_scatter.remove()
             reward_line = self.lines_reward.pop(key, None)
             if reward_line is not None:
                 reward_line.remove()
@@ -437,7 +472,7 @@ class LiveComparisonPlotter:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Monitor benchmark live progress and plot mean +/- std across algorithms."
+        description="Monitor benchmark live progress with true capture snapshots and reward trends."
     )
     parser.add_argument(
         "--progress-file",

@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 import math
 import time
 from pathlib import Path
@@ -195,6 +196,136 @@ def _tensor_to_float_list(tensor: torch.Tensor) -> list[float]:
     return [float(x) for x in flat.tolist()]
 
 
+def _to_json_position(value) -> list[int] | None:
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return [int(value[0]), int(value[1])]
+    return None
+
+
+def _to_json_position_list(values) -> list[list[int]]:
+    out: list[list[int]] = []
+    for value in values or ():
+        converted = _to_json_position(value)
+        if converted is not None:
+            out.append(converted)
+    return out
+
+
+def _to_json_float_map(values) -> dict[str, float]:
+    if not values:
+        return {}
+    return {str(key): float(val) for key, val in values.items()}
+
+
+def _to_json_reward_info(values: dict[str, float]) -> dict[str, float]:
+    return {str(key): float(val) for key, val in values.items()}
+
+
+def _to_json_int(value, default: int = 0) -> int:
+    if value is None:
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _build_ascii_step_diagnostics(
+    raw_env,
+    *,
+    step: int,
+    learner: str,
+    done: bool,
+    action_info: dict[str, str],
+    reward_info: dict[str, float],
+) -> dict:
+    context = getattr(raw_env, "last_reward_context", None)
+    reward_breakdown = _to_json_float_map(getattr(raw_env, "last_team_reward_breakdown", {}))
+    reward_categories = _to_json_float_map(getattr(raw_env, "last_reward_category_totals", {}))
+
+    if context is not None:
+        pacman_position = _to_json_position(getattr(context, "pacman_position", None))
+        pacman_previous_position = _to_json_position(getattr(context, "pacman_previous_position", None))
+        pacman_visible = bool(getattr(context, "pacman_visible", False))
+        visible_positions = _to_json_position_list(getattr(context, "visible_pacman_positions", ()))
+        capture_happened = bool(getattr(context, "capture_happened", False))
+        timeout_happened = bool(getattr(context, "timeout_happened", False))
+        pacman_win_happened = bool(getattr(context, "pacman_win_happened", False))
+        pellets_before = _to_json_int(getattr(context, "pellets_before", 0), default=0)
+        pellets_remaining = _to_json_int(getattr(context, "pellets_remaining", 0), default=0)
+        pellets_eaten_this_step = _to_json_int(getattr(context, "pellets_eaten_this_step", 0), default=0)
+        context_step_count = _to_json_int(getattr(context, "step_count", step), default=step)
+        context_max_steps = _to_json_int(
+            getattr(context, "max_steps", getattr(raw_env, "max_steps", 0)),
+            default=0,
+        )
+        ghost_transitions = tuple(getattr(context, "ghosts", ()))
+    else:
+        pacman_position = _to_json_position(getattr(getattr(raw_env, "pacman", None), "current_position", None))
+        pacman_previous_position = _to_json_position(getattr(getattr(raw_env, "pacman", None), "prev_position", None))
+        pacman_visible = False
+        visible_positions = []
+        capture_happened = bool(raw_env._is_capture_state())
+        timeout_happened = bool(getattr(raw_env, "step_count", 0) >= getattr(raw_env, "max_steps", 0) and not capture_happened)
+        pacman_win_happened = False
+        pellets_before = 0
+        pellets_remaining = 0
+        pellets_eaten_this_step = 0
+        context_step_count = _to_json_int(getattr(raw_env, "step_count", step), default=step)
+        context_max_steps = _to_json_int(getattr(raw_env, "max_steps", 0), default=0)
+        ghost_transitions = ()
+
+    ghost_state: dict[str, dict[str, object]] = {}
+    if ghost_transitions:
+        for ghost in ghost_transitions:
+            ghost_id = str(getattr(ghost, "ghost_id", "unknown"))
+            ghost_state[ghost_id] = {
+                "previous_position": _to_json_position(getattr(ghost, "previous_position", None)),
+                "current_position": _to_json_position(getattr(ghost, "current_position", None)),
+                "action": getattr(ghost, "action", None),
+                "invalid_move": bool(getattr(ghost, "invalid_move", False)),
+            }
+    else:
+        for ghost in getattr(raw_env, "ghosts", []):
+            ghost_id = str(getattr(ghost, "id", "unknown"))
+            ghost_state[ghost_id] = {
+                "previous_position": _to_json_position(getattr(ghost, "prev_position", None)),
+                "current_position": _to_json_position(getattr(ghost, "current_position", None)),
+                "action": None,
+                "invalid_move": bool(getattr(ghost, "invalid_move", False)),
+            }
+
+    return {
+        "step": int(step),
+        "learner": learner,
+        "done": bool(done),
+        "env_step_count": context_step_count,
+        "env_max_steps": context_max_steps,
+        "action_by_ghost": {str(key): str(value) for key, value in action_info.items()},
+        "reward_by_ghost": _to_json_reward_info(reward_info),
+        "pacman_position": pacman_position,
+        "pacman_previous_position": pacman_previous_position,
+        "pacman_visible": pacman_visible,
+        "visible_pacman_positions": visible_positions,
+        "last_pacman_sighting_position": _to_json_position(getattr(raw_env, "last_pacman_sighting_position", None)),
+        "last_pacman_sighting_step": _to_json_int(
+            getattr(raw_env, "last_pacman_sighting_step", -1),
+            default=-1,
+        ),
+        "capture_happened": capture_happened,
+        "timeout_happened": timeout_happened,
+        "pacman_win_happened": pacman_win_happened,
+        "pellets_before": pellets_before,
+        "pellets_remaining": pellets_remaining,
+        "pellets_eaten_this_step": pellets_eaten_this_step,
+        "ghost_state": ghost_state,
+        "reward_breakdown": reward_breakdown,
+        "reward_categories": reward_categories,
+    }
+
+
 def classify_outcome(raw_env, step: int, max_steps: int) -> str:
     """Win-rate outcome label derived from the *same* predicates as
     ``_build_final_result``, so the headless harness and the renderer can never
@@ -342,6 +473,7 @@ def run_episode(
     reward_id: str,
     requested_device: str,
     allow_cpu_fallback: bool,
+    ascii_step_json: bool,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -386,6 +518,7 @@ def run_episode(
 
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
+    raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None if render_mode == "ascii" else render_mode
     raw_env.tile_size = tile_size
     raw_env.fps = fps
@@ -458,6 +591,16 @@ def run_episode(
                         print(f"Step {step} | learner={learner} | actions={action_info}")
                         print(render_ascii(raw_env.global_view))
                         print(f"rewards={reward_info} done={done}")
+                        if ascii_step_json:
+                            payload = _build_ascii_step_diagnostics(
+                                raw_env,
+                                step=step,
+                                learner=learner,
+                                done=done,
+                                action_info=action_info,
+                                reward_info=reward_info,
+                            )
+                            print(json.dumps(payload, sort_keys=True))
                     else:
                         frame = raw_env.render(
                             learner=learner,
@@ -617,6 +760,14 @@ def main() -> None:
         help="Print per-step team reward term breakdown from the environment.",
     )
     parser.add_argument(
+        "--ascii-step-json",
+        action="store_true",
+        help=(
+            "When --render-mode ascii is active, print one JSON diagnostics object per step "
+            "with capture, visibility, positions, and reward decomposition fields."
+        ),
+    )
+    parser.add_argument(
         "--render-mode",
         choices=["ascii", "human", "rgb_array"],
         default="human",
@@ -686,6 +837,7 @@ def main() -> None:
         reward_id=args.reward_id,
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
+        ascii_step_json=args.ascii_step_json,
     )
 
 

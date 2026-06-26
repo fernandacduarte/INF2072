@@ -115,6 +115,7 @@ def run_demo(
         tile_size=tile_size,
         fps=fps,
         show_observations=show_observations,
+        shared_memory_in_observation_enabled=False,
     )
 
     observations, infos = env.reset(seed=seed)
