@@ -42,11 +42,58 @@ def _capture_pct_proxy_series_from_episode_returns(
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
-    out = np.zeros_like(values)
+    out = np.full_like(values, np.nan, dtype=np.float64)
     for i in range(len(values)):
         start = max(0, i - window + 1)
-        out[i] = float(np.mean(values[start : i + 1]))
+        window_values = values[start : i + 1]
+        if np.all(np.isnan(window_values)):
+            out[i] = np.nan
+        else:
+            out[i] = float(np.nanmean(window_values))
     return out
+
+
+def _aggregate_algorithm_runs(
+    run_steps: dict[str, dict[int, tuple[float, float, float]]],
+    window: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int] | None:
+    if not run_steps:
+        return None
+
+    max_step = max((max(step_map.keys()) for step_map in run_steps.values() if step_map), default=0)
+    if max_step <= 0:
+        return None
+
+    n_runs = len(run_steps)
+    frames_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    captures_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    rewards_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+
+    for run_idx, step_map in enumerate(run_steps.values()):
+        for step, values in step_map.items():
+            if 1 <= step <= max_step:
+                frame, capture_pct, reward = values
+                frames_mat[run_idx, step - 1] = frame
+                captures_mat[run_idx, step - 1] = capture_pct
+                rewards_mat[run_idx, step - 1] = reward
+
+    mean_captures = np.nanmean(captures_mat, axis=0)
+    std_captures = np.nanstd(captures_mat, axis=0)
+    mean_rewards = np.nanmean(rewards_mat, axis=0)
+    std_rewards = np.nanstd(rewards_mat, axis=0)
+    mean_frames = np.nanmean(frames_mat, axis=0)
+
+    invalid_frames = np.isnan(mean_frames)
+    if np.any(invalid_frames):
+        step_axis = np.arange(1, max_step + 1, dtype=np.float64)
+        mean_frames[invalid_frames] = step_axis[invalid_frames]
+
+    mean_captures = _moving_average(mean_captures, window)
+    std_captures = _moving_average(std_captures, window)
+    mean_rewards = _moving_average(mean_rewards, window)
+    std_rewards = _moving_average(std_rewards, window)
+
+    return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, captures_mat, n_runs
 
 
 def _resolve_scalars_dir(run_dir: Path) -> Path | None:
@@ -92,6 +139,67 @@ def _parse_progress_meta(progress_file: Path) -> dict[str, str]:
                 meta[parsed_key] = value.strip()
     return meta
 
+
+def _parse_progress_data(
+    progress_file: Path,
+) -> dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]]:
+    # algorithm -> device_label -> run_id -> step -> (frame, capture_pct, reward)
+    data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = {}
+    if not progress_file.exists():
+        return data
+
+    with progress_file.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split(",")
+            if len(parts) not in (5, 6):
+                continue
+
+            if len(parts) == 6:
+                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts
+            else:
+                algorithm_token, run_id, step_s, frame_s, capture_s = parts
+                reward_s = "nan"
+
+            try:
+                step = int(step_s)
+                frame = float(frame_s)
+                capture_pct = float(capture_s)
+                reward = float(reward_s)
+            except ValueError:
+                continue
+
+            if step <= 0:
+                continue
+
+            if "@" in algorithm_token:
+                token_parts = [part.strip().lower() for part in algorithm_token.split("@") if part.strip()]
+                algorithm = token_parts[0] if token_parts else ""
+                if len(token_parts) >= 3:
+                    # New format: algorithm@reward_id@device_label
+                    device_label_key = token_parts[-1]
+                elif len(token_parts) == 2:
+                    # Legacy format: algorithm@device_label
+                    device_label_key = token_parts[1]
+                else:
+                    device_label_key = "default"
+            else:
+                algorithm = algorithm_token.strip().lower()
+                device_label_key = "default"
+
+            algorithm = algorithm.strip().lower()
+            if not algorithm:
+                continue
+
+            algo_data = data.setdefault(algorithm, {})
+            device_data = algo_data.setdefault(device_label_key, {})
+            run_data = device_data.setdefault(run_id, {})
+            run_data[step] = (frame, capture_pct, reward)
+
+    return data
 
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
@@ -330,6 +438,7 @@ def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
     progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
+    progress_data = _parse_progress_data(progress_file)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():
@@ -373,9 +482,28 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
-    show_epsilon = "iql" in algorithms
+    progress_meta = _parse_progress_meta(progress_file)
+    epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
+    epsilon_algorithm = (
+        normalize_algorithm(epsilon_algorithm_raw)
+        if epsilon_algorithm_raw.strip()
+        else ""
+    )
+    has_cli_epsilon_override = any(
+        value is not None
+        for value in (
+            args.epsilon_max_frames,
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    )
+    show_epsilon = (
+        (epsilon_algorithm in algorithms)
+        or (not epsilon_algorithm and "iql" in algorithms)
+        or has_cli_epsilon_override
+    )
     if show_epsilon:
-        progress_meta = _parse_progress_meta(progress_file)
         epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = _resolve_epsilon_from_cli_or_meta(
             args,
             progress_meta,
@@ -416,75 +544,61 @@ def main() -> None:
     per_algorithm: dict[str, dict[str, object]] = {}
 
     for algorithm in algorithms:
-        if args.run_dir:
-            run_dirs = args.run_dir
+        by_device = progress_data.get(algorithm, {})
+        if not by_device:
+            print(
+                f"Warning: no progress data found for algorithm={algorithm} in {progress_file}"
+            )
+            continue
+
+        if requested_device == "auto":
+            selected_devices = sorted(by_device.keys())
         else:
-            run_dirs = candidate_run_dirs(discovery_root, algorithm)
+            selected_label = device_label(requested_device)
+            selected_devices = [selected_label] if selected_label in by_device else []
 
-        if not run_dirs:
+        if not selected_devices:
             print(
-                f"Warning: no run directories found for algorithm={algorithm} "
-                f"in {discovery_root}"
+                f"Warning: no progress data found for algorithm={algorithm} "
+                f"and requested device selector={requested_device}."
             )
             continue
 
-        series_frames: list[np.ndarray] = []
-        series_capture_pct: list[np.ndarray] = []
-        series_reward_mean: list[np.ndarray] = []
-        used_run_dirs: list[Path] = []
+        run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
+        used_run_dirs: list[str] = []
 
-        for run_dir in run_dirs:
-            scalars_dir = _resolve_scalars_dir(run_dir)
-            if scalars_dir is None:
-                continue
-
-            frames_path = scalars_dir / "counters_total_frames.csv"
-            episode_reward_path = scalars_dir / "collection_reward_episode_reward_mean.csv"
-            reward_mean_path = scalars_dir / "collection_reward_reward_mean.csv"
-            if not frames_path.exists() or not episode_reward_path.exists() or not reward_mean_path.exists():
-                continue
-
-            _, frames = _load_two_col_csv(frames_path)
-            _, episode_returns = _load_two_col_csv(episode_reward_path)
-            _, reward_means = _load_two_col_csv(reward_mean_path)
-            n = min(len(frames), len(episode_returns), len(reward_means))
-            if n == 0:
-                continue
-
-            frames = frames[:n]
-            capture_pct = _capture_pct_proxy_series_from_episode_returns(
-                episode_returns[:n]
-            )
-            capture_pct = _moving_average(capture_pct, args.window)
-            reward_mean = _moving_average(reward_means[:n], args.window)
-
-            series_frames.append(frames)
-            series_capture_pct.append(capture_pct)
-            series_reward_mean.append(reward_mean)
-            used_run_dirs.append(run_dir)
-
-        if not series_capture_pct:
-            print(
-                "Warning: no usable scalar files found for algorithm="
-                f"{algorithm} (expected counters_total_frames.csv, collection_reward_episode_reward_mean.csv, and collection_reward_reward_mean.csv)."
-            )
-            continue
-
-        min_len = min(
-            min(len(arr) for arr in series_capture_pct),
-            min(len(arr) for arr in series_reward_mean),
+        selected_run_names = (
+            {path.name for path in args.run_dir if path is not None}
+            if args.run_dir
+            else None
         )
-        captures_mat = np.vstack([arr[:min_len] for arr in series_capture_pct])
-        rewards_mat = np.vstack([arr[:min_len] for arr in series_reward_mean])
-        frames_mat = np.vstack([arr[:min_len] for arr in series_frames])
+
+        for device_key in selected_devices:
+            for run_id, step_map in by_device.get(device_key, {}).items():
+                if selected_run_names is not None and run_id not in selected_run_names:
+                    continue
+                run_key = f"{device_key}:{run_id}"
+                run_steps[run_key] = step_map
+                used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
+
+        aggregated = _aggregate_algorithm_runs(run_steps, args.window)
+        if aggregated is None:
+            print(
+                "Warning: no true capture snapshots found for algorithm="
+                f"{algorithm} in {progress_file}."
+            )
+            continue
+
+        frames, capture_mean, capture_std, reward_mean, reward_std, captures_mat, n_runs = aggregated
 
         per_algorithm[algorithm] = {
-            "frames": np.mean(frames_mat, axis=0),
-            "capture_mean": np.mean(captures_mat, axis=0),
-            "capture_std": np.std(captures_mat, axis=0),
+            "frames": frames,
+            "capture_mean": capture_mean,
+            "capture_std": capture_std,
             "captures_mat": captures_mat,
-            "reward_mean": np.mean(rewards_mat, axis=0),
-            "reward_std": np.std(rewards_mat, axis=0),
+            "reward_mean": reward_mean,
+            "reward_std": reward_std,
+            "n_runs": n_runs,
             "used_run_dirs": used_run_dirs,
             "color": color_map.get(algorithm, "#1f77b4"),
         }
@@ -509,33 +623,40 @@ def main() -> None:
         reward_mean = payload["reward_mean"]
         color = payload["color"]
 
+        valid_capture_mask = ~np.isnan(capture_mean)
+        valid_frames = frames[valid_capture_mask]
+        valid_captures = capture_mean[valid_capture_mask]
+        valid_stds = capture_std[valid_capture_mask]
+
         if args.show_runs:
             for capture_series in captures_mat:
                 ax.plot(frames, capture_series, color=color, linewidth=1, alpha=0.18)
 
         ax.plot(
-            frames,
-            capture_mean,
-            label=f"{algorithm.upper()} mean capture % (n={captures_mat.shape[0]})",
+            valid_frames,
+            valid_captures,
+            label=f"{algorithm.upper()} mean capture % (n={payload['n_runs']})",
             color=color,
             linewidth=2,
         )
-        ax.fill_between(
-            frames,
-            np.maximum(capture_mean - capture_std, 0.0),
-            np.minimum(capture_mean + capture_std, 100.0),
-            color=color,
-            alpha=0.14,
-        )
+        if np.any(valid_capture_mask):
+            ax.fill_between(
+                valid_frames,
+                np.maximum(valid_captures - valid_stds, 0.0),
+                np.minimum(valid_captures + valid_stds, 100.0),
+                color=color,
+                alpha=0.14,
+            )
 
-        ax_reward.plot(
-            frames,
-            reward_mean,
-            label=f"{algorithm.upper()} mean reward",
-            color=color,
-            linewidth=1.8,
-            linestyle=":",
-        )
+        if not np.all(np.isnan(reward_mean)):
+            ax_reward.plot(
+                frames,
+                reward_mean,
+                label=f"{algorithm.upper()} mean reward",
+                color=color,
+                linewidth=1.8,
+                linestyle=":",
+            )
 
     max_display_frame = max(
         float(np.nanmax(payload["frames"]))
