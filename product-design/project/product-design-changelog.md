@@ -6,6 +6,7 @@
 
 | Date | Plan | Change | Description |
 |------|------|--------|-------------|
+| 2026-06-26 | plan-000028 | Added | Pursuit-first reward variant `current_v3` (`CurrentRewardWeightsV3` + `PursuitFirstTeamReward`, registered in `loader.py`) reusing `CurrentTeamReward.compute()`; zeros `repeated_direction_reversal`, softens `two_step_cycle`/`stay_still`/`invalid_move`, raises `potential_shaping_alpha` (1.2→2.0), lowers `currently_visible` (0.6→0.08). `eval_report.py` gained a `mean_reward_breakdown` JSON column. Makefile defaults switched to `current_v3` (V2 baseline retained). Diagnostic confirmed the V2 −162 return is owned by `repeated_direction_reversal` (−116) + `two_step_cycle` (−47), not stalking (research-000027). Source: agent (post-skill). |
 | 2026-06-21 | reward-strategy-refactor | Changed | Extracted reward calculation and history into immutable-context `RewardStrategy` classes; added import-path selection, reward-matrix benchmarks, isolated run folders, and paired objective evaluation by capture rate/time-to-capture. |
 | 2026-06-13 | - | initial | Design documentation created via `/design` |
 | 2026-06-20 | plan-000019 | Changed | Added `DEVICE ?= cpu` Makefile variable; wired `--devices $(DEVICE)` to `benchmark`, `--device $(DEVICE)` to `eval-best` and `liveplot`. Source: agent (post-skill). |
