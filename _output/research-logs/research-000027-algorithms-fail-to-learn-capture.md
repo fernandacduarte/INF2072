@@ -1,6 +1,7 @@
 # Research 000027 | TB | 2026-06-26 12:55 UTC | Algorithms fail to learn capture (rate falls 80%→20%)
 
 tags: reward-shaping, reward-hacking, marl, benchmark, rl-correctness
+spawned: plan-000028
 
 ## User brief
 

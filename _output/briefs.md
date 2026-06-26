@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-26 20:57 UTC | STARTED | 2026-06-26 20:42 UTC | plan | Rebalance the ghost team reward to fix pursuit collapse (source: research-000027) | PLAN | 000028
+
 DONE | 2026-06-26 13:01 UTC | STARTED | 2026-06-26 12:55 UTC | research | ERROR: All algorithms (benchmark + liveplot) fail to learn capture — capture rate decreasing from ~80% to ~20% across training frames
 
 DONE | 2026-06-26 12:29 UTC | STARTED | 2026-06-26 12:26 UTC | implement | plan-000026 | PLAN | 000026
