@@ -1,5 +1,6 @@
 # Research 000025 | fernanda-INF2072 | 2026-06-26 12:12 UTC | liveplot blank — reward_id token regression
 tags: liveplot, benchmark, regression, rewards-refactor, device-filter
+spawned: plan-000026
 
 ## User brief
 
