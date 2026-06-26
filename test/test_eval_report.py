@@ -19,6 +19,7 @@ def _episode(
     newly_spotted_count=0,
     shaping=0.0,
     terminal=0.0,
+    reward_breakdown=None,
 ):
     return {
         "captured": captured,
@@ -27,7 +28,7 @@ def _episode(
         "evaluation_cutoff": evaluation_cutoff,
         "steps": steps,
         "team_return": team_return,
-        "reward_breakdown": {},
+        "reward_breakdown": {} if reward_breakdown is None else reward_breakdown,
         "category_totals": {"shaping": shaping, "terminal": terminal},
         "visible_steps": visible_steps,
         "newly_spotted_count": newly_spotted_count,
@@ -79,6 +80,28 @@ def test_aggregate_episodes_uses_nan_capture_time_when_nothing_is_captured():
 
     assert math.isnan(result["mean_steps_to_capture"])
     assert math.isnan(result["median_steps_to_capture"])
+
+
+def test_aggregate_episodes_emits_per_term_reward_breakdown():
+    import json
+
+    episodes = [
+        _episode(reward_breakdown={"timestep": -2.0, "valid_move": 1.0}),
+        _episode(reward_breakdown={"timestep": -4.0, "valid_move": 3.0}),
+    ]
+
+    result = eval_report._aggregate_episodes(episodes)
+    breakdown = json.loads(result["mean_reward_breakdown"])
+
+    assert breakdown == {"timestep": -3.0, "valid_move": 2.0}
+
+
+def test_aggregate_episodes_breakdown_is_empty_json_without_terms():
+    import json
+
+    result = eval_report._aggregate_episodes([_episode()])
+
+    assert json.loads(result["mean_reward_breakdown"]) == {}
 
 
 def test_variant_summary_uses_training_rows_for_uncertainty_and_pools_diagnostics():

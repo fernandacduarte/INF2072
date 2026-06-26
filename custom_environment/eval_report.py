@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import random
 import re
 import sys
@@ -299,6 +300,10 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
     newly_spotted_counts: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
+    # Per-term reward mass, summed across episodes then averaged below, so the
+    # eval report exposes *which* reward terms drove the episode return (the
+    # full decomposition is already accumulated per episode but otherwise discarded).
+    breakdown_sums: dict[str, float] = defaultdict(float)
     for episode in episodes:
         steps = max(int(episode["steps"]), 1)
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
@@ -306,6 +311,15 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
+        for key, value in episode["reward_breakdown"].items():
+            breakdown_sums[key] += float(value)
+
+    # Mean per-term reward over episodes. The per-term means sum (exactly) to
+    # mean_episode_return because RewardResult.breakdown includes terminal terms
+    # and the team reward is broadcast unchanged to every ghost.
+    mean_breakdown = (
+        {key: value / count for key, value in breakdown_sums.items()} if count else {}
+    )
 
     capture_rate = len(captures) / count if count else float("nan")
     timeout_rate = (
@@ -354,6 +368,8 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
         "mean_terminal_return": _safe_mean(terminal_returns),
+        # Per-term reward decomposition (JSON), so the return is auditable term-by-term.
+        "mean_reward_breakdown": json.dumps(mean_breakdown, sort_keys=True),
     }
 
 
@@ -491,6 +507,9 @@ def _build_variant_summary(
                 "mean_shaping_return": float(pooled_stats["mean_shaping_return"]),
                 # Terminal return is the pooled mean terminal reward contribution.
                 "mean_terminal_return": float(pooled_stats["mean_terminal_return"]),
+                # Pooled per-term reward decomposition (JSON). _build_variant_summary
+                # enumerates keys explicitly, so this must be copied from pooled_stats.
+                "mean_reward_breakdown": pooled_stats["mean_reward_breakdown"],
             }
         )
     return result
@@ -520,6 +539,7 @@ REPORT_FIELDS = [
     "mean_newly_spotted_count",
     "mean_shaping_return",
     "mean_terminal_return",
+    "mean_reward_breakdown",
 ]
 
 VARIANT_FIELDS = [
@@ -541,6 +561,7 @@ VARIANT_FIELDS = [
     "mean_episode_return",
     "mean_shaping_return",
     "mean_terminal_return",
+    "mean_reward_breakdown",
 ]
 
 
