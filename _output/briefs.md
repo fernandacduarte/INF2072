@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-26 12:15 UTC | STARTED | 2026-06-26 12:12 UTC | research | liveplot: `liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device $(DEVICE)` is not showing anything. investigate what changed
+
 DONE | 2026-06-24 10:03 UTC | STARTED | 2026-06-24 10:01 UTC | research | last commits of this codebase and report what was done
 
 DONE | 2026-06-20 22:50 UTC | STARTED | 2026-06-20 22:37 UTC | research | there is something strange when i run eval. the ghosts stop and the pac man move back and forth to be in the visible range of the phantom. but the pac man does not enter in the visible range more, nor get other pellets | RESEARCH | 000022
