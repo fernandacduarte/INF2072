@@ -13,10 +13,12 @@ from custom_environment.env.rewards import (
     load_reward_strategy,
 )
 from custom_environment.env.rewards.current import (
+    CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
     CurrentWithOverlapOrSameCorridor,
 )
+from custom_environment.env.rewards.loader import reward_class_from_id
 from my_rewards.movement_bonus import StrongerMovementReward
 
 
@@ -75,6 +77,47 @@ def test_default_loader_returns_current_strategy():
     strategy = load_reward_strategy(DEFAULT_REWARD_CLASS)
     assert isinstance(strategy, CurrentTeamReward)
     assert strategy.strategy_id == "current"
+
+
+def test_loader_resolves_capture_v0_id():
+    strategy = load_reward_strategy(reward_class_from_id("capture_v0"))
+    assert isinstance(strategy, CaptureV0Reward)
+    assert strategy.strategy_id == "capture_v0"
+
+
+def test_capture_v0_rewards_reduced_visible_pacman_legal_moves():
+    strategy = CaptureV0Reward()
+
+    ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(2, 2),
+        current_position=(2, 2),
+        action=0,
+        invalid_move=False,
+        local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+    )
+    context = RewardContext(
+        step_count=10,
+        max_steps=200,
+        board_shape=(4, 4),
+        ghost_view_radius=1,
+        wall_positions=frozenset({(0, 2), (1, 3)}),
+        ghosts=(ghost,),
+        pacman_previous_position=(1, 1),
+        pacman_position=(1, 2),
+        pacman_visible=True,
+        visible_pacman_positions=((1, 2),),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+    strategy.reset(context)
+    result = strategy.compute(context)
+    assert result.breakdown["pacman_legal_moves_reduced"] == pytest.approx(1.0)
 
 
 def test_instance_loader_gives_each_environment_independent_state():

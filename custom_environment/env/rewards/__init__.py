@@ -8,6 +8,7 @@ from custom_environment.env.rewards.base import (
     RewardTerm,
 )
 from custom_environment.env.rewards.current import (
+    CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
     CurrentWithOverlapOrSameCorridor,
@@ -20,6 +21,7 @@ from custom_environment.env.rewards.loader import (
 
 __all__ = [
     "DEFAULT_REWARD_CLASS",
+    "CaptureV0Reward",
     "CurrentGitTeamReward",
     "CurrentTeamReward",
     "CurrentWithOverlapOrSameCorridor",

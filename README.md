@@ -605,7 +605,14 @@ To re-enable that term as an explicit experiment, use
 `CurrentTeamReward` unchanged as the ablation baseline while enabling a clean
 A/B comparison.
 
-Three-way comparison setup:
+Four-way comparison setup:
+
+- `custom_environment.env.rewards.current:CaptureV0Reward`
+  (`strategy_id = capture_v0`): minimal reward baseline designed for scratch
+  experiments with fewer interacting terms. It keeps terminal outcomes and
+  timestep penalty, disables potential-shaping and exploration/movement shaping
+  terms, and adds a +1 reward when Pacman legal moves are reduced on steps
+  where Pacman is visible.
 
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
@@ -705,6 +712,7 @@ Or use a built-in reward id alias:
 
 ```cmd
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id current_with_overlap_or_same_corridor
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
 ```
 
 </details>
@@ -724,6 +732,9 @@ Or use a built-in reward id alias:
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id current_with_overlap_or_same_corridor
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0
 ```
 
 </details>
@@ -780,6 +791,7 @@ Built-in reward ids can also be passed directly:
 
 ```cmd
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-ids current,current_with_overlap_or_same_corridor
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
 ```
 
 </details>
@@ -801,6 +813,10 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql,vdn \
   --seeds 0,1,2 \
   --reward-ids current,current_with_overlap_or_same_corridor
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids current_git,capture_v0
 ```
 
 </details>

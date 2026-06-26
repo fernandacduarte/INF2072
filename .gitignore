@@ -40,3 +40,5 @@ _output/tmp/*
 /*.un~
 /custom_environment/*.un~
 /custom_environment/env/rewards/*.un~
+/futebol2d
+/eval_ascii_debug.txt
