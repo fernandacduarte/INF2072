@@ -1,4 +1,4 @@
-# Plan 000028 | TB-FIX | 2026-06-26 20:42 UTC | Reward rebalance to fix pursuit collapse | Review: standard
+# DONE | 2026-06-26 21:05 UTC | Plan 000028 | TB-FIX | 2026-06-26 20:42 UTC | Reward rebalance to fix pursuit collapse | Review: standard
 plan_format_version: 1
 source: research-000027
 
@@ -56,7 +56,7 @@ source: research-000027
 ## Steps
 
 ### Step 1 — Emit per-term reward breakdown in eval_report (diagnostic, sequenced first)
-- [ ] Aggregate the per-episode `reward_breakdown` (already accumulated at `eval_report.py:242-243`, carried in `EpisodeResult["reward_breakdown"]`) into a per-term mean across episodes inside `_aggregate_episodes`, and add it to that function's return dict as a single JSON-encoded `mean_reward_breakdown` field (one column, robust to strategy-varying term names). **In `_build_variant_summary` (lines 457-494) the output dict is built by explicit key enumeration — it does NOT propagate `pooled_stats` automatically — so explicitly add `"mean_reward_breakdown": pooled_stats["mean_reward_breakdown"]` to that dict literal.** Append `"mean_reward_breakdown"` to both `REPORT_FIELDS` and `VARIANT_FIELDS` (`csv.DictWriter(extrasaction="ignore")` drops unlisted keys).
+- [x] Aggregate the per-episode `reward_breakdown` (already accumulated at `eval_report.py:242-243`, carried in `EpisodeResult["reward_breakdown"]`) into a per-term mean across episodes inside `_aggregate_episodes`, and add it to that function's return dict as a single JSON-encoded `mean_reward_breakdown` field (one column, robust to strategy-varying term names). **In `_build_variant_summary` (lines 457-494) the output dict is built by explicit key enumeration — it does NOT propagate `pooled_stats` automatically — so explicitly add `"mean_reward_breakdown": pooled_stats["mean_reward_breakdown"]` to that dict literal.** Append `"mean_reward_breakdown"` to both `REPORT_FIELDS` and `VARIANT_FIELDS` (`csv.DictWriter(extrasaction="ignore")` drops unlisted keys).
 - **Files**: `custom_environment/eval_report.py`, `test/test_eval_report.py`
 - **References**: research-000027 follow-up Q6/Rec#3; `_aggregate_episodes` (line 291); `_build_variant_summary` explicit-key dict (lines 457-494); `REPORT_FIELDS` (line 499), `VARIANT_FIELDS` (line 525); `base.py` `RewardResult.breakdown` includes terminal terms (73-78)
 - **Interface**: produces a `mean_reward_breakdown` JSON column in both per-seed rows and pooled variant rows, consumed by Step 6 validation and downstream analysis. `_aggregate_episodes` return dict gains key `mean_reward_breakdown` (JSON string).
@@ -65,7 +65,7 @@ source: research-000027
 - **Docs**: N/A
 
 ### Step 2 — Add CurrentRewardWeightsV3 (rebalanced weights)
-- [ ] Add a frozen `CurrentRewardWeightsV3` dataclass in `current.py` mirroring `CurrentRewardWeightsV2`'s fields, with: terminal signs unchanged (`get_pacman=40.0`, `pacman_timeout_win=-35.0`, `pacman_win_pellets=-35.0`); anti-oscillation/movement penalties slashed but **not all zeroed** — `repeated_direction_reversal≈0.0`, but keep small `two_step_cycle≈-0.02` and `stay_still≈-0.02` so an in-place ping-pong that merely keeps Pacman visible is **not** net-positive; `invalid_move≈-0.02`; pursuit gradient strengthened (`potential_shaping_alpha≈2.0`); **`currently_visible` lowered to ≈0.05–0.1** (NOT 0.2) — it is granted *every* visible step unconditionally (current.py:372), so at raised α a 200-step visible-but-no-capture episode could otherwise accrue shaping rivalling the +40 terminal (the deferred stalking optimum); `valid_move≈0.05` to keep movement net-positive (must satisfy `valid_move + min-positive shaping > stay_still penalty` so move-toward > stay survives — see Step 5b); `timestep=-0.01` retained. Add a comment that the per-episode visible-stalking shaping budget must stay below `get_pacman` (tie to Step 5d). Treat these as documented initial values (cite research-000027) to be confirmed in Step 6.
+- [x] Add a frozen `CurrentRewardWeightsV3` dataclass in `current.py` mirroring `CurrentRewardWeightsV2`'s fields, with: terminal signs unchanged (`get_pacman=40.0`, `pacman_timeout_win=-35.0`, `pacman_win_pellets=-35.0`); anti-oscillation/movement penalties slashed but **not all zeroed** — `repeated_direction_reversal≈0.0`, but keep small `two_step_cycle≈-0.02` and `stay_still≈-0.02` so an in-place ping-pong that merely keeps Pacman visible is **not** net-positive; `invalid_move≈-0.02`; pursuit gradient strengthened (`potential_shaping_alpha≈2.0`); **`currently_visible` lowered to ≈0.05–0.1** (NOT 0.2) — it is granted *every* visible step unconditionally (current.py:372), so at raised α a 200-step visible-but-no-capture episode could otherwise accrue shaping rivalling the +40 terminal (the deferred stalking optimum); `valid_move≈0.05` to keep movement net-positive (must satisfy `valid_move + min-positive shaping > stay_still penalty` so move-toward > stay survives — see Step 5b); `timestep=-0.01` retained. Add a comment that the per-episode visible-stalking shaping budget must stay below `get_pacman` (tie to Step 5d). Treat these as documented initial values (cite research-000027) to be confirmed in Step 6.
 - **Files**: `custom_environment/env/rewards/current.py`
 - **References**: `CurrentRewardWeightsV2` (current.py:39-61); unconditional `currently_visible` (current.py:372); `_team_distance` telescoping (current.py:437-445); research-000027 Recs #1-#2
 - **Interface**: exposes `CurrentRewardWeightsV3` consumed by Step 3.
@@ -74,7 +74,7 @@ source: research-000027
 - **Docs**: N/A
 
 ### Step 3 — Add PursuitFirstTeamReward strategy + register it
-- [ ] Add `class PursuitFirstTeamReward(CurrentTeamReward)` with `strategy_id = "current_v3"`, overriding **`__init__` only** (`def __init__(self, weights=None): super().__init__(weights or CurrentRewardWeightsV3())`). Do **not** override `reset()` — `CurrentTeamReward.reset()` reads `self.weights` and does not re-instantiate it (current.py:324-345), so V3 weights are already honored; `compute()` is inherited unchanged. The `__init__(self, weights=None)` signature stays no-arg-constructible (loader.py:88-93 calls `target()`). Register `"current_v3": "custom_environment.env.rewards.current:PursuitFirstTeamReward"` in `loader.py:_REWARD_CLASS_BY_ID`.
+- [x] Add `class PursuitFirstTeamReward(CurrentTeamReward)` with `strategy_id = "current_v3"`, overriding **`__init__` only** (`def __init__(self, weights=None): super().__init__(weights or CurrentRewardWeightsV3())`). Do **not** override `reset()` — `CurrentTeamReward.reset()` reads `self.weights` and does not re-instantiate it (current.py:324-345), so V3 weights are already honored; `compute()` is inherited unchanged. The `__init__(self, weights=None)` signature stays no-arg-constructible (loader.py:88-93 calls `target()`). Register `"current_v3": "custom_environment.env.rewards.current:PursuitFirstTeamReward"` in `loader.py:_REWARD_CLASS_BY_ID`.
 - **Files**: `custom_environment/env/rewards/current.py`, `custom_environment/env/rewards/loader.py`
 - **References**: `CurrentTeamReward` (current.py:307-345), `_REWARD_CLASS_BY_ID` (loader.py:16-22)
 - **Interface**: `load_reward_strategy("custom_environment.env.rewards.current:PursuitFirstTeamReward")` and `reward_class_from_id("current_v3")` both resolve to the new strategy.
@@ -83,7 +83,7 @@ source: research-000027
 - **Docs**: N/A
 
 ### Step 4 — Point Makefile benchmark/eval defaults at current_v3
-- [ ] Update `REWARDS` (line 21) to `custom_environment.env.rewards.current:PursuitFirstTeamReward` and `REWARD_ID` (line 22) to `current_v3`; keep the previous values in a trailing comment so the switch is one-line reversible. The `benchmark` target consumes `REWARDS` (line 53) and `eval-latest` consumes `REWARD_ID` (line 50). **Note: `liveplot` (line 57) takes neither — it discovers run directories**, so it needs no reward arg; just confirm `liveplot.py` still locates `current_v3/` run dirs (recent commits 6a44562/7dc27ef touched its reward_id token parser).
+- [x] Update `REWARDS` (line 21) to `custom_environment.env.rewards.current:PursuitFirstTeamReward` and `REWARD_ID` (line 22) to `current_v3`; keep the previous values in a trailing comment so the switch is one-line reversible. The `benchmark` target consumes `REWARDS` (line 53) and `eval-latest` consumes `REWARD_ID` (line 50). **Note: `liveplot` (line 57) takes neither — it discovers run directories**, so it needs no reward arg; just confirm `liveplot.py` still locates `current_v3/` run dirs (recent commits 6a44562/7dc27ef touched its reward_id token parser).
 - **Files**: `Makefile`
 - **References**: `Makefile:21-22` (REWARDS / REWARD_ID), `Makefile:50,53,57` (eval-latest / benchmark / liveplot targets)
 - **Interface**: `make benchmark` / `make eval-latest` now default to `current_v3`; `make liveplot` discovers v3 run dirs.
@@ -92,7 +92,7 @@ source: research-000027
 - **Docs**: N/A
 
 ### Step 5 — Tests: v3 registration, pursuit calibration, bounded shaping, terminal signs
-- [ ] In `test/test_reward_strategies.py`, add tests asserting: (a) `current_v3` registers (`reward_class_from_id`) and loads (`load_reward_strategy`) with `weights` = `CurrentRewardWeightsV3`; (b) v3 preserves the pursuit-calibration property (move one BFS-cell toward the true Pacman scores higher than staying and higher than moving away) — **exercise v3 explicitly by instantiating `PursuitFirstTeamReward` directly and driving `compute()` (or injecting it as `env.reward_strategy`), since `test_reward_calibration.py` otherwise drives only the default `current`**; the invariant survives because `valid_move (+0.05) + min-positive potential_shaping > stay_still penalty (−0.02)`; (c) v3 terminal weights equal V2's (`get_pacman=40`, `pacman_timeout_win=-35`, `pacman_win_pellets=-35`); (d) **guardrail — the worst case is a Pacman-visible-every-step episode (not oscillation), since `currently_visible` accrues unconditionally**: drive a 200-step episode with `pacman_visible=True` each step and assert `sum(non-terminal shaping terms) < get_pacman` (40); keep an all-oscillation episode as a secondary assertion.
+- [x] In `test/test_reward_strategies.py`, add tests asserting: (a) `current_v3` registers (`reward_class_from_id`) and loads (`load_reward_strategy`) with `weights` = `CurrentRewardWeightsV3`; (b) v3 preserves the pursuit-calibration property (move one BFS-cell toward the true Pacman scores higher than staying and higher than moving away) — **exercise v3 explicitly by instantiating `PursuitFirstTeamReward` directly and driving `compute()` (or injecting it as `env.reward_strategy`), since `test_reward_calibration.py` otherwise drives only the default `current`**; the invariant survives because `valid_move (+0.05) + min-positive potential_shaping > stay_still penalty (−0.02)`; (c) v3 terminal weights equal V2's (`get_pacman=40`, `pacman_timeout_win=-35`, `pacman_win_pellets=-35`); (d) **guardrail — the worst case is a Pacman-visible-every-step episode (not oscillation), since `currently_visible` accrues unconditionally**: drive a 200-step episode with `pacman_visible=True` each step and assert `sum(non-terminal shaping terms) < get_pacman` (40); keep an all-oscillation episode as a secondary assertion.
 - **Files**: `test/test_reward_strategies.py`
 - **References**: `test/test_reward_calibration.py` (pivot scenario + `_reward_for_move` harness), `custom_environment/env/rewards/current.py` (unconditional `currently_visible` 372), existing strategy tests in `test_reward_strategies.py`
 - **Interface**: N/A
@@ -101,7 +101,7 @@ source: research-000027
 - **Docs**: N/A
 
 ### Step 6 — Validate: short A/B benchmark + eval breakdown (manual, non-authoritative)
-- [ ] Run a short A/B benchmark comparing `current` (V2) vs `current_v3` on the default maze with reduced frames, then inspect the new `mean_reward_breakdown` column and capture rate. Confirm: v3 shaping return is net-positive-toward-pursuit (penalty terms no longer dominate), capture rate improves over V2, and the dominant −140 penalty term identified in Step 1 is materially reduced. **This 2-seed run is a non-authoritative directional smoke check only — per constitution Q3 / design §10, any V2-vs-v3 capture-rate comparison recorded as a result must come from a full ≥5-seed `make benchmark` run.** Also confirm the benchmark-driven auto-eval (`reward_eval.csv`, `run_benchmark.py:771`) emits `mean_reward_breakdown`, not just the standalone `eval_report.py` path.
+- [~] Run a short A/B benchmark comparing `current` (V2) vs `current_v3` on the default maze with reduced frames, then inspect the new `mean_reward_breakdown` column and capture rate. Confirm: v3 shaping return is net-positive-toward-pursuit (penalty terms no longer dominate), capture rate improves over V2, and the dominant −140 penalty term identified in Step 1 is materially reduced. **This 2-seed run is a non-authoritative directional smoke check only — per constitution Q3 / design §10, any V2-vs-v3 capture-rate comparison recorded as a result must come from a full ≥5-seed `make benchmark` run.** Also confirm the benchmark-driven auto-eval (`reward_eval.csv`, `run_benchmark.py:771`) emits `mean_reward_breakdown`, not just the standalone `eval_report.py` path.
 - **Files**: (none — execution/validation step)
 - **References**: `benchmarl_setup/run_benchmark.py` (auto-eval → `reward_eval.csv` line 771), `custom_environment/eval_report.py`
 - **Interface**: N/A
@@ -168,3 +168,36 @@ All four deep-dive findings applied to the Steps section in place (Steps 1–6 a
 | Adopted | 1 (PERF) |
 | Deferred-then-amended | 4 (ARCH, TEST, DATA, DX) |
 | Convergence | All findings produced concrete, non-conflicting amendments; terminated iteration 1 |
+
+## Implementation summary
+
+**Status:** Steps 1–5 complete (`- [x]`); Step 6 partial (`- [~]`) — the diagnostic half ran; the full multi-seed A/B training benchmark is left for the user (long CPU job).
+**Mode:** manual | **Iterations:** n/a | **Rollback branch:** `pre-plan-000028`
+
+### What shipped (per-step commits)
+- **Step 1** (`eval_report.py`, `test_eval_report.py`): per-term means aggregated in `_aggregate_episodes`, explicit key added in `_build_variant_summary`, `mean_reward_breakdown` JSON column appended to `REPORT_FIELDS` + `VARIANT_FIELDS`. `_episode` test helper gained a `reward_breakdown` kwarg; 2 new tests assert decoded per-term means.
+- **Steps 2–3** (`current.py`, `loader.py`): `CurrentRewardWeightsV3` (terminals unchanged; `repeated_direction_reversal=0.0`, `two_step_cycle=-0.02`, `stay_still=-0.02`, `invalid_move=-0.02`, `valid_move=0.05`, `potential_shaping_alpha=2.0`, `currently_visible=0.08`) + `PursuitFirstTeamReward` (`strategy_id="current_v3"`, `__init__`-only override) registered as `current_v3`.
+- **Step 4** (`Makefile`): `REWARDS`/`REWARD_ID` default to v3 (prior V2 defaults kept commented; one-line revert). liveplot confirmed to need no reward arg.
+- **Step 5** (`test_reward_strategies.py`): 4 tests — registration/load, terminal weights == V2, move-toward > stay > away (direct v3 drive), 200-step visible-every-step shaping < `get_pacman`.
+
+### Diagnostic result (Step 6, partial — the key empirical finding)
+Ran `eval_report` on an existing V2 final checkpoint (`iql … checkpoint_200000.pt`, 5 episodes). The new `mean_reward_breakdown` reconciles **exactly** to `mean_episode_return = −162.43`, and pinpoints the dominant penalties:
+
+| Term | Mean reward |
+|---|---|
+| `repeated_direction_reversal` | **−115.65** |
+| `two_step_cycle` | **−46.80** |
+| `PACMAN_TIMEOUT_WIN` (terminal) | −35.00 |
+| `timestep` | −2.00 |
+| `currently_visible` | +1.80 |
+| `potential_shaping` | +16.20 |
+| `valid_move` | +18.00 |
+
+This **confirms the revised diagnosis** (research-000027): the −162 is owned by the anti-oscillation penalties (the ghost thrashes/ping-pongs; `repeated_direction_reversal` multiplies up to ×4 per streak), **not** by stalking (`currently_visible` only +1.8). V3 zeros `repeated_direction_reversal` and softens `two_step_cycle` → removes ~−160 of penalty mass directly.
+
+### Quality gate
+- `test_reward_strategies.py`, `test_reward_calibration.py`, `test_eval_report.py`, `test_algorithm_utils.py`, `test_liveplot.py`: **35 passed, 1 failed**. `test_petting_zoo.py` + `test_pallet_win.py`: **16 passed**.
+- The single failure — `test_stronger_movement_variant_changes_only_one_weight` — is **pre-existing and unrelated** to this plan (verified failing on `pre-plan-000028`): `StrongerMovementReward` is built on V1 `CurrentRewardWeights` (get_pacman=30) but the test compares it field-by-field against V2 `CurrentTeamReward` (get_pacman=40). Filed as **pa-000014** for separate fix (do not fix here — out of scope).
+
+### Remaining manual work
+- **Step 6 full validation**: run the A/B benchmark (`current` vs `current_v3`), ideally ≥5 seeds per constitution Q3 before recording any capture-rate comparison. The currently-running benchmark/liveplot is on the old `current` (V2) reward — restart it on `current_v3` to see the fix.
