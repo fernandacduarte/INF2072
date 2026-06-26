@@ -89,3 +89,44 @@ Priority-ordered; fixes #1–#3 are complementary (ship the cheap one now, land 
 4. **(HIGH) Run discriminating diagnostics in the *same* run as the fix.** Log (a) mean episode length over training, (b) per-term reward decomposition (the `RewardResult.breakdown` already exists), (c) `get_pacman` frequency, and (d) a Q-value/TD-error magnitude trace. Confirms the stalking mechanism (episode length should drop and capture frequency rise after the fix) and excludes the deadly-triad alternative. Also verify the V1 (`current_git`) vs V2 (`current`) A/B.
 5. **(MEDIUM) Sanity-check the eval harness for the "starts at 80%" anomaly** — confirm eval ε=0 and correct checkpoint↔frame pairing in the periodic capture-eval snapshot path (`run_benchmark.py`, commit `4142e1e`).
 6. **(MEDIUM) Add time pressure only if diagnostics show residual stalking after #1–#3.** Prefer a modestly larger `timestep` penalty over inflating the −35 timeout (large terminal penalties add value-estimation variance that hurts DQN-family learners). Don't apply reflexively — over-correction risks a "rush-and-miss" policy.
+
+---
+
+## FOLLOW-UP (2026-06-26 13:05 UTC) — eval verification overturns the stalking hypothesis
+
+> **REVISED.** The user chose "verify eval first" before changing the reward. Inspecting the actual eval CSVs from the running benchmark (`benchmarl_setup/runs/pinklike3/current/cpu/*/evaluation_report_live_capture.csv` and `live_progress.csvl`) **refuted the original reward-hacking-by-stalking diagnosis** above. The recommendations summary below supersedes the original for prioritization; the original is preserved for the record.
+
+### Q5. Is the eval harness sound (ε=0, correct pairing)?
+
+**Yes.** Episodes run under `with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC)` (`eval_report.py:403`), with deterministic per-episode seeding (`_seed_episode`, line 201). Capture is greedy. The capture snapshot pairs the latest checkpoint with the latest frame monotonically (`run_benchmark.py:491-521`). **The eval-artifact hypothesis (Q4) is ruled out** — the decline is genuine greedy-policy behavior.
+
+### Q6. What do the actual converged-policy eval numbers show?
+
+Final-checkpoint (200k-frame) eval, aggregated across seeds:
+
+| Algo | Capture | Mean return | Signature |
+|---|---|---|---|
+| iql | 0/5 | −144.6 | timeout=1.0, mean_steps=200 |
+| vdn | 0/5 | −135.6 | timeout=1.0, mean_steps=200 |
+| qmixlocal | 0/5 | −131.0 | timeout=1.0, mean_steps=200 |
+| qmixglobal | 1/4 | −83.7 | one run captures (steps=61, return≈+30) |
+
+Per-run diagnostics: `mean_shaping_return` ∈ [−132, −60], `frac_steps_visible` ∈ [0.0, 0.52] (mostly low), `timeout_rate` = 1.0, `mean_steps` = 200.
+
+**This refutes stalking.** Reward-hacking `currently_visible (+0.6/visible step)` would produce *positive* shaping return and *high* visibility. Instead shaping is strongly **negative** and visibility low. The converged policy earns **−140 return** when a capturing episode yields **~+30** — RL converged to a far *worse* return than an available capturing policy. That is a **pursuit/learning failure**, not reward exploitation.
+
+### Q7. Then where does the "80%→20% across frames" curve come from?
+
+A plotting/aggregation effect, not within-training collapse. Capture is evaluated **only at the final checkpoint** (no intermediate checkpoints are written, so `live_progress.csvl` has real capture values only at frame 200000; all other rows are `nan`). `liveplot.py` `nanmean`s per-seed end-values across runs as they finish (`liveplot.py:210`). Early-finishing lucky seeds pull the mean to ~80%; it settles to ~20% as more (failing) seeds complete. True converged capture ≈ 0–25%.
+
+### Q8. Revised root cause
+
+The agents **never learn deliberate pursuit**; the greedy policy is a worse pursuer than early high-ε random exploration. During training, experience is collected with annealing ε (1.0→0.1 over 190k frames); early random ghost movement stumbles into the fleeing Pacman (captures enter the buffer), but the network never learns to corner a *defensive* Pacman (holds BFS distance ≥3, flees optimally — needs multi-ghost coordination). The dense reward is **dominated in practice by net-negative anti-oscillation/movement penalties (~−140/episode: `invalid_move` −0.08, `stay_still` −0.03, `repeated_direction_reversal` up to −0.2, `two_step_cycle` −0.08)** that punish the exploratory back-and-forth needed to corner a target, while the pursuit signal (potential shaping) **telescopes to ~0** and gives no net incentive to *end* closer. As ε anneals, the greedy policy's true ~0% pursuit ability surfaces — appearing as "unlearning." `research-000022`'s "ghosts stop and oscillate" is reinterpreted as penalty-avoidance thrashing, not deliberate stalking.
+
+### Revised recommendations summary (supersedes the original for prioritization)
+
+1. **(HIGH) Rebalance shaping to be net-positive toward pursuit.** The anti-oscillation/movement penalties sum to ~−140/episode and suppress cornering. Slash or remove `repeated_direction_reversal`, `two_step_cycle`, `stay_still`, `invalid_move`; make "getting closer / capture" the dominant *positive* signal.
+2. **(HIGH) Strengthen the pursuit gradient.** Potential shaping telescopes to ~0 (no net incentive to end closer). Add a non-telescoping proximity/visibility reward or raise `potential_shaping_alpha`; the lone +40 terminal is too sparse against a fleeing target.
+3. **(HIGH) Pinpoint the dominant penalty first.** Run `eval_report` on a final checkpoint and emit the already-accumulated `reward_breakdown` (`eval_report.py:242`, currently not written to CSV) to confirm whether `invalid_move`/reversal penalties own the −140. One-line change.
+4. **(MEDIUM) Address exploration / task difficulty.** A defensive Pacman holding distance ≥3 may be near-unsolvable without coordination; consider a curriculum (slower/closer Pacman early), a higher ε floor, or a solvability check. Early-random 80% and the lone qmixglobal capture show the task *is* solvable.
+5. **(LOW) Defer the original `currently_visible` un-gating fix** (original recs #1–#3). Theoretically valid (would cause stalking *once pursuit is learned*) but **not the current blocker** — the data shows `currently_visible` is barely earned at convergence.
