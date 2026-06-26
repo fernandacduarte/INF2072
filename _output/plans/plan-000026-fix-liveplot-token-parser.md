@@ -1,4 +1,4 @@
-# Plan 000026 | FIX-liveplot | 2026-06-26 12:24 UTC | Fix liveplot 3-part token parser | Review: light
+# DONE | 2026-06-26 12:28 UTC | Plan 000026 | FIX-liveplot | 2026-06-26 12:24 UTC | Fix liveplot 3-part token parser | Review: light
 plan_format_version: 1
 source: research-000025
 
@@ -43,7 +43,7 @@ The live-progress label key changed from the device alone (`cpu`) to `f"{reward_
 
 ### Step 1 — Decode the 3-part token in `_parse_progress_file`
 
-- [ ] Replace the first-`@`-only split with a full split that extracts algorithm (first segment), device label (last segment), and `reward_id` (middle segment(s)); fold `reward_id` into the per-run dict key.
+- [x] Done. Replace the first-`@`-only split with a full split that extracts algorithm (first segment), device label (last segment), and `reward_id` (middle segment(s)); fold `reward_id` into the per-run dict key.
 - Files: `benchmarl_setup/liveplot.py`
 - References: research-000025 § Recommended fix
 - Interface: `_parse_progress_file(progress_file)` return type unchanged (`algorithm -> device_label -> run_key -> step -> (frame, capture_pct, reward)`); `run_key` now `"<reward_id>::<run_id>"`.
@@ -72,7 +72,7 @@ The live-progress label key changed from the device alone (`cpu`) to `f"{reward_
 
 ### Step 2 — Add parser smoke test
 
-- [ ] Create `test/test_liveplot.py` that writes a small `live_progress.csvl` (with `#meta` line + a 3-part-token row), calls `_parse_progress_file`, and asserts the device label key is `cpu`. Add a second assertion that two rows differing only in `reward_id` produce distinct run keys under the same `(algorithm, device)`.
+- [x] Done. Create `test/test_liveplot.py` that writes a small `live_progress.csvl` (with `#meta` line + a 3-part-token row), calls `_parse_progress_file`, and asserts the device label key is `cpu`. Add a second assertion that two rows differing only in `reward_id` produce distinct run keys under the same `(algorithm, device)`.
 - Files: `test/test_liveplot.py`
 - References: `test/test_algorithm_utils.py` (sys.path bootstrap pattern)
 - Interface: N/A
@@ -116,3 +116,14 @@ No Deferred concerns → no Phase 2.
 ## smoke
 
 false
+
+## Implementation summary
+
+2026-06-26 12:28 UTC — Manual mode, both steps complete.
+
+- **Step 1** — `benchmarl_setup/liveplot.py`: replaced the first-`@`-only split in `_parse_progress_file` with a full `@`-split that takes the first segment as algorithm, the last as the device label, and the middle segment(s) as `reward_id`. The run identity is now keyed `<reward_id>::<run_id>` so runs from different reward classes don't collide under the same `(algorithm, device)`. Legacy 2-part (`algorithm@device`) and bare tokens still parse.
+- **Step 2** — `test/test_liveplot.py` (new): 3 tests — (a) `iql@current@cpu` parses device label as `cpu` (not `current@cpu`); (b) two reward classes sharing a `run_id` stay distinct; (c) legacy `vdn@cuda` still parses. The test bootstraps `sys.path` with both `PROJECT_ROOT` and `PROJECT_ROOT/benchmarl_setup` (liveplot.py uses top-level imports).
+
+**Verification**: `pytest test/test_liveplot.py` → 3 passed. Parsing the real `runs/pinklike3/live_progress.csvl` now yields device key `cpu` with runs present (previously the device filter for `--device cpu` matched nothing). Full suite: 66 passed, 1 pre-existing failure (`test_reward_strategies.py::test_stronger_movement_variant_changes_only_one_weight`) confirmed unrelated — it fails with this plan's `liveplot.py` change stashed.
+
+**Out-of-scope finding**: `test_reward_strategies.py::test_stronger_movement_variant_changes_only_one_weight` is failing on the current branch independent of this change (assertion at `test_reward_strategies.py:113`). Not addressed here; flagged to the user.

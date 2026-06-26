@@ -75,18 +75,30 @@ def _parse_progress_file(
             if step <= 0:
                 continue
 
-            if "@" in algorithm_token:
-                algorithm, label = algorithm_token.split("@", 1)
-                label = label.strip().lower()
+            # Tokens are emitted by run_benchmark.py as algorithm@reward_id@device
+            # (e.g. "iql@current@cpu"). Split on every "@": first segment is the
+            # algorithm, last is the device label used by the --device filter, and
+            # any middle segment(s) form the reward_id. Legacy two-part tokens
+            # (algorithm@device) and bare tokens (algorithm only) stay supported.
+            token_parts = [part.strip() for part in algorithm_token.split("@")]
+            algorithm = token_parts[0].lower()
+            if len(token_parts) >= 3:
+                reward_id = "@".join(token_parts[1:-1]).lower() or "default"
+                label = token_parts[-1].lower() or "default"
+            elif len(token_parts) == 2:
+                reward_id = "default"
+                label = token_parts[1].lower() or "default"
             else:
-                algorithm = algorithm_token
+                reward_id = "default"
                 label = "default"
 
-            algorithm = algorithm.strip().lower()
             if not algorithm:
                 continue
 
-            data[algorithm][label][run_id][step] = (frame, capture_pct, reward)
+            # Fold reward_id into the run identity so runs from different reward
+            # classes don't overwrite each other under the same (algorithm, device).
+            run_key = f"{reward_id}::{run_id}"
+            data[algorithm][label][run_key][step] = (frame, capture_pct, reward)
 
     return data, meta
 

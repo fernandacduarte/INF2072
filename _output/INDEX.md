@@ -5,7 +5,7 @@
 
 | Date | Type | ID | Title | Status | File |
 |------|------|----|-------|--------|------|
-| 2026-06-26 12:24 UTC | Plan | 000026 | Fix liveplot 3-part token parser | OPEN | [plan-000026-fix-liveplot-token-parser.md](plans/plan-000026-fix-liveplot-token-parser.md) |
+| 2026-06-26 12:24 UTC | Plan | 000026 | Fix liveplot 3-part token parser | DONE | [plan-000026-fix-liveplot-token-parser.md](plans/plan-000026-fix-liveplot-token-parser.md) |
 | 2026-06-26 12:12 UTC | Research | 000025 | liveplot blank — reward_id token regression | DONE | [research-000025-liveplot-blank-reward-id-token-regression.md](research-logs/research-000025-liveplot-blank-reward-id-token-regression.md) |
 | 2026-06-24 10:01 UTC | Research | 000024 | Last Commits Report | DONE | [research-000024-last-commits-report.md](research-logs/research-000024-last-commits-report.md) |
 | 2026-06-21 16:07 UTC | QA Log |  | implement-000007 | PacmanPolicy BFS safety-aware pellet maximization |  | [implement-000007-qa-pacmanpolicy.md](plans/implement-000007-qa-pacmanpolicy.md) |
