@@ -70,6 +70,72 @@ def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[
     ]
 
 
+def _discover_progress_files(maze_runs_root: Path) -> list[Path]:
+    candidates = sorted(maze_runs_root.glob("live_progress*.csvl"))
+    if candidates:
+        return candidates
+
+    legacy_file = maze_runs_root / "live_progress.csvl"
+    if legacy_file.exists():
+        return [legacy_file]
+    return []
+
+
+def _merge_progress_payloads(
+    payloads: list[
+        tuple[
+            Path,
+            dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+            dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+            dict[str, str],
+        ]
+    ]
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+    dict[str, str],
+]:
+    merged_core: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(dict))
+    )
+    merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    )
+    merged_meta: dict[str, str] = {}
+
+    for file_path, core_data, term_data, meta in payloads:
+        source_name = file_path.stem
+        source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
+
+        for key, value in meta.items():
+            if key == "reward_terms":
+                existing = {
+                    item.strip().lower()
+                    for item in (merged_meta.get("reward_terms") or "").split("|")
+                    if item.strip()
+                }
+                incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
+                merged_terms_meta = sorted(existing | incoming)
+                merged_meta["reward_terms"] = "|".join(merged_terms_meta)
+            elif key not in merged_meta:
+                merged_meta[key] = value
+
+        for algorithm, by_device in core_data.items():
+            for device_key, by_run in by_device.items():
+                for run_id, step_map in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    merged_core[algorithm][device_key][merged_run_id].update(step_map)
+
+        for algorithm, by_device in term_data.items():
+            for device_key, by_run in by_device.items():
+                for run_id, by_term in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    for term_name, step_map in by_term.items():
+                        merged_terms[algorithm][device_key][merged_run_id][term_name].update(step_map)
+
+    return merged_core, merged_terms, merged_meta
+
+
 def _parse_progress_file(
     progress_file: Path,
 ) -> tuple[
@@ -493,8 +559,12 @@ class LiveComparisonPlotter:
         self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
         self.show_epsilon_overlay = True
 
-    def update_from_file(self, progress_file: Path) -> None:
-        data, term_data, meta = _parse_progress_file(progress_file)
+    def update_from_payload(
+        self,
+        data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+        term_data: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+        meta: dict[str, str],
+    ) -> None:
 
         metric_name = (meta.get("metric") or "").strip().lower()
         if metric_name == "capture_pct_live_eval":
@@ -836,7 +906,10 @@ def _normalize_device_selector(raw: str) -> str:
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
-    progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
+    progress_files = [args.progress_file] if args.progress_file is not None else _discover_progress_files(maze_runs_root)
+    if not progress_files:
+        expected_pattern = maze_runs_root / "live_progress*.csvl"
+        raise FileNotFoundError(f"No live progress files found for pattern: {expected_pattern}")
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
         raise ValueError("At least one algorithm must be provided.")
@@ -863,11 +936,15 @@ def main() -> None:
 
     show_epsilon = "iql" in algorithms
     waiting_for_meta = False
+    init_payloads = [
+        (path, *_parse_progress_file(path))
+        for path in progress_files
+    ]
+    init_core_data, init_term_data, init_meta = _merge_progress_payloads(init_payloads)
     if show_epsilon:
-        _core_data, _term_data, meta = _parse_progress_file(progress_file)
         epsilon_cfg = _resolve_epsilon_from_cli_or_meta(
             args,
-            meta,
+            init_meta,
         )
         if epsilon_cfg is None:
             waiting_for_meta = True
@@ -883,7 +960,9 @@ def main() -> None:
         epsilon_end = 0.0
         epsilon_anneal_ratio = 1.0
 
-    print(f"[LivePlot] Watching: {progress_file}")
+    print("[LivePlot] Watching progress files:")
+    for progress_file in progress_files:
+        print(f"- {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
     print(f"[LivePlot] Device selector: {device_selector}")
     print(
@@ -912,7 +991,11 @@ def main() -> None:
     try:
         while True:
             if show_epsilon and not plotter.show_epsilon_overlay:
-                _loop_core_data, _loop_term_data, loop_meta = _parse_progress_file(progress_file)
+                loop_payloads = [
+                    (path, *_parse_progress_file(path))
+                    for path in progress_files
+                ]
+                _loop_core_data, _loop_term_data, loop_meta = _merge_progress_payloads(loop_payloads)
                 loop_epsilon_cfg = _resolve_epsilon_from_cli_or_meta(args, loop_meta)
                 if loop_epsilon_cfg is not None:
                     loop_max_frames, loop_init, loop_end, loop_ratio = loop_epsilon_cfg
@@ -927,7 +1010,12 @@ def main() -> None:
                         f"init={loop_init} end={loop_end} anneal_ratio={loop_ratio} "
                         f"max_frames={loop_max_frames}"
                     )
-            plotter.update_from_file(progress_file)
+            payloads = [
+                (path, *_parse_progress_file(path))
+                for path in progress_files
+            ]
+            merged_core_data, merged_term_data, merged_meta = _merge_progress_payloads(payloads)
+            plotter.update_from_payload(merged_core_data, merged_term_data, merged_meta)
             time.sleep(max(0.2, args.interval))
     except KeyboardInterrupt:
         print("\n[LivePlot] Exiting on user interrupt.")

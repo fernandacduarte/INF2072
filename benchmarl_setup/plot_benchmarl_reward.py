@@ -269,6 +269,74 @@ def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[
     ]
 
 
+def _discover_progress_files(maze_runs_root: Path) -> list[Path]:
+    candidates = sorted(maze_runs_root.glob("live_progress*.csvl"))
+    if candidates:
+        return candidates
+
+    legacy_file = maze_runs_root / "live_progress.csvl"
+    if legacy_file.exists():
+        return [legacy_file]
+    return []
+
+
+def _merge_progress_payloads(
+    payloads: list[
+        tuple[
+            Path,
+            dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+            dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+            dict[str, str],
+        ]
+    ]
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+    dict[str, str],
+]:
+    merged_core: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = {}
+    merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = {}
+    merged_meta: dict[str, str] = {}
+
+    for file_path, core_data, term_data, meta in payloads:
+        source_name = file_path.stem
+        source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
+
+        for key, value in meta.items():
+            if key == "reward_terms":
+                existing = {
+                    item.strip().lower()
+                    for item in (merged_meta.get("reward_terms") or "").split("|")
+                    if item.strip()
+                }
+                incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
+                merged_meta["reward_terms"] = "|".join(sorted(existing | incoming))
+            elif key not in merged_meta:
+                merged_meta[key] = value
+
+        for algorithm, by_device in core_data.items():
+            algo_data = merged_core.setdefault(algorithm, {})
+            for device_key, by_run in by_device.items():
+                device_data = algo_data.setdefault(device_key, {})
+                for run_id, step_map in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    run_data = device_data.setdefault(merged_run_id, {})
+                    run_data.update(step_map)
+
+        for algorithm, by_device in term_data.items():
+            algo_term_data = merged_terms.setdefault(algorithm, {})
+            for device_key, by_run in by_device.items():
+                device_term_data = algo_term_data.setdefault(device_key, {})
+                for run_id, by_term in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    run_term_data = device_term_data.setdefault(merged_run_id, {})
+                    for term_name, step_map in by_term.items():
+                        term_step_map = run_term_data.setdefault(term_name, {})
+                        term_step_map.update(step_map)
+
+    return merged_core, merged_terms, merged_meta
+
+
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
     meta: dict[str, str],
@@ -516,8 +584,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
-    progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
-    progress_data, progress_term_data = _parse_progress_data(progress_file)
+    progress_files = [args.progress_file] if args.progress_file is not None else _discover_progress_files(maze_runs_root)
+    if not progress_files:
+        expected_pattern = maze_runs_root / "live_progress*.csvl"
+        raise FileNotFoundError(f"No live progress files found for pattern: {expected_pattern}")
+
+    payloads = [
+        (path, *_parse_progress_data(path), _parse_progress_meta(path))
+        for path in progress_files
+    ]
+    progress_data, progress_term_data, progress_meta = _merge_progress_payloads(payloads)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():
@@ -574,7 +650,6 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
-    progress_meta = _parse_progress_meta(progress_file)
     epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
     epsilon_algorithm = (
         normalize_algorithm(epsilon_algorithm_raw)
@@ -644,7 +719,7 @@ def main() -> None:
         by_device = progress_data.get(algorithm, {})
         if not by_device:
             print(
-                f"Warning: no progress data found for algorithm={algorithm} in {progress_file}"
+                f"Warning: no progress data found for algorithm={algorithm} in merged progress files."
             )
             continue
 
@@ -679,7 +754,7 @@ def main() -> None:
         if aggregated is None:
             print(
                 "Warning: no true capture snapshots found for algorithm="
-                f"{algorithm} in {progress_file}."
+                f"{algorithm} in merged progress files."
             )
             continue
 

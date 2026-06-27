@@ -676,7 +676,23 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
     dict[tuple[str, str], list[EpisodeResult]],
 ]:
     jobs: list[dict[str, str]] = []
-    for jobs_path in args.jobs_path:
+    jobs_paths = args.jobs_path
+    if jobs_paths is None:
+        jobs_root = args.runs_root
+        discovered = sorted(jobs_root.glob("benchmark_jobs*.csv"))
+        if discovered:
+            jobs_paths = discovered
+        else:
+            legacy_jobs = jobs_root / "benchmark_jobs.csv"
+            jobs_paths = [legacy_jobs] if legacy_jobs.exists() else []
+
+    if not jobs_paths:
+        raise FileNotFoundError(
+            f"No benchmark jobs CSV files found under {args.runs_root}. "
+            "Provide --jobs-path explicitly or run benchmark first."
+        )
+
+    for jobs_path in jobs_paths:
         if not jobs_path.exists():
             raise FileNotFoundError(f"Benchmark jobs CSV not found: {jobs_path}")
         with jobs_path.open("r", newline="", encoding="utf-8") as handle:
@@ -685,7 +701,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
     allowed_algorithms = set(_resolve_algorithms(args))
     rows: list[dict[str, ReportValue]] = []
     pooled: dict[tuple[str, str], list[EpisodeResult]] = defaultdict(list)
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
 
     for job in jobs:
         if (job.get("returncode") or "1").strip() != "0":
@@ -701,7 +717,8 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             continue
         run_dir_name = (job.get("run_dir") or "").strip()
         save_folder_text = (job.get("save_folder") or "").strip()
-        key = (reward_id, learner, train_seed, run_dir_name)
+        machine_id = (job.get("machine_id") or "").strip().lower() or "unknown"
+        key = (machine_id, reward_id, learner, train_seed, run_dir_name)
         if not run_dir_name or not save_folder_text or key in seen:
             continue
         seen.add(key)
@@ -899,7 +916,7 @@ def main() -> None:
     print(f"Eval device | requested={args.device} resolved={resolved_device} | {reason}")
     register_pacman_task()
 
-    if args.jobs_path is not None:
+    if args.jobs_path is not None or args.checkpoint is None:
         rows, pooled = _evaluate_jobs(args, resolved_device)
         default_out = PROJECT_ROOT / "benchmarl_setup" / "runs" / "evaluation_report.csv"
     else:

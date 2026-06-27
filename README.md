@@ -364,12 +364,19 @@ Useful optional parameters:
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 5000
 --ghost-view-size 3|5|7
---devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
+--devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\benchmark_jobs_myhost.csv --machine-id myhost
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
 
-It also writes a per-job timing ledger (`benchmark_jobs.csv`) with wall-clock duration and run mapping.
+By default (when explicit output paths are omitted), it writes machine-suffixed artifacts:
+
+- `benchmarl_setup/runs/<maze>/benchmark_summary_<machine_id>.csv`
+- `benchmarl_setup/runs/<maze>/reward_eval_<machine_id>.csv`
+- `benchmarl_setup/runs/<maze>/live_progress_<machine_id>.csvl`
+- `benchmarl_setup/runs/benchmark_jobs_<machine_id>.csv`
+
+It also writes a per-job timing ledger (`benchmark_jobs_<machine_id>.csv`) with wall-clock duration and run mapping.
 
 The summary CSV includes, per run:
 
@@ -419,7 +426,8 @@ Useful options:
 Notes:
 
 - `--devices` filters device labels included in the summary (for example `cpu,cuda`).
-- `--jobs-path` merges timing metrics (`duration_seconds`, `frames_per_second`) when a benchmark jobs ledger is available.
+- `--jobs-path` accepts one or more jobs CSV files and merges timing metrics (`duration_seconds`, `frames_per_second`).
+- If `--jobs-path` is omitted, the script auto-discovers and merges all `benchmark_jobs*.csv` under the selected runs root.
 - The printed aggregate is grouped by `algorithm + device`.
 
 ### CPU vs GPU Benchmark Protocol
@@ -441,7 +449,7 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglo
 
 Training now reports live progress to:
 
-- `benchmarl_setup/runs/<maze>/live_progress.csvl`
+- `benchmarl_setup/runs/<maze>/live_progress_<machine_id>.csvl` (default)
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
 - y1: rolling true capture snapshot percentage (mean ± std)
@@ -456,10 +464,11 @@ vertical markers at the frame boundaries for `easy->medium` and `medium->hard`.
 
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 When `iql` is included, the epsilon overlay is resolved from benchmark metadata
-written to `live_progress.csvl` (for example:
+written to `live_progress*.csvl` (for example:
 `#meta,max_frames=...,epsilon_init=...,epsilon_end=...,epsilon_anneal_ratio=...`).
 Curriculum markers use the same metadata stream (`pacman_curriculum`,
 `pacman_curriculum_max_frames`, `pacman_curriculum_frame_offset`).
+Each metadata header also includes `machine_id=...`.
 There are no built-in epsilon fallback defaults in plotting anymore.
 If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
 
@@ -483,10 +492,15 @@ individual plotting is enabled.
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
 training; when it is zero, snapshots appear only at end-of-run checkpoints.
-By default, `run_benchmark.py` preserves `live_progress.csvl` across sessions,
-so live/offline plots can include algorithms completed in earlier runs for the
-same maze. Use `--reset-live-progress` to truncate the file for a clean,
+By default, `run_benchmark.py` preserves machine-specific
+`live_progress_<machine_id>.csvl` across sessions, so live/offline plots can
+include algorithms completed in earlier runs for the same maze. Use
+`--reset-live-progress` to truncate the selected stream for a clean,
 session-only stream.
+
+When `--live-progress-file` is omitted, `benchmarl_setup/liveplot.py` and
+`benchmarl_setup/plot_benchmarl_reward.py` auto-discover and merge all
+`live_progress*.csvl` files under `benchmarl_setup/runs/<maze>/`.
 
 Start live monitor:
 
@@ -507,6 +521,17 @@ Then run benchmark normally:
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 100
 ```
+
+Shared network folder (many machines): when explicit output paths are not
+provided, `run_benchmark.py` now writes machine-suffixed files by default:
+
+- `live_progress_<machine_id>.csvl`
+- `benchmark_summary_<machine_id>.csv`
+- `reward_eval_<machine_id>.csv`
+- `benchmark_jobs_<machine_id>.csv`
+
+`machine_id` defaults to hostname (lowercased and filename-safe). Override it
+with `--machine-id` if needed.
 
 Useful options:
 
@@ -558,12 +583,13 @@ Useful options:
 By default, this script now reads from `--reward-id current` and `--device auto`
 (all device labels under the selected reward root). Use `--device cuda` or
 `--device cpu` to force one device folder. Epsilon overlay values are resolved
-from `live_progress.csvl` metadata (`max_frames`, `epsilon_init`,
+from merged `live_progress*.csvl` metadata (`max_frames`, `epsilon_init`,
 `epsilon_end`, `epsilon_anneal_ratio`) with optional `--epsilon-*` overrides.
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
 
-Capture metric note: this plot reads capture values from `live_progress.csvl`.
+Capture metric note: this plot reads capture values from merged
+`live_progress*.csvl` files (unless `--progress-file` is provided).
 For current benchmark runs, these capture points are true deterministic eval
 snapshots (with non-evaluated steps as `NaN`).
 
@@ -1114,6 +1140,9 @@ python benchmarl_setup/run_benchmark.py \
 
 Finally, evaluate the already-trained checkpoints together on the same 100 episode
 seeds:
+
+Note: if `--jobs-path` is omitted, `custom_environment/eval_report.py` now
+auto-discovers all `benchmark_jobs*.csv` files under `--runs-root`.
 
 <details open>
 <summary><strong>Windows (default)</strong></summary>

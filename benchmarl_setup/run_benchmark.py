@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import socket
 import subprocess
 import sys
 import threading
@@ -41,6 +42,26 @@ def _parse_seeds(raw: str) -> list[int]:
     if not seeds:
         raise ValueError("At least one seed must be provided.")
     return seeds
+
+
+def _sanitize_machine_id(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value:
+        return "unknown"
+
+    normalized_chars: list[str] = []
+    for ch in value:
+        if ch.isalnum() or ch in {"-", "_"}:
+            normalized_chars.append(ch)
+        else:
+            normalized_chars.append("-")
+
+    normalized = "".join(normalized_chars).strip("-_")
+    return normalized or "unknown"
+
+
+def _default_machine_id() -> str:
+    return _sanitize_machine_id(socket.gethostname())
 
 
 def parse_args() -> argparse.Namespace:
@@ -133,6 +154,12 @@ def parse_args() -> argparse.Namespace:
         help="Base runs directory. Benchmark writes runs under <save-folder>/<maze>.",
     )
     parser.add_argument(
+        "--machine-id",
+        type=str,
+        default=None,
+        help="Machine identity used to suffix default output files (default: hostname).",
+    )
+    parser.add_argument(
         "--checkpoint-interval",
         type=int,
         default=0,
@@ -203,8 +230,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--jobs-out",
         type=str,
-        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_jobs.csv").resolve()),
-        help="Output CSV path for per-job wall-clock timing records.",
+        default=None,
+        help="Output CSV path for per-job wall-clock timing records (default: <save-folder>/benchmark_jobs_<machine-id>.csv).",
     )
     parser.add_argument(
         "--eval-episodes",
@@ -507,6 +534,7 @@ class ProgressReporter:
         pacman_curriculum: str,
         pacman_curriculum_max_frames: int,
         pacman_curriculum_frame_offset: int,
+        machine_id: str,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
@@ -523,6 +551,7 @@ class ProgressReporter:
         self.pacman_curriculum = str(pacman_curriculum).strip().lower()
         self.pacman_curriculum_max_frames = int(pacman_curriculum_max_frames)
         self.pacman_curriculum_frame_offset = int(pacman_curriculum_frame_offset)
+        self.machine_id = _sanitize_machine_id(machine_id)
         self.epsilon_algorithm = normalize_algorithm(epsilon_algorithm)
         self.epsilon_schedule = training_exploration_schedule(
             self.epsilon_algorithm,
@@ -596,6 +625,7 @@ class ProgressReporter:
             f"pacman_curriculum={self.pacman_curriculum},"
             f"pacman_curriculum_max_frames={self.pacman_curriculum_max_frames},"
             f"pacman_curriculum_frame_offset={self.pacman_curriculum_frame_offset},"
+            f"machine_id={self.machine_id},"
             "metric=capture_pct_eval,"
             "reward=collection_reward_reward_mean,"
             f"reward_terms={self._reward_terms_metadata_value()}\n"
@@ -917,6 +947,7 @@ def _discover_new_run_dir(
 def _write_job_records(path: Path, records: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "machine_id",
         "algorithm",
         "reward_id",
         "reward_class",
@@ -945,6 +976,7 @@ def _run_algorithm_serial_seeds(
     save_folder: Path,
     reward_id: str,
     reward_class: str,
+    machine_id: str,
     seeds: list[int],
     stop_event: threading.Event,
 ) -> tuple[list[tuple[str, str, int, int, str]], list[dict[str, str]]]:
@@ -987,6 +1019,7 @@ def _run_algorithm_serial_seeds(
 
         job_records.append(
             {
+                "machine_id": _sanitize_machine_id(machine_id),
                 "algorithm": algorithm,
                 "reward_id": reward_id,
                 "reward_class": reward_class,
@@ -1079,21 +1112,27 @@ def main() -> None:
         )
 
     seeds = _parse_seeds(args.seeds)
+    machine_id = _sanitize_machine_id(args.machine_id) if args.machine_id is not None else _default_machine_id()
     maze_runs_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     live_progress_file = (
         Path(args.live_progress_file)
         if args.live_progress_file is not None
-        else maze_runs_root / "live_progress.csvl"
+        else maze_runs_root / f"live_progress_{machine_id}.csvl"
     )
     summary_out = (
         Path(args.summary_out)
         if args.summary_out is not None
-        else maze_runs_root / "benchmark_summary.csv"
+        else maze_runs_root / f"benchmark_summary_{machine_id}.csv"
     )
     eval_out = (
         Path(args.eval_out)
         if args.eval_out is not None
-        else maze_runs_root / "reward_eval.csv"
+        else maze_runs_root / f"reward_eval_{machine_id}.csv"
+    )
+    jobs_out = (
+        Path(args.jobs_out)
+        if args.jobs_out is not None
+        else Path(args.save_folder) / f"benchmark_jobs_{machine_id}.csv"
     )
     device_configs = _build_device_configs(args)
 
@@ -1136,6 +1175,7 @@ def main() -> None:
             pacman_curriculum=args.pacman_curriculum,
             pacman_curriculum_max_frames=args.pacman_curriculum_max_frames,
             pacman_curriculum_frame_offset=0,
+            machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
@@ -1145,6 +1185,8 @@ def main() -> None:
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")
+
+    print(f"Machine id: {machine_id}")
 
     total = len(algorithms) * len(reward_specs) * len(seeds) * len(device_configs)
     print(
@@ -1176,6 +1218,7 @@ def main() -> None:
                     save_folder,
                     reward_id,
                     reward_class,
+                    machine_id,
                     seeds,
                     stop_event,
                 ): (algorithm, reward_id, device_config["resolved"])
@@ -1200,7 +1243,6 @@ def main() -> None:
         if reporter is not None:
             reporter.stop()
 
-    jobs_out = Path(args.jobs_out)
     _write_job_records(jobs_out, job_records)
 
     print()
