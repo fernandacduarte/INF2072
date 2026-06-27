@@ -18,14 +18,66 @@ from algorithm_utils import (
 from device_utils import device_label
 
 
+# Fixed output resolution for benchmark plots: 1280x720 (720p).
+_FIGURE_DPI = 100
+_FIGURE_SIZE_INCHES_720P = (12.8, 7.2)
+
+
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
-    out = np.zeros_like(values)
+    out = np.full_like(values, np.nan, dtype=np.float64)
     for i in range(len(values)):
         start = max(0, i - window + 1)
-        out[i] = float(np.mean(values[start : i + 1]))
+        window_values = values[start : i + 1]
+        if np.all(np.isnan(window_values)):
+            out[i] = np.nan
+        else:
+            out[i] = float(np.nanmean(window_values))
     return out
+
+
+def _aggregate_algorithm_runs(
+    run_steps: dict[str, dict[int, tuple[float, float, float]]],
+    window: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int] | None:
+    if not run_steps:
+        return None
+
+    max_step = max((max(step_map.keys()) for step_map in run_steps.values() if step_map), default=0)
+    if max_step <= 0:
+        return None
+
+    n_runs = len(run_steps)
+    frames_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    captures_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    rewards_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+
+    for run_idx, step_map in enumerate(run_steps.values()):
+        for step, values in step_map.items():
+            if 1 <= step <= max_step:
+                frame, capture_pct, reward = values
+                frames_mat[run_idx, step - 1] = frame
+                captures_mat[run_idx, step - 1] = capture_pct
+                rewards_mat[run_idx, step - 1] = reward
+
+    mean_captures = np.nanmean(captures_mat, axis=0)
+    std_captures = np.nanstd(captures_mat, axis=0)
+    mean_rewards = np.nanmean(rewards_mat, axis=0)
+    std_rewards = np.nanstd(rewards_mat, axis=0)
+    mean_frames = np.nanmean(frames_mat, axis=0)
+
+    invalid_frames = np.isnan(mean_frames)
+    if np.any(invalid_frames):
+        step_axis = np.arange(1, max_step + 1, dtype=np.float64)
+        mean_frames[invalid_frames] = step_axis[invalid_frames]
+
+    mean_captures = _moving_average(mean_captures, window)
+    std_captures = _moving_average(std_captures, window)
+    mean_rewards = _moving_average(mean_rewards, window)
+    std_rewards = _moving_average(std_rewards, window)
+
+    return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, captures_mat, n_runs
 
 
 def _epsilon_for_frames(
@@ -64,11 +116,18 @@ def _parse_progress_meta(progress_file: Path) -> dict[str, str]:
 
 def _parse_progress_data(
     progress_file: Path,
-) -> dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]]:
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+]:
     # algorithm -> device_label -> run_id -> step -> (frame, capture_pct, reward)
     data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = {}
+    term_data: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = {}
     if not progress_file.exists():
-        return data
+        return data, term_data
+
+    meta = _parse_progress_meta(progress_file)
+    reward_terms = [term.strip() for term in (meta.get("reward_terms") or "").split("|") if term.strip()]
 
     with progress_file.open("r", encoding="utf-8") as f:
         for raw_line in f:
@@ -77,14 +136,16 @@ def _parse_progress_data(
                 continue
 
             parts = line.split(",")
-            if len(parts) not in (5, 6):
+            if len(parts) < 5:
                 continue
 
-            if len(parts) == 6:
-                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts
+            if len(parts) >= 6:
+                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts[:6]
+                extra_term_values = parts[6:]
             else:
                 algorithm_token, run_id, step_s, frame_s, capture_s = parts
                 reward_s = "nan"
+                extra_term_values = []
 
             try:
                 step = int(step_s)
@@ -98,8 +159,16 @@ def _parse_progress_data(
                 continue
 
             if "@" in algorithm_token:
-                algorithm, device_label_key = algorithm_token.split("@", 1)
-                device_label_key = device_label_key.strip().lower()
+                token_parts = [part.strip().lower() for part in algorithm_token.split("@") if part.strip()]
+                algorithm = token_parts[0] if token_parts else ""
+                if len(token_parts) >= 3:
+                    # New format: algorithm@reward_id@device_label
+                    device_label_key = token_parts[-1]
+                elif len(token_parts) == 2:
+                    # Legacy format: algorithm@device_label
+                    device_label_key = token_parts[1]
+                else:
+                    device_label_key = "default"
             else:
                 algorithm = algorithm_token.strip().lower()
                 device_label_key = "default"
@@ -113,7 +182,91 @@ def _parse_progress_data(
             run_data = device_data.setdefault(run_id, {})
             run_data[step] = (frame, capture_pct, reward)
 
-    return data
+            algo_term_data = term_data.setdefault(algorithm, {})
+            device_term_data = algo_term_data.setdefault(device_label_key, {})
+            run_term_data = device_term_data.setdefault(run_id, {})
+            for idx, term_name in enumerate(reward_terms):
+                term_step_map = run_term_data.setdefault(term_name, {})
+                if idx < len(extra_term_values):
+                    try:
+                        term_value = float(extra_term_values[idx])
+                    except ValueError:
+                        term_value = float("nan")
+                else:
+                    term_value = float("nan")
+                term_step_map[step] = term_value
+
+    return data, term_data
+
+
+def _aggregate_term_runs(
+    run_terms: dict[str, dict[int, float]],
+    window: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if not run_terms:
+        return None
+
+    max_step = max((max(step_map.keys()) for step_map in run_terms.values() if step_map), default=0)
+    if max_step <= 0:
+        return None
+
+    n_runs = len(run_terms)
+    values_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    for run_idx, step_map in enumerate(run_terms.values()):
+        for step, value in step_map.items():
+            if 1 <= step <= max_step:
+                values_mat[run_idx, step - 1] = value
+
+    mean_values = np.nanmean(values_mat, axis=0)
+    std_values = np.nanstd(values_mat, axis=0)
+    mean_values = _moving_average(mean_values, window)
+    std_values = _moving_average(std_values, window)
+    return mean_values, std_values
+
+
+def _reward_term_style(term_name: str) -> tuple[str, str]:
+    markers = ["o", "s", "^", "v", "D", "P", "X", "*", "<", ">", "h", "8"]
+    linestyles = ["--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2)), (0, (1, 1))]
+    stable_index = sum(ord(ch) for ch in term_name)
+    return markers[stable_index % len(markers)], linestyles[stable_index % len(linestyles)]
+
+
+def _is_terminal_reward_term(term_name: str) -> bool:
+    normalized = str(term_name).strip().lower()
+    return normalized in {
+        "get_pacman",
+        "pacman_timeout_win",
+        "pacman_win_pellets",
+    }
+
+
+def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
+    curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
+    if curriculum_mode != "easy-medium-hard":
+        return []
+
+    max_frames_raw = (meta.get("pacman_curriculum_max_frames") or "").strip()
+    if not max_frames_raw:
+        return []
+
+    try:
+        curriculum_max_frames = float(max_frames_raw)
+    except ValueError:
+        return []
+
+    if curriculum_max_frames <= 0.0:
+        return []
+
+    offset_raw = (meta.get("pacman_curriculum_frame_offset") or "0").strip()
+    try:
+        frame_offset = float(offset_raw)
+    except ValueError:
+        frame_offset = 0.0
+
+    return [
+        (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
+        (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
+    ]
 
 
 def _resolve_epsilon_from_cli_or_meta(
@@ -336,6 +489,17 @@ def parse_args() -> argparse.Namespace:
         help="Overlay each run as a faint line.",
     )
     parser.add_argument(
+        "--reward-terms",
+        type=str,
+        default="all",
+        help="Comma-separated reward terms to display (default: all).",
+    )
+    parser.add_argument(
+        "--individual-reward-plotting",
+        action="store_true",
+        help="Enable plotting individual reward terms (disabled by default).",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -353,7 +517,7 @@ def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
     progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
-    progress_data = _parse_progress_data(progress_file)
+    progress_data, progress_term_data = _parse_progress_data(progress_file)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():
@@ -384,6 +548,19 @@ def main() -> None:
     if args.window < 1:
         raise ValueError("--window must be >= 1")
 
+    reward_terms_filter: set[str] | None
+    if args.individual_reward_plotting:
+        if args.reward_terms.strip().lower() == "all":
+            reward_terms_filter = None
+        else:
+            reward_terms_filter = {
+                item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
+            }
+            if not reward_terms_filter:
+                raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
+    else:
+        reward_terms_filter = set()
+
     algorithms: list[str]
     if args.algorithms:
         algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
@@ -397,9 +574,28 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
-    show_epsilon = "iql" in algorithms
+    progress_meta = _parse_progress_meta(progress_file)
+    epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
+    epsilon_algorithm = (
+        normalize_algorithm(epsilon_algorithm_raw)
+        if epsilon_algorithm_raw.strip()
+        else ""
+    )
+    has_cli_epsilon_override = any(
+        value is not None
+        for value in (
+            args.epsilon_max_frames,
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    )
+    show_epsilon = (
+        (epsilon_algorithm in algorithms)
+        or (not epsilon_algorithm and "iql" in algorithms)
+        or has_cli_epsilon_override
+    )
     if show_epsilon:
-        progress_meta = _parse_progress_meta(progress_file)
         epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = _resolve_epsilon_from_cli_or_meta(
             args,
             progress_meta,
@@ -465,9 +661,8 @@ def main() -> None:
             )
             continue
 
-        series_frames: list[np.ndarray] = []
-        series_capture_pct: list[np.ndarray] = []
-        series_reward_mean: list[np.ndarray] = []
+        run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
+        run_terms: dict[str, dict[str, dict[int, float]]] = {}
         used_run_dirs: list[str] = []
 
         for device_key in selected_devices:
@@ -475,53 +670,30 @@ def main() -> None:
                 if selected_run_names is not None and run_id not in selected_run_names:
                     continue
 
-                ordered_steps = sorted(step_map.keys())
-                if not ordered_steps:
-                    continue
-
-                frames = np.asarray([step_map[step][0] for step in ordered_steps], dtype=float)
-                captures = np.asarray([step_map[step][1] for step in ordered_steps], dtype=float)
-                rewards = np.asarray([step_map[step][2] for step in ordered_steps], dtype=float)
-
-                # Keep only points with true capture snapshots (NaN marks non-evaluated steps).
-                valid_mask = ~np.isnan(captures)
-                if not np.any(valid_mask):
-                    continue
-
-                frames = frames[valid_mask]
-                captures = captures[valid_mask]
-                rewards = rewards[valid_mask]
-
-                captures = _moving_average(captures, args.window)
-                rewards = _moving_average(rewards, args.window)
-
-                series_frames.append(frames)
-                series_capture_pct.append(captures)
-                series_reward_mean.append(rewards)
+                run_key = f"{device_key}:{run_id}"
+                run_steps[run_key] = step_map
+                run_terms[run_key] = progress_term_data.get(algorithm, {}).get(device_key, {}).get(run_id, {})
                 used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
 
-        if not series_capture_pct:
+        aggregated = _aggregate_algorithm_runs(run_steps, args.window)
+        if aggregated is None:
             print(
                 "Warning: no true capture snapshots found for algorithm="
                 f"{algorithm} in {progress_file}."
             )
             continue
 
-        min_len = min(
-            min(len(arr) for arr in series_capture_pct),
-            min(len(arr) for arr in series_reward_mean),
-        )
-        captures_mat = np.vstack([arr[:min_len] for arr in series_capture_pct])
-        rewards_mat = np.vstack([arr[:min_len] for arr in series_reward_mean])
-        frames_mat = np.vstack([arr[:min_len] for arr in series_frames])
+        frames, capture_mean, capture_std, reward_mean, reward_std, captures_mat, n_runs = aggregated
 
         per_algorithm[algorithm] = {
-            "frames": np.mean(frames_mat, axis=0),
-            "capture_mean": np.mean(captures_mat, axis=0),
-            "capture_std": np.std(captures_mat, axis=0),
+            "frames": frames,
+            "capture_mean": capture_mean,
+            "capture_std": capture_std,
             "captures_mat": captures_mat,
-            "reward_mean": np.mean(rewards_mat, axis=0),
-            "reward_std": np.std(rewards_mat, axis=0),
+            "reward_mean": reward_mean,
+            "reward_std": reward_std,
+            "run_terms": run_terms,
+            "n_runs": n_runs,
             "used_run_dirs": used_run_dirs,
             "color": color_map.get(algorithm, "#1f77b4"),
         }
@@ -533,10 +705,17 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    fig, ax = plt.subplots(
+        1,
+        1,
+        figsize=_FIGURE_SIZE_INCHES_720P,
+        dpi=_FIGURE_DPI,
+    )
     ax_reward = ax.twinx()
     ax_eps = ax.twinx()
-    ax_eps.spines["right"].set_position(("outward", 55))
+    ax_terminal = ax.twinx()
+    ax_terminal.spines["right"].set_position(("outward", 55))
+    ax_eps.spines["right"].set_position(("outward", 110))
 
     for algorithm, payload in per_algorithm.items():
         frames = payload["frames"]
@@ -544,35 +723,83 @@ def main() -> None:
         capture_std = payload["capture_std"]
         captures_mat = payload["captures_mat"]
         reward_mean = payload["reward_mean"]
+        run_terms = payload["run_terms"]
         color = payload["color"]
+
+        valid_capture_mask = ~np.isnan(capture_mean)
+        valid_frames = frames[valid_capture_mask]
+        valid_captures = capture_mean[valid_capture_mask]
+        valid_stds = capture_std[valid_capture_mask]
 
         if args.show_runs:
             for capture_series in captures_mat:
                 ax.plot(frames, capture_series, color=color, linewidth=1, alpha=0.18)
 
         ax.plot(
-            frames,
-            capture_mean,
-            label=f"{algorithm.upper()} mean capture % (n={captures_mat.shape[0]})",
+            valid_frames,
+            valid_captures,
+            label=f"{algorithm.upper()} mean capture % (n={payload['n_runs']})",
             color=color,
             linewidth=2,
         )
-        ax.fill_between(
-            frames,
-            np.maximum(capture_mean - capture_std, 0.0),
-            np.minimum(capture_mean + capture_std, 100.0),
-            color=color,
-            alpha=0.14,
-        )
+        if np.any(valid_capture_mask):
+            ax.fill_between(
+                valid_frames,
+                np.maximum(valid_captures - valid_stds, 0.0),
+                np.minimum(valid_captures + valid_stds, 100.0),
+                color=color,
+                alpha=0.14,
+            )
 
-        ax_reward.plot(
-            frames,
-            reward_mean,
-            label=f"{algorithm.upper()} mean reward",
-            color=color,
-            linewidth=1.8,
-            linestyle=":",
-        )
+        if not np.all(np.isnan(reward_mean)):
+            ax_reward.plot(
+                frames,
+                reward_mean,
+                label=f"{algorithm.upper()} mean reward",
+                color=color,
+                linewidth=1.8,
+                linestyle=":",
+            )
+
+        if args.individual_reward_plotting:
+            all_term_names: set[str] = set()
+            for run_term_map in run_terms.values():
+                all_term_names.update(run_term_map.keys())
+
+            for term_name in sorted(all_term_names):
+                if reward_terms_filter is not None and term_name not in reward_terms_filter:
+                    continue
+
+                term_run_series: dict[str, dict[int, float]] = {}
+                for run_key, run_term_map in run_terms.items():
+                    step_map = run_term_map.get(term_name)
+                    if step_map:
+                        term_run_series[run_key] = step_map
+
+                aggregated_term = _aggregate_term_runs(term_run_series, args.window)
+                if aggregated_term is None:
+                    continue
+
+                term_mean, _term_std = aggregated_term
+                term_frames = frames[: len(term_mean)]
+                if np.all(np.isnan(term_mean)):
+                    continue
+
+                marker, term_linestyle = _reward_term_style(term_name)
+
+                target_axis = ax_terminal if _is_terminal_reward_term(term_name) else ax_reward
+                target_axis.plot(
+                    term_frames,
+                    term_mean,
+                    label=f"{algorithm.upper()} reward::{term_name}",
+                    color=color,
+                    linewidth=1.1,
+                    linestyle=term_linestyle,
+                    alpha=0.8,
+                    marker=marker,
+                    markersize=4,
+                    markevery=max(1, len(term_frames) // 20),
+                )
 
     max_display_frame = max(
         float(np.nanmax(payload["frames"]))
@@ -597,8 +824,42 @@ def main() -> None:
             linestyle="-",
             label="Epsilon",
         )
-    ax_reward.set_ylabel("Average Reward", color="dimgray")
+    for frame, label in _curriculum_transition_frames_from_meta(progress_meta):
+        if frame < 0.0 or frame > max_display_frame:
+            continue
+        ax.axvline(
+            x=frame,
+            color="#4d4d4d",
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.8,
+            zorder=2,
+        )
+        ax.text(
+            frame,
+            99.0,
+            label,
+            rotation=90,
+            va="top",
+            ha="right",
+            color="#4d4d4d",
+            fontsize=8,
+            alpha=0.9,
+            zorder=2,
+        )
+    reward_axis_label = (
+        "Average and non-terminal rewards"
+        if args.individual_reward_plotting
+        else "Average team reward per step"
+    )
+    ax_reward.set_ylabel(reward_axis_label, color="dimgray")
     ax_reward.tick_params(axis="y", colors="dimgray")
+    ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
+    ax_terminal.tick_params(axis="y", colors="#8c564b")
+    if not args.individual_reward_plotting:
+        ax_terminal.spines["right"].set_visible(False)
+        ax_terminal.tick_params(axis="y", right=False, labelright=False)
+        ax_terminal.set_ylabel("")
     ax_eps.set_ylabel("Epsilon", color="black")
     ax_eps.set_ylim(0.0, 1.05)
     ax_eps.tick_params(axis="y", colors="black")
@@ -612,13 +873,16 @@ def main() -> None:
     reward_handles, reward_labels = ax_reward.get_legend_handles_labels()
     handles += reward_handles
     labels += reward_labels
+    terminal_handles, terminal_labels = ax_terminal.get_legend_handles_labels()
+    handles += terminal_handles
+    labels += terminal_labels
     eps_handles, eps_labels = ax_eps.get_legend_handles_labels()
     handles += eps_handles
     labels += eps_labels
     ax.legend(handles, labels)
 
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    fig.savefig(args.out, dpi=_FIGURE_DPI)
 
     print(f"Algorithms: {', '.join(sorted(per_algorithm.keys()))}")
     print(

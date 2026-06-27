@@ -13,10 +13,13 @@ from custom_environment.env.rewards import (
     load_reward_strategy,
 )
 from custom_environment.env.rewards.current import (
+    CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
+    CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
     CurrentWithOverlapOrSameCorridor,
 )
+from custom_environment.env.rewards.loader import reward_class_from_id
 from my_rewards.movement_bonus import StrongerMovementReward
 
 
@@ -75,6 +78,125 @@ def test_default_loader_returns_current_strategy():
     strategy = load_reward_strategy(DEFAULT_REWARD_CLASS)
     assert isinstance(strategy, CurrentTeamReward)
     assert strategy.strategy_id == "current"
+
+
+def test_loader_resolves_capture_v0_id():
+    strategy = load_reward_strategy(reward_class_from_id("capture_v0"))
+    assert isinstance(strategy, CaptureV0Reward)
+    assert strategy.strategy_id == "capture_v0"
+
+
+def test_loader_resolves_capture_v0_improved_id():
+    strategy = load_reward_strategy(
+        reward_class_from_id(
+            "capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action"
+        )
+    )
+    assert isinstance(strategy, CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction)
+    assert (
+        strategy.strategy_id
+        == "capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action"
+    )
+
+
+def test_capture_v0_rewards_reduced_visible_pacman_legal_moves():
+    strategy = CaptureV0Reward()
+
+    ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(2, 2),
+        current_position=(2, 2),
+        action=0,
+        invalid_move=False,
+        local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+    )
+    context = RewardContext(
+        step_count=10,
+        max_steps=200,
+        board_shape=(4, 4),
+        ghost_view_radius=1,
+        wall_positions=frozenset({(0, 2), (1, 3)}),
+        ghosts=(ghost,),
+        pacman_previous_position=(1, 1),
+        pacman_position=(1, 2),
+        pacman_visible=True,
+        visible_pacman_positions=((1, 2),),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+    strategy.reset(context)
+    result = strategy.compute(context)
+    assert result.breakdown["pacman_legal_moves_reduced"] == pytest.approx(1.0)
+
+
+def test_capture_v0_improved_uses_smooth_legal_delta_and_reverse_action_penalty():
+    strategy = CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction()
+
+    initial_ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(2, 2),
+        current_position=(2, 2),
+        action=0,
+        invalid_move=False,
+        local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+    )
+    initial_context = RewardContext(
+        step_count=0,
+        max_steps=200,
+        board_shape=(4, 4),
+        ghost_view_radius=1,
+        wall_positions=frozenset({(0, 2), (1, 3)}),
+        ghosts=(initial_ghost,),
+        pacman_previous_position=(1, 1),
+        pacman_position=(1, 1),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.reset(initial_context)
+
+    ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(2, 2),
+        current_position=(2, 1),
+        action=1,
+        invalid_move=False,
+        local_observation=((1, 1, 1), (1, 1, 1), (1, 1, 1)),
+    )
+    context = RewardContext(
+        step_count=1,
+        max_steps=200,
+        board_shape=(4, 4),
+        ghost_view_radius=1,
+        wall_positions=frozenset({(0, 2), (1, 3)}),
+        ghosts=(ghost,),
+        pacman_previous_position=(1, 1),
+        pacman_position=(1, 2),
+        pacman_visible=True,
+        visible_pacman_positions=((1, 2),),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+    result = strategy.compute(context)
+    # legal_delta = 3 - 2 = 1, reward = 0.2 * 1
+    assert result.breakdown["pacman_legal_moves_delta"] == pytest.approx(0.2)
+    # previous action 0 (RIGHT), current action 1 (LEFT) => reverse penalty
+    assert result.breakdown["reverse_action"] == pytest.approx(-0.02)
 
 
 def test_instance_loader_gives_each_environment_independent_state():

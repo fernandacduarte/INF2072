@@ -29,13 +29,17 @@ from custom_environment.env.pacman_environment import PacManEnvironment
 from custom_environment.env.domain.constant import (
     Observation,
 )
+from custom_environment.env.rewards.loader import reward_class_from_id
 from custom_environment.utils import create_grid
 
 SEED = 0
 
 
-def _make_env():
-    env = PacManEnvironment(global_view=create_grid())
+def _make_env(reward_id: str = "current"):
+    env = PacManEnvironment(
+        global_view=create_grid(),
+        reward_strategy=reward_class_from_id(reward_id),
+    )
     env.reset(seed=SEED)
     return env
 
@@ -83,11 +87,11 @@ def _find_pivot(env, occupied):
     return None, None
 
 
-def _setup_pivot_env():
+def _setup_pivot_env(reward_id: str = "current"):
     """Fresh env with ghost[0] relocated to a pivot cell and the remaining ghost
     parked far away. Returns (env, mover, pivot, pivot_distance) or skips when the
     deterministic map has no usable pivot."""
-    env = _make_env()
+    env = _make_env(reward_id=reward_id)
     mover = env.ghosts[0]
     parked = {g.current_position for g in env.ghosts[1:]}
     pivot, dist = _find_pivot(env, parked)
@@ -136,9 +140,9 @@ def _reward_for_move(env, mover, dest, base_dist):
     return env.reward_strategy.compute(transition).total
 
 
-def _scenario_reward(move):
+def _scenario_reward(move: str, reward_id: str = "current"):
     """Evaluate one of 'toward' | 'away' | 'stay' on a fresh pivot env."""
-    env, mover, pivot, dist = _setup_pivot_env()
+    env, mover, pivot, dist = _setup_pivot_env(reward_id=reward_id)
     if move == "stay":
         dest = pivot
     else:
@@ -167,3 +171,6 @@ def test_move_toward_beats_move_away():
     assert reward_toward > reward_away, (
         f"expected move-toward ({reward_toward}) > move-away ({reward_away})"
     )
+
+
+# capture_v0 intentionally disables movement/potential shaping in this phase.

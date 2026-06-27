@@ -35,6 +35,12 @@ class PacmanTaskClass(TaskClass):
         map_name = str(config.get("map_name", "default"))
         ghost_view_size = config.get("ghost_view_size", None)
         reward_class = config.get("reward_class", None)
+        pacman_difficulty = str(config.get("pacman_difficulty", "hard"))
+        pacman_random_action_prob = float(config.get("pacman_random_action_prob", 0.0))
+        pacman_safe_distance = config.get("pacman_safe_distance", None)
+        pacman_curriculum = str(config.get("pacman_curriculum", "off"))
+        pacman_curriculum_max_frames = int(config.get("pacman_curriculum_max_frames", 0))
+        pacman_curriculum_frame_offset = int(config.get("pacman_curriculum_frame_offset", 0))
 
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
@@ -42,6 +48,12 @@ class PacmanTaskClass(TaskClass):
                 ghost_view_size=ghost_view_size,
                 shared_memory_in_observation_enabled=shared_memory_in_observation_enabled,
                 reward_strategy=reward_class,
+                pacman_difficulty=pacman_difficulty,
+                pacman_random_action_prob=pacman_random_action_prob,
+                pacman_safe_distance=pacman_safe_distance,
+                pacman_curriculum=pacman_curriculum,
+                pacman_curriculum_max_frames=pacman_curriculum_max_frames,
+                pacman_curriculum_frame_offset=pacman_curriculum_frame_offset,
             )
             return PettingZooWrapper(
                 env=env,

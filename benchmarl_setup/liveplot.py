@@ -25,17 +25,71 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     return out
 
 
+def _parse_reward_terms_from_meta(meta: dict[str, str]) -> list[str]:
+    raw_terms = (meta.get("reward_terms") or "").strip()
+    if not raw_terms:
+        return []
+    return [term.strip() for term in raw_terms.split("|") if term.strip()]
+
+
+def _is_terminal_reward_term(term_name: str) -> bool:
+    normalized = str(term_name).strip().lower()
+    return normalized in {
+        "get_pacman",
+        "pacman_timeout_win",
+        "pacman_win_pellets",
+    }
+
+
+def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
+    curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
+    if curriculum_mode != "easy-medium-hard":
+        return []
+
+    max_frames_raw = (meta.get("pacman_curriculum_max_frames") or "").strip()
+    if not max_frames_raw:
+        return []
+
+    try:
+        curriculum_max_frames = float(max_frames_raw)
+    except ValueError:
+        return []
+
+    if curriculum_max_frames <= 0.0:
+        return []
+
+    offset_raw = (meta.get("pacman_curriculum_frame_offset") or "0").strip()
+    try:
+        frame_offset = float(offset_raw)
+    except ValueError:
+        frame_offset = 0.0
+
+    return [
+        (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
+        (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
+    ]
+
+
 def _parse_progress_file(
     progress_file: Path,
-) -> tuple[dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]], dict[str, str]]:
-    # Returns: algorithm -> device_label -> run_id -> step -> (frame, capture_pct, reward)
-    data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = defaultdict(
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+    dict[str, str],
+]:
+    # Returns:
+    # core_data: algorithm -> device_label -> run_id -> step -> (frame, capture_pct, reward)
+    # term_data: algorithm -> device_label -> run_id -> term_name -> step -> value
+    core_data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(dict))
+    )
+    term_data: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
     )
     meta: dict[str, str] = {}
 
     if not progress_file.exists():
-        return data, meta
+        return core_data, term_data, meta
 
     with progress_file.open("r", encoding="utf-8") as f:
         for raw_line in f:
@@ -55,15 +109,18 @@ def _parse_progress_file(
                 continue
 
             parts = line.split(",")
-            if len(parts) not in (5, 6):
+            reward_terms = _parse_reward_terms_from_meta(meta)
+            if len(parts) < 5:
                 continue
 
-            if len(parts) == 6:
-                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts
+            if len(parts) >= 6:
+                algorithm_token, run_id, step_s, frame_s, capture_s, reward_s = parts[:6]
+                extra_term_values = parts[6:]
             else:
                 # Backward compatibility with old progress files that only carried one metric.
                 algorithm_token, run_id, step_s, frame_s, capture_s = parts
                 reward_s = "nan"
+                extra_term_values = []
             try:
                 step = int(step_s)
                 frame = float(frame_s)
@@ -76,8 +133,16 @@ def _parse_progress_file(
                 continue
 
             if "@" in algorithm_token:
-                algorithm, label = algorithm_token.split("@", 1)
-                label = label.strip().lower()
+                token_parts = [part.strip().lower() for part in algorithm_token.split("@") if part.strip()]
+                algorithm = token_parts[0] if token_parts else ""
+                if len(token_parts) >= 3:
+                    # New format: algorithm@reward_id@device_label
+                    label = token_parts[-1]
+                elif len(token_parts) == 2:
+                    # Legacy format: algorithm@device_label
+                    label = token_parts[1]
+                else:
+                    label = "default"
             else:
                 algorithm = algorithm_token
                 label = "default"
@@ -86,9 +151,19 @@ def _parse_progress_file(
             if not algorithm:
                 continue
 
-            data[algorithm][label][run_id][step] = (frame, capture_pct, reward)
+            core_data[algorithm][label][run_id][step] = (frame, capture_pct, reward)
 
-    return data, meta
+            for idx, term_name in enumerate(reward_terms):
+                if idx >= len(extra_term_values):
+                    value = float("nan")
+                else:
+                    try:
+                        value = float(extra_term_values[idx])
+                    except ValueError:
+                        value = float("nan")
+                term_data[algorithm][label][run_id][term_name][step] = value
+
+    return core_data, term_data, meta
 
 
 def _resolve_epsilon_from_cli_or_meta(
@@ -216,6 +291,31 @@ def _aggregate_algorithm_runs(
     return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, n_runs
 
 
+def _aggregate_term_runs(
+    run_terms: dict[str, dict[int, float]],
+    window: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if not run_terms:
+        return None
+
+    max_step = max((max(step_map.keys()) for step_map in run_terms.values() if step_map), default=0)
+    if max_step <= 0:
+        return None
+
+    n_runs = len(run_terms)
+    values_mat = np.full((n_runs, max_step), np.nan, dtype=np.float64)
+    for run_idx, step_map in enumerate(run_terms.values()):
+        for step, value in step_map.items():
+            if 1 <= step <= max_step:
+                values_mat[run_idx, step - 1] = value
+
+    mean_values = np.nanmean(values_mat, axis=0)
+    std_values = np.nanstd(values_mat, axis=0)
+    mean_values = _moving_average(mean_values, window)
+    std_values = _moving_average(std_values, window)
+    return mean_values, std_values
+
+
 class LiveComparisonPlotter:
     def __init__(
         self,
@@ -227,6 +327,8 @@ class LiveComparisonPlotter:
         epsilon_end: float,
         epsilon_anneal_ratio: float,
         show_epsilon_overlay: bool,
+        show_individual_reward_terms: bool,
+        reward_terms_filter: set[str] | None,
     ) -> None:
         self.algorithms = algorithms
         self.window = window
@@ -236,16 +338,24 @@ class LiveComparisonPlotter:
         self.epsilon_end = float(epsilon_end)
         self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
         self.show_epsilon_overlay = bool(show_epsilon_overlay)
+        self.show_individual_reward_terms = bool(show_individual_reward_terms)
+        self.reward_terms_filter = reward_terms_filter
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
         self.ax_reward = self.ax.twinx()
         self.ax_eps = self.ax.twinx()
-        self.ax_eps.spines["right"].set_position(("outward", 55))
+        self.ax_terminal = self.ax.twinx()
+        self.ax_terminal.spines["right"].set_position(("outward", 55))
+        self.ax_eps.spines["right"].set_position(("outward", 110))
         self.lines_capture: dict[str, any] = {}
         self.lines_reward: dict[str, any] = {}
+        self.lines_reward_terms: dict[str, any] = {}
+        self.lines_terminal_terms: dict[str, any] = {}
         self.fills_capture: dict[str, any] = {}
         self.marker_scatter_capture: dict[str, any] = {}
         self.epsilon_line = None
+        self.curriculum_lines: list[any] = []
+        self.curriculum_texts: list[any] = []
 
         self.color_map = {
             "iql": "#1f77b4",
@@ -259,6 +369,8 @@ class LiveComparisonPlotter:
             "cuda": "-",
             "default": "-",
         }
+        self.reward_term_markers = ["o", "s", "^", "v", "D", "P", "X", "*", "<", ">", "h", "8"]
+        self.reward_term_linestyles = ["--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2)), (0, (1, 1))]
 
         self._init_plot()
 
@@ -269,11 +381,22 @@ class LiveComparisonPlotter:
         # Keep a small negative margin so zero-valued capture lines/markers are visible above the axis frame.
         self.ax.set_ylim(-1.0, 100.0)
         self.ax.grid(True, alpha=0.3)
-        self.ax_reward.set_ylabel("Average Reward", color="dimgray")
+        reward_axis_label = (
+            "Average and non-terminal rewards"
+            if self.show_individual_reward_terms
+            else "Average team reward per step"
+        )
+        self.ax_reward.set_ylabel(reward_axis_label, color="dimgray")
         self.ax_reward.tick_params(axis="y", colors="dimgray")
         self.ax_eps.set_ylabel("Epsilon", color="black")
         self.ax_eps.set_ylim(0.0, 1.05)
         self.ax_eps.tick_params(axis="y", colors="black")
+        self.ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
+        self.ax_terminal.tick_params(axis="y", colors="#8c564b")
+        if not self.show_individual_reward_terms:
+            self.ax_terminal.spines["right"].set_visible(False)
+            self.ax_terminal.tick_params(axis="y", right=False, labelright=False)
+            self.ax_terminal.set_ylabel("")
         plt.ion()
         plt.show(block=False)
 
@@ -284,6 +407,12 @@ class LiveComparisonPlotter:
         if key.startswith("cpu"):
             return "--"
         return self.style_map.get(key, "-")
+
+    def _reward_term_style(self, term_name: str) -> tuple[str, str]:
+        stable_index = sum(ord(ch) for ch in term_name)
+        marker = self.reward_term_markers[stable_index % len(self.reward_term_markers)]
+        linestyle = self.reward_term_linestyles[stable_index % len(self.reward_term_linestyles)]
+        return marker, linestyle
 
     def _epsilon_for_frames(self, frames: np.ndarray) -> np.ndarray:
         anneal_frames = max(1.0, float(self.epsilon_max_frames) * self.epsilon_anneal_ratio)
@@ -312,6 +441,45 @@ class LiveComparisonPlotter:
         else:
             self.epsilon_line.set_data(x, y)
 
+    def _update_curriculum_markers(self, meta: dict[str, str], max_display_frame: float) -> None:
+        for line in self.curriculum_lines:
+            line.remove()
+        self.curriculum_lines.clear()
+        for text in self.curriculum_texts:
+            text.remove()
+        self.curriculum_texts.clear()
+
+        if max_display_frame <= 0.0:
+            return
+
+        transitions = _curriculum_transition_frames_from_meta(meta)
+        for frame, label in transitions:
+            if frame < 0.0 or frame > max_display_frame:
+                continue
+
+            marker_line = self.ax.axvline(
+                x=frame,
+                color="#4d4d4d",
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=2,
+            )
+            marker_text = self.ax.text(
+                frame,
+                99.0,
+                label,
+                rotation=90,
+                va="top",
+                ha="right",
+                color="#4d4d4d",
+                fontsize=8,
+                alpha=0.9,
+                zorder=2,
+            )
+            self.curriculum_lines.append(marker_line)
+            self.curriculum_texts.append(marker_text)
+
     def set_epsilon_schedule(
         self,
         epsilon_max_frames: int,
@@ -326,7 +494,18 @@ class LiveComparisonPlotter:
         self.show_epsilon_overlay = True
 
     def update_from_file(self, progress_file: Path) -> None:
-        data, _meta = _parse_progress_file(progress_file)
+        data, term_data, meta = _parse_progress_file(progress_file)
+
+        metric_name = (meta.get("metric") or "").strip().lower()
+        if metric_name == "capture_pct_live_eval":
+            self.ax.set_ylabel("True Capture Rate (%)")
+            self.ax.set_title("Live Benchmark Comparison (Rolling True Capture Rate)")
+        elif metric_name:
+            self.ax.set_ylabel("Estimated Capture Rate (%)")
+            self.ax.set_title("Live Benchmark Comparison (Rolling Estimated Capture Rate)")
+        else:
+            self.ax.set_ylabel("Capture Rate (%)")
+            self.ax.set_title("Live Benchmark Comparison (Rolling Capture Rate)")
 
         # Remove old fills so uncertainty bands can be redrawn cleanly.
         for fill in self.fills_capture.values():
@@ -430,6 +609,73 @@ class LiveComparisonPlotter:
                     stale_reward = self.lines_reward.pop(series_key)
                     stale_reward.remove()
 
+                if self.show_individual_reward_terms:
+                    by_term_for_device = term_data.get(algorithm, {}).get(device_key, {})
+                    all_term_names: set[str] = set()
+                    for run_term_map in by_term_for_device.values():
+                        all_term_names.update(run_term_map.keys())
+
+                    for term_name in sorted(all_term_names):
+                        if self.reward_terms_filter is not None and term_name not in self.reward_terms_filter:
+                            continue
+
+                        term_run_series: dict[str, dict[int, float]] = {}
+                        for run_id, run_term_map in by_term_for_device.items():
+                            step_map = run_term_map.get(term_name)
+                            if step_map:
+                                term_run_series[run_id] = step_map
+
+                        aggregated_term = _aggregate_term_runs(term_run_series, self.window)
+                        term_series_key = f"{series_key}::reward::{term_name}"
+                        if aggregated_term is None:
+                            stale = self.lines_reward_terms.pop(term_series_key, None)
+                            if stale is not None:
+                                stale.remove()
+                            continue
+
+                        term_mean, _term_std = aggregated_term
+                        term_frames = frames[: len(term_mean)]
+                        if np.all(np.isnan(term_mean)):
+                            stale = self.lines_reward_terms.pop(term_series_key, None)
+                            if stale is not None:
+                                stale.remove()
+                            stale_terminal = self.lines_terminal_terms.pop(term_series_key, None)
+                            if stale_terminal is not None:
+                                stale_terminal.remove()
+                            continue
+
+                        legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
+                        marker, term_linestyle = self._reward_term_style(term_name)
+                        is_terminal_term = _is_terminal_reward_term(term_name)
+                        target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
+                        other_lines = self.lines_reward_terms if is_terminal_term else self.lines_terminal_terms
+                        stale_other = other_lines.pop(term_series_key, None)
+                        if stale_other is not None:
+                            stale_other.remove()
+
+                        target_axis = self.ax_terminal if is_terminal_term else self.ax_reward
+                        if term_series_key not in target_lines:
+                            (term_line,) = target_axis.plot(
+                                term_frames,
+                                term_mean,
+                                color=color,
+                                linestyle=term_linestyle,
+                                linewidth=1.2,
+                                alpha=0.8,
+                                marker=marker,
+                                markersize=4,
+                                markevery=max(1, len(term_frames) // 20),
+                                label=legend_term,
+                            )
+                            target_lines[term_series_key] = term_line
+                        else:
+                            term_line = target_lines[term_series_key]
+                            term_line.set_data(term_frames, term_mean)
+                            term_line.set_label(legend_term)
+                            term_line.set_linestyle(term_linestyle)
+                            term_line.set_marker(marker)
+                            term_line.set_markevery(max(1, len(term_frames) // 20))
+
         stale_keys = [key for key in self.lines_capture.keys() if key not in active_keys]
         for key in stale_keys:
             line = self.lines_capture.pop(key)
@@ -444,14 +690,32 @@ class LiveComparisonPlotter:
             if reward_line is not None:
                 reward_line.remove()
 
+        stale_term_keys = [
+            key for key in self.lines_reward_terms.keys() if key.split("::reward::", 1)[0] not in active_keys
+        ]
+        for key in stale_term_keys:
+            term_line = self.lines_reward_terms.pop(key)
+            term_line.remove()
+
+        stale_terminal_term_keys = [
+            key for key in self.lines_terminal_terms.keys() if key.split("::reward::", 1)[0] not in active_keys
+        ]
+        for key in stale_terminal_term_keys:
+            term_line = self.lines_terminal_terms.pop(key)
+            term_line.remove()
+
         # Keep legend current with active algorithms.
         show_epsilon = "iql" in self.algorithms and self.show_epsilon_overlay
         self._update_epsilon_curve(max_display_frame, show=show_epsilon)
+        self._update_curriculum_markers(meta, max_display_frame)
 
         handles, labels = self.ax.get_legend_handles_labels()
         reward_handles, reward_labels = self.ax_reward.get_legend_handles_labels()
         handles += reward_handles
         labels += reward_labels
+        terminal_handles, terminal_labels = self.ax_terminal.get_legend_handles_labels()
+        handles += terminal_handles
+        labels += terminal_labels
         if self.epsilon_line is not None:
             eps_handles, eps_labels = self.ax_eps.get_legend_handles_labels()
             handles += eps_handles
@@ -463,6 +727,8 @@ class LiveComparisonPlotter:
         self.ax.autoscale_view()
         self.ax_reward.relim()
         self.ax_reward.autoscale_view()
+        self.ax_terminal.relim()
+        self.ax_terminal.autoscale_view()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
@@ -544,6 +810,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Fraction of epsilon-max-frames used for linear anneal (default: auto-match training schedule).",
     )
+    parser.add_argument(
+        "--reward-terms",
+        type=str,
+        default="all",
+        help="Comma-separated reward terms to display (default: all).",
+    )
+    parser.add_argument(
+        "--individual-reward-plotting",
+        action="store_true",
+        help="Enable plotting individual reward terms (disabled by default).",
+    )
     return parser.parse_args()
 
 
@@ -571,10 +848,23 @@ def main() -> None:
     if args.window < 1:
         raise ValueError("--window must be >= 1")
 
+    reward_terms_filter: set[str] | None
+    if args.individual_reward_plotting:
+        if args.reward_terms.strip().lower() == "all":
+            reward_terms_filter = None
+        else:
+            reward_terms_filter = {
+                item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
+            }
+            if not reward_terms_filter:
+                raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
+    else:
+        reward_terms_filter = set()
+
     show_epsilon = "iql" in algorithms
     waiting_for_meta = False
     if show_epsilon:
-        _, meta = _parse_progress_file(progress_file)
+        _core_data, _term_data, meta = _parse_progress_file(progress_file)
         epsilon_cfg = _resolve_epsilon_from_cli_or_meta(
             args,
             meta,
@@ -616,11 +906,13 @@ def main() -> None:
         epsilon_end=epsilon_end,
         epsilon_anneal_ratio=epsilon_anneal_ratio,
         show_epsilon_overlay=show_epsilon and not waiting_for_meta,
+        show_individual_reward_terms=args.individual_reward_plotting,
+        reward_terms_filter=reward_terms_filter,
     )
     try:
         while True:
             if show_epsilon and not plotter.show_epsilon_overlay:
-                _, loop_meta = _parse_progress_file(progress_file)
+                _loop_core_data, _loop_term_data, loop_meta = _parse_progress_file(progress_file)
                 loop_epsilon_cfg = _resolve_epsilon_from_cli_or_meta(args, loop_meta)
                 if loop_epsilon_cfg is not None:
                     loop_max_frames, loop_init, loop_end, loop_ratio = loop_epsilon_cfg

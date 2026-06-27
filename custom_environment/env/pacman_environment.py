@@ -54,10 +54,10 @@ from custom_environment.env.rewards import (
 from collections import deque
 
 
-# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7. Change this single value to resize the ghosts'
+# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7, 11 -> 11x11. Change this single value to resize the ghosts'
 # local observation for all trainings. Off-grid cells (near the map border) are
 # padded with WALL, so the maze never needs to change when this value changes.
-GHOST_VIEW_SIZE = 5
+GHOST_VIEW_SIZE = 11
 
 
 # Main environment class following PettingZoo parallel interface.
@@ -82,6 +82,12 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         ghost_view_size: int | None = None,  # Optional override for local observation size
         shared_memory_in_observation_enabled: bool = True,
         reward_strategy: str | RewardStrategy | None = None,
+        pacman_difficulty: str = "hard",
+        pacman_random_action_prob: float = 0.0,
+        pacman_safe_distance: int | None = None,
+        pacman_curriculum: str = "off",
+        pacman_curriculum_max_frames: int = 0,
+        pacman_curriculum_frame_offset: int = 0,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -125,6 +131,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Episode-level controls and shared observation memory.
         self.max_steps = 200
         self.step_count = 0
+        self._curriculum_global_step = 0
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
         self.last_team_reward_breakdown = {}
@@ -134,6 +141,29 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.reward_strategy = load_reward_strategy(reward_strategy)
         self.reward_strategy_id = self.reward_strategy.strategy_id
         self.reward_strategy_class = reward_class_path(self.reward_strategy)
+
+        # Pacman control knobs for fixed-difficulty and curriculum modes.
+        self.pacman_difficulty = str(pacman_difficulty).strip().lower()
+        self.pacman_random_action_prob = float(pacman_random_action_prob)
+        self.pacman_safe_distance = (
+            None if pacman_safe_distance is None else int(pacman_safe_distance)
+        )
+        self.pacman_curriculum = str(pacman_curriculum).strip().lower()
+        self.pacman_curriculum_max_frames = max(0, int(pacman_curriculum_max_frames))
+        self.pacman_curriculum_frame_offset = max(0, int(pacman_curriculum_frame_offset))
+        if self.pacman_difficulty not in {"easy", "medium", "hard"}:
+            raise ValueError(
+                f"Unsupported pacman_difficulty={pacman_difficulty!r}. "
+                "Expected one of: easy, medium, hard."
+            )
+        if self.pacman_curriculum not in {"off", "easy-medium-hard"}:
+            raise ValueError(
+                f"Unsupported pacman_curriculum={pacman_curriculum!r}. "
+                "Expected one of: off, easy-medium-hard."
+            )
+        if not (0.0 <= self.pacman_random_action_prob <= 1.0):
+            raise ValueError("pacman_random_action_prob must be in [0, 1].")
+        self._pacman_rng = np.random.default_rng()
 
         rows, cols = self.global_view.shape
         # +8 trailing scalars: 4 pacman-memory + team_min_dist + step + remaining + pallets_remaining
@@ -152,9 +182,46 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self._total_pallets = 0
         self._pellet_mask = self._build_initial_pellet_mask()
 
-        # Deterministic Pacman controller; reset per episode to clear its state
-        # machine. Replaces the former Action.choose_random() policy.
-        self._pacman_policy = PacmanPolicy()
+        # Pacman controller (difficulty/curriculum configurable). The policy
+        # is (re)configured on reset and before each action selection.
+        self._pacman_policy = self._build_pacman_policy()
+
+    def _curriculum_progress(self) -> float:
+        if self.pacman_curriculum == "off" or self.pacman_curriculum_max_frames <= 0:
+            return 1.0
+        absolute_frame = float(
+            self.pacman_curriculum_frame_offset + self._curriculum_global_step
+        )
+        return float(min(1.0, max(0.0, absolute_frame / float(self.pacman_curriculum_max_frames))))
+
+    def _curriculum_stage(self) -> str:
+        if self.pacman_curriculum == "off":
+            return self.pacman_difficulty
+        progress = self._curriculum_progress()
+        if progress < (1.0 / 3.0):
+            return "easy"
+        if progress < (2.0 / 3.0):
+            return "medium"
+        return "hard"
+
+    def _difficulty_params(self) -> tuple[bool, float, int | None]:
+        stage = self._curriculum_stage()
+        if stage == "easy":
+            return True, 0.0, 1
+        if stage == "medium":
+            return False, 0.30, 2
+        return False, 0.0, None
+
+    def _build_pacman_policy(self) -> PacmanPolicy:
+        pure_random, default_noise, default_safe_distance = self._difficulty_params()
+        noise = self.pacman_random_action_prob if self.pacman_curriculum == "off" else default_noise
+        safe_distance = self.pacman_safe_distance if self.pacman_safe_distance is not None else default_safe_distance
+        return PacmanPolicy(
+            safe_distance=safe_distance,
+            random_action_prob=noise,
+            pure_random=pure_random,
+            rng=self._pacman_rng,
+        )
 
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
@@ -165,9 +232,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # Reset shared episode memory.
         self.step_count = 0
-        # Fresh Pacman controller so its flee/cooldown state does not leak
-        # across episodes.
-        self._pacman_policy = PacmanPolicy()
+        # Fresh Pacman controller so its internal short-term memory does not
+        # leak across episodes.
+        self._pacman_policy = self._build_pacman_policy()
         self.last_pacman_sighting_position = None
         self.last_pacman_sighting_step = None
         self.last_team_reward_breakdown = {}
@@ -245,6 +312,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Move Pacman first using the deterministic safety-aware policy: it
         # seeks the nearest safe pellet and flees ghosts within danger range.
         ghost_positions = [ghost.current_position for ghost in self.ghosts]
+        # Rebuild policy to follow curriculum stage as training advances.
+        self._pacman_policy = self._build_pacman_policy()
         pacman_action = self._pacman_policy.choose_action(
             self.global_view,
             self._pellet_mask,
@@ -265,6 +334,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # One environment transition completed.
         self.step_count += 1
+        self._curriculum_global_step += 1
 
         # Refresh local patches, shared memory and composed observations.
         for ghost in self.ghosts:

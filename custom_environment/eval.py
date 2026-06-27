@@ -456,6 +456,55 @@ def _resolve_checkpoint_view_size(
     return _infer_view_size_from_checkpoint_weights(checkpoint_path)
 
 
+def _effective_pacman_stage(raw_env) -> str:
+    current_stage_getter = getattr(raw_env, "_curriculum_stage", None)
+    if callable(current_stage_getter):
+        return str(current_stage_getter()).strip().lower()
+    return str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
+
+
+def _force_hard_pacman_for_eval(raw_env, checkpoint_path: Path) -> None:
+    pacman_difficulty = str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
+    pacman_curriculum = str(getattr(raw_env, "pacman_curriculum", "off")).strip().lower()
+    pacman_random_action_prob = float(getattr(raw_env, "pacman_random_action_prob", 0.0))
+    pacman_safe_distance = getattr(raw_env, "pacman_safe_distance", None)
+    previous_stage = _effective_pacman_stage(raw_env)
+
+    raw_env.pacman_difficulty = "hard"
+    raw_env.pacman_curriculum = "off"
+    raw_env.pacman_random_action_prob = 0.0
+    raw_env.pacman_safe_distance = None
+    if hasattr(raw_env, "_build_pacman_policy") and callable(raw_env._build_pacman_policy):
+        raw_env._pacman_policy = raw_env._build_pacman_policy()
+
+    effective_stage = _effective_pacman_stage(raw_env)
+    if effective_stage != "hard":
+        raise ValueError(
+            "Failed to force hard Pacman for evaluation. "
+            f"checkpoint={checkpoint_path} effective_stage={effective_stage!r}."
+        )
+
+    print(
+        "Pacman eval mode: forced hard stage from checkpoint config "
+        f"(checkpoint={checkpoint_path}, previous_difficulty={pacman_difficulty!r}, "
+        f"previous_curriculum={pacman_curriculum!r}, "
+        f"previous_random_action_prob={pacman_random_action_prob}, "
+        f"previous_safe_distance={pacman_safe_distance!r}, "
+        f"previous_effective_stage={previous_stage!r})."
+    )
+
+
+def _assert_effective_hard_pacman(raw_env, checkpoint_path: Path) -> None:
+    effective_stage = _effective_pacman_stage(raw_env)
+    if effective_stage == "hard":
+        return
+    raise ValueError(
+        "Checkpoint is not currently in hard Pacman stage. "
+        f"checkpoint={checkpoint_path} effective_stage={effective_stage!r}. "
+        "Use --allow-non-hard-checkpoint to evaluate this checkpoint without forcing hard mode."
+    )
+
+
 def run_episode(
     learner: str,
     delay: float,
@@ -474,6 +523,7 @@ def run_episode(
     requested_device: str,
     allow_cpu_fallback: bool,
     ascii_step_json: bool,
+    allow_non_hard_checkpoint: bool,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -523,6 +573,13 @@ def run_episode(
     raw_env.tile_size = tile_size
     raw_env.fps = fps
     raw_env.show_observations = show_observations
+    if allow_non_hard_checkpoint:
+        print(
+            "Pacman eval mode: keeping checkpoint-defined difficulty/curriculum "
+            "(--allow-non-hard-checkpoint)."
+        )
+    else:
+        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
     agent_ids = list(getattr(raw_env, "possible_agents", []))
 
     total_reward = 0.0
@@ -811,6 +868,14 @@ def main() -> None:
         default=True,
         help="Fall back to CPU when CUDA is requested but unavailable.",
     )
+    parser.add_argument(
+        "--allow-non-hard-checkpoint",
+        action="store_true",
+        help=(
+            "Disable default hard-forcing in eval replay and keep the checkpoint's "
+            "original Pacman difficulty/curriculum behavior."
+        ),
+    )
     args = parser.parse_args()
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
@@ -838,6 +903,7 @@ def main() -> None:
         requested_device=args.device,
         allow_cpu_fallback=args.allow_cpu_fallback,
         ascii_step_json=args.ascii_step_json,
+        allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
     )
 
 

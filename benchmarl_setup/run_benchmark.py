@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 import subprocess
 import sys
 import threading
@@ -87,6 +88,38 @@ def parse_args() -> argparse.Namespace:
         help="Odd local observation width/height for ghosts (for example 3 or 5).",
     )
     parser.add_argument(
+        "--pacman-difficulty",
+        type=str,
+        default="hard",
+        choices=["easy", "medium", "hard"],
+        help="Fixed Pacman controller strength when curriculum is off.",
+    )
+    parser.add_argument(
+        "--pacman-random-action-prob",
+        type=float,
+        default=0.0,
+        help="Exploration noise for Pacman policy in [0,1] when curriculum is off.",
+    )
+    parser.add_argument(
+        "--pacman-safe-distance",
+        type=int,
+        default=None,
+        help="Override safety cap used by Pacman heuristic (default uses preset).",
+    )
+    parser.add_argument(
+        "--pacman-curriculum",
+        type=str,
+        default="off",
+        choices=["off", "easy-medium-hard"],
+        help="Pacman curriculum schedule applied over frames.",
+    )
+    parser.add_argument(
+        "--pacman-curriculum-max-frames",
+        type=int,
+        default=0,
+        help="Frame budget used to complete the curriculum schedule.",
+    )
+    parser.add_argument(
         "--maze",
         type=str,
         default="default",
@@ -161,6 +194,11 @@ def parse_args() -> argparse.Namespace:
         "--no-liveplot-report",
         action="store_true",
         help="Disable writing live progress updates for liveplot.py.",
+    )
+    parser.add_argument(
+        "--reset-live-progress",
+        action="store_true",
+        help="Truncate live_progress.csvl before starting this benchmark session.",
     )
     parser.add_argument(
         "--jobs-out",
@@ -246,6 +284,13 @@ def _build_command(
     if args.ghost_view_size is not None:
         command.extend(["--ghost-view-size", str(args.ghost_view_size)])
 
+    command.extend(["--pacman-difficulty", str(args.pacman_difficulty)])
+    command.extend(["--pacman-random-action-prob", str(args.pacman_random_action_prob)])
+    if args.pacman_safe_distance is not None:
+        command.extend(["--pacman-safe-distance", str(args.pacman_safe_distance)])
+    command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
+    command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
+
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
     else:
@@ -288,6 +333,14 @@ def _load_two_col_csv(path: Path) -> tuple[list[float], list[float]]:
     return x_vals, y_vals
 
 
+def _discover_reward_term_files(scalars_dir: Path) -> dict[str, Path]:
+    # Intentionally disabled: reward-term curves should come from true
+    # RewardStrategy breakdown keys exported by eval_report snapshots,
+    # not from generic training collector scalar names.
+    _ = scalars_dir
+    return {}
+
+
 def _resolve_checkpoints_dir(run_dir: Path) -> Path | None:
     nested = run_dir / run_dir.name / "checkpoints"
     if nested.exists():
@@ -310,6 +363,46 @@ def _latest_checkpoint_path(run_dir: Path) -> Path | None:
     return checkpoints[0] if checkpoints else None
 
 
+def _list_checkpoints_in_creation_order(run_dir: Path) -> list[Path]:
+    checkpoints_dir = _resolve_checkpoints_dir(run_dir)
+    if checkpoints_dir is None:
+        return []
+
+    def _sort_key(path: Path) -> tuple[int, float, str]:
+        stem = path.stem
+        prefix = "checkpoint_"
+        frame_idx = -1
+        if stem.startswith(prefix):
+            suffix = stem[len(prefix):]
+            if suffix.isdigit():
+                frame_idx = int(suffix)
+        return (frame_idx, path.stat().st_mtime, path.name)
+
+    return sorted(checkpoints_dir.glob("checkpoint_*.pt"), key=_sort_key)
+
+
+def _checkpoint_frame_from_path(path: Path) -> int | None:
+    stem = path.stem
+    prefix = "checkpoint_"
+    if not stem.startswith(prefix):
+        return None
+    suffix = stem[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _step_index_for_checkpoint_frame(frames: list[float], checkpoint_frame: int | None) -> int:
+    if not frames:
+        return 1
+    if checkpoint_frame is None:
+        return len(frames)
+    for idx, frame_value in enumerate(frames, start=1):
+        if frame_value >= float(checkpoint_frame):
+            return idx
+    return len(frames)
+
+
 def _read_capture_pct_from_eval_csv(path: Path) -> float | None:
     if not path.exists():
         return None
@@ -326,6 +419,32 @@ def _read_capture_pct_from_eval_csv(path: Path) -> float | None:
     return None
 
 
+def _read_breakdown_per_step_from_eval_csv(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            raw_json = (row.get("reward_breakdown_per_step_mean_json") or "").strip()
+            if not raw_json:
+                continue
+            try:
+                parsed = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+
+            output: dict[str, float] = {}
+            for key, value in parsed.items():
+                try:
+                    output[str(key).strip().lower()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            return output
+    return {}
+
+
 def _run_eval_capture_snapshot(
     *,
     algorithm: str,
@@ -336,7 +455,7 @@ def _run_eval_capture_snapshot(
     eval_seed_base: int,
     device: str,
     allow_cpu_fallback: bool,
-) -> float | None:
+) -> tuple[float | None, dict[str, float]]:
     out_csv = run_dir / "evaluation_report_live_capture.csv"
     command = [
         sys.executable,
@@ -356,6 +475,8 @@ def _run_eval_capture_snapshot(
         "--out",
         str(out_csv),
     ]
+    # Benchmark evaluation should reflect checkpoint-native curriculum stage.
+    command.append("--allow-non-hard-checkpoint")
     command.append("--allow-cpu-fallback" if allow_cpu_fallback else "--no-allow-cpu-fallback")
 
     completed = subprocess.run(command, check=False)
@@ -365,12 +486,13 @@ def _run_eval_capture_snapshot(
             f"algorithm={algorithm} reward={reward_id} checkpoint={checkpoint_path} "
             f"returncode={completed.returncode}"
         )
-        return None
+        return None, {}
 
     capture_pct = _read_capture_pct_from_eval_csv(out_csv)
+    reward_breakdown = _read_breakdown_per_step_from_eval_csv(out_csv)
     if capture_pct is None:
         print(f"Live capture snapshot missing capture_rate in {out_csv}")
-    return capture_pct
+    return capture_pct, reward_breakdown
 
 
 class ProgressReporter:
@@ -382,11 +504,15 @@ class ProgressReporter:
         interval_seconds: float,
         max_frames: int,
         maze: str,
+        pacman_curriculum: str,
+        pacman_curriculum_max_frames: int,
+        pacman_curriculum_frame_offset: int,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
         eval_device_by_label: dict[str, str],
+        reset_output_file: bool,
     ) -> None:
         self.runs_roots_by_label = runs_roots_by_label
         self.algorithms = algorithms
@@ -394,6 +520,9 @@ class ProgressReporter:
         self.interval_seconds = max(0.2, interval_seconds)
         self.max_frames = int(max_frames)
         self.maze = maze
+        self.pacman_curriculum = str(pacman_curriculum).strip().lower()
+        self.pacman_curriculum_max_frames = int(pacman_curriculum_max_frames)
+        self.pacman_curriculum_frame_offset = int(pacman_curriculum_frame_offset)
         self.epsilon_algorithm = normalize_algorithm(epsilon_algorithm)
         self.epsilon_schedule = training_exploration_schedule(
             self.epsilon_algorithm,
@@ -404,23 +533,58 @@ class ProgressReporter:
         self.eval_seed_base = int(eval_seed_base)
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         self.eval_device_by_label = eval_device_by_label
+        self.reset_output_file = bool(reset_output_file)
         self._last_step_by_run: dict[tuple[str, str, str], int] = {}
-        self._last_eval_checkpoint_by_run: dict[tuple[str, str, str], str] = {}
+        self._evaluated_checkpoint_keys_by_run: dict[tuple[str, str, str], set[str]] = {}
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._existing_run_ids: set[tuple[str, str, str]] = set()
         self._tracked_run_ids: set[tuple[str, str, str]] = set()
         self._io_lock = threading.Lock()
+        self._run_term_series_cache: dict[tuple[str, str, str], dict[str, list[float]]] = {}
+        self._run_eval_term_snapshot_cache: dict[tuple[str, str, str], dict[str, float]] = {}
+        self._reward_terms_order: list[str] = []
+        self._default_step_term_values_by_label: dict[str, dict[str, float]] = {}
 
-    def start(self) -> None:
-        for label, runs_root in self.runs_roots_by_label.items():
-            for algorithm in self.algorithms:
-                for run_dir in candidate_run_dirs(runs_root, algorithm):
-                    self._existing_run_ids.add((label, algorithm, run_dir.name))
+    def _seed_reward_terms_from_strategy(self) -> None:
+        seeded_terms: set[str] = set(self._reward_terms_order)
+        for label in self.runs_roots_by_label.keys():
+            reward_id = label.split("@", 1)[0] if "@" in label else "current"
+            try:
+                strategy_class = reward_class_from_id(reward_id)
+                strategy = load_reward_strategy(strategy_class)
+            except Exception:
+                continue
 
-        self.output_file.parent.mkdir(parents=True, exist_ok=True)
-        # Truncate at the beginning of a new benchmark session.
-        self.output_file.write_text(
+            # Prefer an explicit weights dataclass if present; otherwise include
+            # already-known common breakdown keys used in this project.
+            weights = getattr(strategy, "weights", None)
+            if weights is not None and hasattr(weights, "__dataclass_fields__"):
+                for key in sorted(weights.__dataclass_fields__.keys()):
+                    seeded_terms.add(str(key).strip().lower())
+
+                timestep_value = getattr(weights, "timestep", None)
+                try:
+                    if timestep_value is not None:
+                        self._default_step_term_values_by_label.setdefault(label, {})[
+                            "timestep"
+                        ] = float(timestep_value)
+                except (TypeError, ValueError):
+                    pass
+
+            seeded_terms.update({
+                "get_pacman",
+                "pacman_timeout_win",
+                "pacman_win_pellets",
+                "timestep",
+                "pacman_legal_moves_delta",
+                "reverse_action",
+            })
+
+        self._reward_terms_order = sorted(seeded_terms)
+
+    def _build_meta_line(self) -> str:
+        return (
             "#meta,"
             f"max_frames={self.epsilon_schedule['max_frames']},"
             f"epsilon_init={self.epsilon_schedule['epsilon_init']},"
@@ -429,10 +593,133 @@ class ProgressReporter:
             f"epsilon_anneal_frames={self.epsilon_schedule['epsilon_anneal_frames']},"
             f"epsilon_algorithm={self.epsilon_algorithm},"
             f"maze={self.maze},"
+            f"pacman_curriculum={self.pacman_curriculum},"
+            f"pacman_curriculum_max_frames={self.pacman_curriculum_max_frames},"
+            f"pacman_curriculum_frame_offset={self.pacman_curriculum_frame_offset},"
             "metric=capture_pct_eval,"
-            "reward=collection_reward_reward_mean\n",
-            encoding="utf-8",
+            "reward=collection_reward_reward_mean,"
+            f"reward_terms={self._reward_terms_metadata_value()}\n"
         )
+
+    def _refresh_reward_terms_order(self) -> None:
+        discovered_terms: set[str] = set()
+        for label, runs_root in self.runs_roots_by_label.items():
+            for algorithm in self.algorithms:
+                for run_dir in candidate_run_dirs(runs_root, algorithm):
+                    scalars_dir = _resolve_scalars_dir(run_dir)
+                    if scalars_dir is None:
+                        continue
+                    discovered_terms.update(_discover_reward_term_files(scalars_dir).keys())
+        self._reward_terms_order = sorted(discovered_terms)
+
+    def _load_reward_term_series(
+        self,
+        run_key: tuple[str, str, str],
+        scalars_dir: Path,
+    ) -> dict[str, list[float]]:
+        cached = self._run_term_series_cache.get(run_key)
+        if cached is not None:
+            return cached
+
+        term_file_map = _discover_reward_term_files(scalars_dir)
+        term_series: dict[str, list[float]] = {}
+        for term_name, path in term_file_map.items():
+            _x_vals, y_vals = _load_two_col_csv(path)
+            term_series[term_name] = y_vals
+
+        changed_order = False
+        for term_name in sorted(term_series.keys()):
+            if term_name not in self._reward_terms_order:
+                self._reward_terms_order.append(term_name)
+                changed_order = True
+
+        if changed_order:
+            with self._io_lock:
+                with self.output_file.open("a", encoding="utf-8") as f:
+                    f.write(self._build_meta_line())
+
+        self._run_term_series_cache[run_key] = term_series
+        return term_series
+
+    def _term_series_for_step(
+        self,
+        run_key: tuple[str, str, str],
+        term_series: dict[str, list[float]],
+        step: int,
+    ) -> dict[str, list[float]]:
+        merged: dict[str, list[float]] = dict(term_series)
+
+        label = run_key[0]
+        default_step_terms = self._default_step_term_values_by_label.get(label, {})
+        for term_name, value in default_step_terms.items():
+            base_series = list(merged.get(term_name, []))
+            if len(base_series) < step:
+                base_series.extend([float("nan")] * (step - len(base_series)))
+            base_series[step - 1] = float(value)
+            merged[term_name] = base_series
+
+        snapshot = self._run_eval_term_snapshot_cache.get(run_key)
+        if not snapshot:
+            return merged
+
+        for term_name, value in snapshot.items():
+            base_series = list(merged.get(term_name, []))
+            if len(base_series) < step:
+                base_series.extend([float("nan")] * (step - len(base_series)))
+            base_series[step - 1] = float(value)
+            merged[term_name] = base_series
+            if term_name not in self._reward_terms_order:
+                self._reward_terms_order.append(term_name)
+                with self._io_lock:
+                    with self.output_file.open("a", encoding="utf-8") as f:
+                        f.write(self._build_meta_line())
+        return merged
+
+    def _reward_terms_metadata_value(self) -> str:
+        if not self._reward_terms_order:
+            return ""
+        return "|".join(self._reward_terms_order)
+
+    def _build_progress_row(
+        self,
+        algorithm_label: str,
+        run_id: str,
+        step: int,
+        frame_value: float,
+        capture_pct: float,
+        reward_value: float,
+        term_series: dict[str, list[float]],
+    ) -> str:
+        row_values: list[str] = [
+            algorithm_label,
+            run_id,
+            str(step),
+            str(frame_value),
+            str(capture_pct),
+            str(reward_value),
+        ]
+        for term_name in self._reward_terms_order:
+            series = term_series.get(term_name, [])
+            if step - 1 < len(series):
+                row_values.append(str(series[step - 1]))
+            else:
+                row_values.append("nan")
+        return ",".join(row_values) + "\n"
+
+    def start(self) -> None:
+        for label, runs_root in self.runs_roots_by_label.items():
+            for algorithm in self.algorithms:
+                for run_dir in candidate_run_dirs(runs_root, algorithm):
+                    self._existing_run_ids.add((label, algorithm, run_dir.name))
+
+        self.output_file.parent.mkdir(parents=True, exist_ok=True)
+        self._refresh_reward_terms_order()
+        self._seed_reward_terms_from_strategy()
+        if self.reset_output_file or not self.output_file.exists():
+            self.output_file.write_text(self._build_meta_line(), encoding="utf-8")
+        else:
+            with self.output_file.open("a", encoding="utf-8") as handle:
+                handle.write(self._build_meta_line())
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -450,6 +737,7 @@ class ProgressReporter:
     def poll_once(self) -> None:
         lines: list[str] = []
         for label, runs_root in self.runs_roots_by_label.items():
+            reward_id = label.split("@", 1)[0] if "@" in label else "current"
             for algorithm in self.algorithms:
                 for run_dir in candidate_run_dirs(runs_root, algorithm):
                     scalars_dir = _resolve_scalars_dir(run_dir)
@@ -466,6 +754,7 @@ class ProgressReporter:
                         continue
 
                     run_key = (label, algorithm, run_dir.name)
+                    term_series = self._load_reward_term_series(run_key, scalars_dir)
 
                     # Ignore pre-existing runs and only track runs created in this session.
                     if run_key not in self._tracked_run_ids:
@@ -479,8 +768,17 @@ class ProgressReporter:
                         frame_value = frames[step - 1]
                         capture_pct = float("nan")
                         reward_value = rewards[step - 1]
+                        step_term_series = self._term_series_for_step(run_key, term_series, step)
                         lines.append(
-                            f"{algorithm}@{label},{run_dir.name},{step},{frame_value},{capture_pct},{reward_value}\n"
+                            self._build_progress_row(
+                                algorithm_label=f"{algorithm}@{label}",
+                                run_id=run_dir.name,
+                                step=step,
+                                frame_value=frame_value,
+                                capture_pct=capture_pct,
+                                reward_value=reward_value,
+                                term_series=step_term_series,
+                            )
                         )
 
                     self._last_step_by_run[run_key] = n
@@ -488,38 +786,61 @@ class ProgressReporter:
                     if self.live_capture_eval_episodes <= 0:
                         continue
 
-                    checkpoint_path = _latest_checkpoint_path(run_dir)
-                    if checkpoint_path is None:
+                    checkpoints = _list_checkpoints_in_creation_order(run_dir)
+                    if not checkpoints:
                         continue
 
-                    checkpoint_key = str(checkpoint_path.resolve())
-                    if self._last_eval_checkpoint_by_run.get(run_key) == checkpoint_key:
-                        continue
+                    seen_keys = self._evaluated_checkpoint_keys_by_run.setdefault(run_key, set())
 
                     reward_id, _, _device_label = label.partition("@")
                     eval_device = self.eval_device_by_label.get(label)
                     if not reward_id or not eval_device:
                         continue
 
-                    capture_pct = _run_eval_capture_snapshot(
-                        algorithm=algorithm,
-                        reward_id=reward_id,
-                        run_dir=run_dir,
-                        checkpoint_path=checkpoint_path,
-                        episodes=self.live_capture_eval_episodes,
-                        eval_seed_base=self.eval_seed_base,
-                        device=eval_device,
-                        allow_cpu_fallback=self.allow_cpu_fallback,
-                    )
-                    if capture_pct is None:
-                        continue
+                    for checkpoint_path in checkpoints:
+                        checkpoint_key = str(checkpoint_path.resolve())
+                        if checkpoint_key in seen_keys:
+                            continue
 
-                    frame_value = frames[n - 1]
-                    reward_value = rewards[n - 1]
-                    lines.append(
-                        f"{algorithm}@{label},{run_dir.name},{n},{frame_value},{capture_pct},{reward_value}\n"
-                    )
-                    self._last_eval_checkpoint_by_run[run_key] = checkpoint_key
+                        capture_pct, eval_breakdown_per_step = _run_eval_capture_snapshot(
+                            algorithm=algorithm,
+                            reward_id=reward_id,
+                            run_dir=run_dir,
+                            checkpoint_path=checkpoint_path,
+                            episodes=self.live_capture_eval_episodes,
+                            eval_seed_base=self.eval_seed_base,
+                            device=eval_device,
+                            allow_cpu_fallback=self.allow_cpu_fallback,
+                        )
+                        if capture_pct is None:
+                            continue
+
+                        seen_keys.add(checkpoint_key)
+
+                        if eval_breakdown_per_step:
+                            self._run_eval_term_snapshot_cache[run_key] = eval_breakdown_per_step
+
+                        checkpoint_frame = _checkpoint_frame_from_path(checkpoint_path)
+                        checkpoint_step = _step_index_for_checkpoint_frame(frames, checkpoint_frame)
+                        checkpoint_step = max(1, min(n, checkpoint_step))
+                        frame_value = frames[checkpoint_step - 1]
+                        reward_value = rewards[checkpoint_step - 1]
+                        step_term_series = self._term_series_for_step(
+                            run_key,
+                            term_series,
+                            checkpoint_step,
+                        )
+                        lines.append(
+                            self._build_progress_row(
+                                algorithm_label=f"{algorithm}@{label}",
+                                run_id=run_dir.name,
+                                step=checkpoint_step,
+                                frame_value=frame_value,
+                                capture_pct=capture_pct,
+                                reward_value=reward_value,
+                                term_series=step_term_series,
+                            )
+                        )
 
         if lines:
             with self._io_lock:
@@ -706,6 +1027,10 @@ def _run_algorithm_serial_seeds(
 
 def main() -> None:
     args = parse_args()
+    if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
+        raise ValueError("--pacman-random-action-prob must be in [0,1].")
+    if int(args.pacman_curriculum_max_frames) < 0:
+        raise ValueError("--pacman-curriculum-max-frames must be >= 0.")
 
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
@@ -808,11 +1133,15 @@ def main() -> None:
             interval_seconds=args.report_interval_seconds,
             max_frames=args.max_frames,
             maze=args.maze,
+            pacman_curriculum=args.pacman_curriculum,
+            pacman_curriculum_max_frames=args.pacman_curriculum_max_frames,
+            pacman_curriculum_frame_offset=0,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,
             eval_device_by_label=eval_device_by_label,
+            reset_output_file=args.reset_live_progress,
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")
@@ -899,6 +1228,8 @@ def main() -> None:
             "--out",
             str(eval_out),
         ]
+        # Benchmark evaluation should reflect checkpoint-native curriculum stage.
+        eval_command.append("--allow-non-hard-checkpoint")
         print("Running paired objective evaluation:")
         print(" ".join(eval_command))
         completed_eval = subprocess.run(eval_command, check=False)
@@ -916,7 +1247,7 @@ def main() -> None:
         tail_window=args.tail_window,
         out=summary_out,
         devices=[cfg["label"] for cfg in device_configs],
-        jobs_path=jobs_out,
+        jobs_paths=[jobs_out],
     )
 
 

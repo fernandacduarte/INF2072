@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import csv
 import random
 import re
@@ -33,6 +34,7 @@ from benchmarl_setup.device_utils import resolve_device
 from benchmarl_setup.pacman_benchmarl_task import register_pacman_task
 from custom_environment.eval import (
     _best_checkpoint_for_learner,
+    _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
     _resolve_checkpoint_view_size,
     _set_global_ghost_view_size,
@@ -299,6 +301,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
     newly_spotted_counts: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
+    reward_breakdown_per_step_values: dict[str, list[float]] = defaultdict(list)
     for episode in episodes:
         steps = max(int(episode["steps"]), 1)
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
@@ -306,6 +309,14 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
+        for key, total_value in episode["reward_breakdown"].items():
+            reward_breakdown_per_step_values[str(key)].append(float(total_value) / float(steps))
+
+    reward_breakdown_per_step_mean = {
+        key: _safe_mean(values)
+        for key, values in reward_breakdown_per_step_values.items()
+        if values
+    }
 
     capture_rate = len(captures) / count if count else float("nan")
     timeout_rate = (
@@ -354,6 +365,11 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
         "mean_terminal_return": _safe_mean(terminal_returns),
+        # Per-step mean reward_breakdown values encoded as JSON object.
+        "reward_breakdown_per_step_mean_json": json.dumps(
+            reward_breakdown_per_step_mean,
+            sort_keys=True,
+        ),
     }
 
 
@@ -367,6 +383,7 @@ def _evaluate_checkpoint(
     verbose: bool,
     device: str,
     expected_reward_id: str | None,
+    allow_non_hard_checkpoint: bool,
 ) -> tuple[dict[str, ReportValue], list[EpisodeResult]]:
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -387,6 +404,13 @@ def _evaluate_checkpoint(
     raw_env = _unwrap_pacman_env(env)
     raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None
+    if allow_non_hard_checkpoint:
+        print(
+            "Pacman eval_report mode: keeping checkpoint-defined difficulty/curriculum "
+            "(--allow-non-hard-checkpoint)."
+        )
+    else:
+        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
     actual_reward_id = str(getattr(raw_env, "reward_strategy_id", "current"))
     actual_reward_class = str(getattr(raw_env, "reward_strategy_class", ""))
 
@@ -520,6 +544,7 @@ REPORT_FIELDS = [
     "mean_newly_spotted_count",
     "mean_shaping_return",
     "mean_terminal_return",
+    "reward_breakdown_per_step_mean_json",
 ]
 
 VARIANT_FIELDS = [
@@ -637,6 +662,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                 verbose=args.verbose,
                 device=device,
                 expected_reward_id=args.reward_id,
+                allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
             )
             row["train_seed"] = "" if train_seed is None else train_seed
             row["run_dir"] = run_dir.name
@@ -699,6 +725,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             verbose=args.verbose,
             device=device,
             expected_reward_id=reward_id,
+            allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
         )
         row["train_seed"] = train_seed
         row["run_dir"] = run_dir_name
@@ -818,6 +845,14 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Print per-episode outcomes.",
+    )
+    parser.add_argument(
+        "--allow-non-hard-checkpoint",
+        action="store_true",
+        help=(
+            "Disable default hard-forcing in report evaluation and keep each checkpoint's "
+            "original Pacman difficulty/curriculum behavior."
+        ),
     )
     return parser.parse_args()
 

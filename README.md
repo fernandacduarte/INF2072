@@ -93,7 +93,7 @@ Each JSON line includes action/reward by ghost, Pacman and ghost positions,
 visibility and sighting memory, capture/timeout/pacman-win flags, pellet counts,
 and reward decomposition.
 
-The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
+The Pygame renderer highlights each ghost's current local observation (11x11 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
@@ -127,6 +127,30 @@ py -3.11 custom_environment\eval.py --learner qmixglobal --maze pinklike --devic
 
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.
 
+Evaluation now forces hard Pacman replay by default, regardless of whether the
+checkpoint was trained with fixed difficulty or curriculum. This guarantees that
+final checkpoint evaluation is always performed against hard Pacman.
+
+If you intentionally want to replay with the checkpoint's original Pacman
+difficulty/curriculum behavior, opt out with:
+
+```bash
+py -3.11 custom_environment\eval.py --learner qmixglobal --allow-non-hard-checkpoint
+```
+
+`custom_environment/eval_report.py` follows the same default behavior (hard-forced
+Pacman replay for all evaluated checkpoints). To preserve original checkpoint
+difficulty/curriculum behavior in reports, pass:
+
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
+```
+
+Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
+`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
+and final paired evaluation. This keeps benchmark evaluation aligned with the
+checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 
 ```bash
@@ -134,6 +158,30 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 --init-random-frames 5000
 --ghost-view-size 3|5|7
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--pacman-difficulty easy|medium|hard
+--pacman-random-action-prob 0.0
+--pacman-safe-distance 1
+--pacman-curriculum off|easy-medium-hard --pacman-curriculum-max-frames 60000
+```
+
+Pacman training-difficulty control is now configurable:
+
+- `--pacman-difficulty hard` keeps the current deterministic safety-first controller.
+- `--pacman-difficulty easy` uses a weak random-valid Pacman baseline.
+- `--pacman-difficulty medium` uses the safety policy with exploration noise.
+- `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
+
+Examples:
+
+```bash
+# Fixed weak Pacman (bootstrap)
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike3 --pacman-difficulty easy
+
+# Fixed medium Pacman with stochasticity
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike3 --pacman-difficulty medium --pacman-random-action-prob 0.25
+
+# Curriculum: easy -> medium -> hard over the full run
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum easy-medium-hard --pacman-curriculum-max-frames 60000
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
@@ -143,6 +191,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --ascii-step-json
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--allow-non-hard-checkpoint
 --ghost-view-size 3|5|7
 ```
 
@@ -195,6 +244,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 --device-label auto|cpu|cuda|cuda_0
 --reward-id current --train-seeds 0,1,2
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--allow-non-hard-checkpoint
 --jobs-path path\to\benchmark_jobs.csv
 --ghost-view-size 3|5|7 --verbose
 ```
@@ -395,13 +445,21 @@ Training now reports live progress to:
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
 - y1: rolling true capture snapshot percentage (mean ± std)
-- y2: rolling average reward
+- y2: rolling average reward (plus rolling averages for individual reward terms if --individual-reward-plotting is passed).
 - y3: epsilon schedule overlay
+
+Liveplot now adds a fourth axis dedicated to terminal reward terms only
+(`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`). Non-terminal
+reward terms and average reward remain on y2 when individual reward plotting is enabled.
+When benchmark metadata indicates `--pacman-curriculum easy-medium-hard`, liveplot also draws
+vertical markers at the frame boundaries for `easy->medium` and `medium->hard`.
 
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 When `iql` is included, the epsilon overlay is resolved from benchmark metadata
 written to `live_progress.csvl` (for example:
 `#meta,max_frames=...,epsilon_init=...,epsilon_end=...,epsilon_anneal_ratio=...`).
+Curriculum markers use the same metadata stream (`pacman_curriculum`,
+`pacman_curriculum_max_frames`, `pacman_curriculum_frame_offset`).
 There are no built-in epsilon fallback defaults in plotting anymore.
 If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
 
@@ -411,9 +469,24 @@ Non-evaluated training steps are written with `NaN` capture and ignored by
 the capture curve. Reward is still emitted in the same progress stream and
 shown on the second y-axis.
 
+Reward terms note: benchmark live progress now appends per-term reward scalars
+when available from deterministic `eval_report.py` snapshots using
+`reward_breakdown_per_step_mean_json` (keys match your RewardStrategy
+breakdown terms such as `timestep`, `reverse_action`, and
+`pacman_legal_moves_delta`).
+The metadata header includes `reward_terms=...`, and both live/offline plotters
+can consume these columns to draw term-specific averages alongside total reward.
+Individual reward-term plotting is disabled by default; enable it with
+`--individual-reward-plotting`. `--reward-terms` filters terms only when
+individual plotting is enabled.
+
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
 training; when it is zero, snapshots appear only at end-of-run checkpoints.
+By default, `run_benchmark.py` preserves `live_progress.csvl` across sessions,
+so live/offline plots can include algorithms completed in earlier runs for the
+same maze. Use `--reset-live-progress` to truncate the file for a clean,
+session-only stream.
 
 Start live monitor:
 
@@ -440,6 +513,8 @@ Useful options:
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
+py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms all
+py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms timestep,potential_shaping
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
@@ -455,6 +530,13 @@ This script can aggregate runs from multiple algorithms and plot all of them in 
 - mean reward curve per algorithm
 - epsilon overlay when `iql` is included
 
+The offline plot now also includes a fourth axis dedicated to terminal reward
+terms only (`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`).
+Average reward and non-terminal reward terms remain on the reward axis when
+individual reward plotting is enabled.
+When progress metadata indicates `--pacman-curriculum easy-medium-hard`, the
+offline plot also draws vertical `easy->medium` and `medium->hard` transition markers.
+
 Examples:
 
 ```bash
@@ -469,6 +551,7 @@ Useful options:
 --reward-id current --device auto|cpu|cuda|cuda:0
 --progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
 --epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
+--individual-reward-plotting --reward-terms all|timestep,potential_shaping
 --maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
@@ -480,9 +563,13 @@ from `live_progress.csvl` metadata (`max_frames`, `epsilon_init`,
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
 
-Capture metric note: this plot uses the same lightweight capture proxy as
-liveplot (`collection_reward_episode_reward_mean > 0` -> captured episode),
-then applies the configured rolling window.
+Capture metric note: this plot reads capture values from `live_progress.csvl`.
+For current benchmark runs, these capture points are true deterministic eval
+snapshots (with non-evaluated steps as `NaN`).
+
+Reward terms note: individual reward-term plotting is disabled by default.
+Enable it with `--individual-reward-plotting`; then use `--reward-terms all`
+or provide a comma list to focus on selected terms.
 
 ### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
 
@@ -617,7 +704,20 @@ To re-enable that term as an explicit experiment, use
 `CurrentTeamReward` unchanged as the ablation baseline while enabling a clean
 A/B comparison.
 
-Three-way comparison setup:
+Four-way comparison setup:
+
+- `custom_environment.env.rewards.current:CaptureV0Reward`
+  (`strategy_id = capture_v0`): minimal reward baseline designed for scratch
+  experiments with fewer interacting terms. It keeps terminal outcomes and
+  timestep penalty, disables potential-shaping and exploration/movement shaping
+  terms, and adds a +1 reward when Pacman legal moves are reduced on steps
+  where Pacman is visible.
+
+- `custom_environment.env.rewards.current:CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction`
+  (`strategy_id = capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action`):
+  capture_v0 variant with stronger terminal rewards, smooth legal-moves delta
+  shaping (`0.2 * (prev_legal_moves - curr_legal_moves)` when visible), and a
+  small penalty for immediate reverse ghost actions.
 
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
@@ -717,6 +817,8 @@ Or use a built-in reward id alias:
 
 ```cmd
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id current_with_overlap_or_same_corridor
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -736,6 +838,12 @@ Or use a built-in reward id alias:
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id current_with_overlap_or_same_corridor
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -792,6 +900,8 @@ Built-in reward ids can also be passed directly:
 
 ```cmd
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-ids current,current_with_overlap_or_same_corridor
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
@@ -813,6 +923,14 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql,vdn \
   --seeds 0,1,2 \
   --reward-ids current,current_with_overlap_or_same_corridor
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids current_git,capture_v0
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 ```
 
 </details>
