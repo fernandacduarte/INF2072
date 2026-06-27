@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-27 22:06 UTC | STARTED | 2026-06-27 22:00 UTC | implement | plan-000025 | PLAN | 000025
+
 DONE | 2026-06-27 21:59 UTC | STARTED | 2026-06-27 21:57 UTC | plan | Reintroduce pure potential-based reward shaping (PBRS) as a new reward variant on the sparse capture_v0 base, per research-000024 | PLAN | 000025
 
 DONE | 2026-06-27 21:43 UTC | STARTED | 2026-06-27 21:34 UTC | research | ive ran benchmark and when eval-latest the ghosts are not following pacman. We need to tune the reward system. im studiyng the potency reward shapping. lets think about reintroducing it. but first lets do a deep evaluation on last benchmark results

@@ -1,4 +1,4 @@
-# Plan 000025 | fernanda-INF2072 | 2026-06-27 21:57 UTC | Reintroduce pure PBRS reward variant | Review: light
+# DONE | 2026-06-27 22:05 UTC | Plan 000025 | fernanda-INF2072 | 2026-06-27 21:57 UTC | Reintroduce pure PBRS reward variant | Review: light
 plan_format_version: 1
 source: research-000024
 
@@ -46,7 +46,7 @@ source: research-000024
 ## Steps
 
 ### Step 1 — Add the pure-PBRS reward class and weights
-- [ ] Add `CaptureV0PurePotentialShapingWeights` dataclass and `CaptureV0PurePotentialShaping(CaptureV0Reward)` to `current.py`.
+- [x] Add `CaptureV0PurePotentialShapingWeights` dataclass and `CaptureV0PurePotentialShaping(CaptureV0Reward)` to `current.py`.
 - **Files**: `custom_environment/env/rewards/current.py`
 - **References**: `CaptureV0Reward` (current.py:499–601) for sparse terminals + `_bfs_distance`; `CurrentTeamReward._team_distance`/`_reachable_distances` (current.py:437–458) for the `d1+0.5·d2` pattern; `base.py` `RewardContext`/`RewardTerm`.
 - **Interface**: exports class `CaptureV0PurePotentialShaping` with `strategy_id = "capture_v0_pure_potential_shaping"`; weights dataclass with fields `get_pacman=100.0, pacman_timeout_win=-100.0, pacman_win_pellets=-100.0, timestep=-0.01, potential_shaping_alpha=0.7, potential_second_ghost_weight=0.5, gamma=0.99`.
@@ -66,7 +66,7 @@ source: research-000024
 - **Tests**: When `compute` runs on a non-terminal step after a prior step, it returns a `potential_shaping` term equal to `γ·(−α·d_now) − (−α·d_prev)`. (test in Step 4)
 
 ### Step 2 — Register the new id in the loader
-- [ ] Add `"capture_v0_pure_potential_shaping": "custom_environment.env.rewards.current:CaptureV0PurePotentialShaping"` to `_REWARD_CLASS_BY_ID`.
+- [x] Add `"capture_v0_pure_potential_shaping": "custom_environment.env.rewards.current:CaptureV0PurePotentialShaping"` to `_REWARD_CLASS_BY_ID`.
 - **Files**: `custom_environment/env/rewards/loader.py`
 - **References**: `_REWARD_CLASS_BY_ID` (loader.py:16–29).
 - **Interface**: `reward_class_from_id("capture_v0_pure_potential_shaping")` resolves to the new class path.
@@ -74,7 +74,7 @@ source: research-000024
 - **Tests**: loader resolves the new id (test in Step 4).
 
 ### Step 3 — Export the class from the package
-- [ ] Add the class to the `current` import block and `__all__` in `__init__.py`.
+- [x] Add the class to the `current` import block and `__all__` in `__init__.py`.
 - **Files**: `custom_environment/env/rewards/__init__.py`
 - **References**: existing import block (`__init__.py:10–16`) and `__all__` (23–37).
 - **Interface**: `from custom_environment.env.rewards import CaptureV0PurePotentialShaping` succeeds.
@@ -82,7 +82,7 @@ source: research-000024
 - **Tests**: covered by the import in Step 4's test module.
 
 ### Step 4 — Unit tests for PBRS correctness
-- [ ] Add tests to `test/test_reward_strategies.py` following the existing `_context()` builder pattern.
+- [x] Add tests to `test/test_reward_strategies.py` following the existing `_context()` builder pattern.
 - **Files**: `test/test_reward_strategies.py`
 - **References**: `_context()` helper (test_reward_strategies.py:26–52); loader-resolution tests (83–90).
 - **Interface**: N/A (tests only).
@@ -123,3 +123,21 @@ No Phase 2 (Light depth). No amendments.
 
 ## smoke
 false
+
+## Implementation Summary
+
+- **Steps completed**: 4/4 (manual mode).
+- **`current.py`**: added `CaptureV0PurePotentialShapingWeights` (get_pacman 100, timeout/pellet −100, timestep −0.01, potential_shaping_alpha 0.7, potential_second_ghost_weight 0.5, gamma 0.99) and `CaptureV0PurePotentialShaping(CaptureV0Reward)` with `strategy_id = "capture_v0_pure_potential_shaping"`. `compute()` emits `timestep`, terminal `GET_PACMAN`/`PACMAN_TIMEOUT_WIN`/`PACMAN_WIN_PALLETS`, and a γ-correct `potential_shaping` term `γ·Φ(s′) − Φ(s)`, `Φ = −α·(d1 + 0.5·d2)`. No `reverse_action` / visibility / movement terms. Φ→0 at capture (natural pulse); no Φ-zeroing at timeout.
+- **`loader.py`**: registered id `capture_v0_pure_potential_shaping`.
+- **`__init__.py`**: exported `CaptureV0PurePotentialShaping` (import + `__all__`).
+- **`test_reward_strategies.py`**: added 6 tests (loader resolution, telescoping form, capture pulse, timeout-no-zeroing, magnitude bounds, no reverse_action) — all pass.
+- **Verify**: import + id-resolution checks pass; new variant prints `capture_v0_pure_potential_shaping 0.99 0.7`.
+
+### ⚠ Pre-existing test failures (NOT caused by this plan)
+`py -3.11 -m pytest test/test_reward_strategies.py` shows 25 passed, **2 failed**. Both failures reproduce on the pre-plan-000025 tree (confirmed via `git stash`) and are unrelated drift in tests this plan did not touch:
+1. `test_capture_v0_improved_uses_smooth_legal_delta_and_reverse_action_penalty` — expects `pacman_legal_moves_delta == 0.2`, gets `0.4` (maze-geometry/weight drift in `CaptureV0ImproveLegalMoves...`).
+2. `test_stronger_movement_variant_changes_only_one_weight` — `StrongerMovementReward` baseline drifted from `CurrentRewardWeights` (get_pacman 30) to `V2` (40).
+These should be triaged separately (a follow-up FIX plan), not in this change.
+
+### Next step (separate task)
+Run the ≥5-seed sparse-vs-PBRS benchmark A/B (research-000024 R5): `REWARD_ID=capture_v0_pure_potential_shaping` vs the sparse baseline, seeds 0–4, framed as sample efficiency with a distance-closing pursuit metric.
