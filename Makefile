@@ -7,7 +7,7 @@
 # On Windows the .venv python is at .venv/Scripts/python.exe; on Linux/macOS
 # override with  make demo PYTHON=.venv/bin/python
 
-PYTHON ?= .venv/Scripts/python.exe
+PYTHON ?= py -3.11
 DELAY  ?= 0.12
 SEED   ?= 11
 MAZE   ?= pinklike3
@@ -15,13 +15,13 @@ MAZE   ?= pinklike3
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
 ALGOS   ?= qmixglobal
 SEEDS   ?= 0
-FRAMES  ?= 100000
-CHECKPOINT_INTERVAL ?= 5000
+FRAMES  ?= 10000
+CHECKPOINT_INTERVAL ?= 2000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 LEARNER ?= qmixglobal
 CURRICULUM ?= easy-medium-hard
-CURRICULUM_MAX_FRAMES ?= 100000
+CURRICULUM_MAX_FRAMES ?= $(FRAMES)
 
 .DEFAULT_GOAL := help
 
@@ -56,7 +56,7 @@ benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
-	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device $(DEVICE)
+	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device all
 
 smoke: ## PettingZoo parallel-API compliance (runs without pytest)
 	$(PYTHON) test/test_petting_zoo.py
