@@ -15,7 +15,7 @@ MAZE   ?= pinklike3
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
 ALGOS   ?= iql,vdn,qmixlocal,qmixglobal
 SEEDS   ?= 0,1,2,3,4
-FRAMES  ?= 200000
+FRAMES  ?= 20000
 LEARNER ?= qmixglobal
 DEVICE  ?= cpu
 # Pursuit-first reward (plan-000028 / research-000027). Previous default was
