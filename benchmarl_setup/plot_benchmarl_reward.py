@@ -240,6 +240,35 @@ def _is_terminal_reward_term(term_name: str) -> bool:
     }
 
 
+def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
+    curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
+    if curriculum_mode != "easy-medium-hard":
+        return []
+
+    max_frames_raw = (meta.get("pacman_curriculum_max_frames") or "").strip()
+    if not max_frames_raw:
+        return []
+
+    try:
+        curriculum_max_frames = float(max_frames_raw)
+    except ValueError:
+        return []
+
+    if curriculum_max_frames <= 0.0:
+        return []
+
+    offset_raw = (meta.get("pacman_curriculum_frame_offset") or "0").strip()
+    try:
+        frame_offset = float(offset_raw)
+    except ValueError:
+        frame_offset = 0.0
+
+    return [
+        (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
+        (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
+    ]
+
+
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
     meta: dict[str, str],
@@ -466,6 +495,11 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated reward terms to display (default: all).",
     )
     parser.add_argument(
+        "--individual-reward-plotting",
+        action="store_true",
+        help="Enable plotting individual reward terms (disabled by default).",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -515,14 +549,17 @@ def main() -> None:
         raise ValueError("--window must be >= 1")
 
     reward_terms_filter: set[str] | None
-    if args.reward_terms.strip().lower() == "all":
-        reward_terms_filter = None
+    if args.individual_reward_plotting:
+        if args.reward_terms.strip().lower() == "all":
+            reward_terms_filter = None
+        else:
+            reward_terms_filter = {
+                item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
+            }
+            if not reward_terms_filter:
+                raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
     else:
-        reward_terms_filter = {
-            item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
-        }
-        if not reward_terms_filter:
-            raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
+        reward_terms_filter = set()
 
     algorithms: list[str]
     if args.algorithms:
@@ -724,44 +761,45 @@ def main() -> None:
                 linestyle=":",
             )
 
-        all_term_names: set[str] = set()
-        for run_term_map in run_terms.values():
-            all_term_names.update(run_term_map.keys())
+        if args.individual_reward_plotting:
+            all_term_names: set[str] = set()
+            for run_term_map in run_terms.values():
+                all_term_names.update(run_term_map.keys())
 
-        for term_name in sorted(all_term_names):
-            if reward_terms_filter is not None and term_name not in reward_terms_filter:
-                continue
+            for term_name in sorted(all_term_names):
+                if reward_terms_filter is not None and term_name not in reward_terms_filter:
+                    continue
 
-            term_run_series: dict[str, dict[int, float]] = {}
-            for run_key, run_term_map in run_terms.items():
-                step_map = run_term_map.get(term_name)
-                if step_map:
-                    term_run_series[run_key] = step_map
+                term_run_series: dict[str, dict[int, float]] = {}
+                for run_key, run_term_map in run_terms.items():
+                    step_map = run_term_map.get(term_name)
+                    if step_map:
+                        term_run_series[run_key] = step_map
 
-            aggregated_term = _aggregate_term_runs(term_run_series, args.window)
-            if aggregated_term is None:
-                continue
+                aggregated_term = _aggregate_term_runs(term_run_series, args.window)
+                if aggregated_term is None:
+                    continue
 
-            term_mean, _term_std = aggregated_term
-            term_frames = frames[: len(term_mean)]
-            if np.all(np.isnan(term_mean)):
-                continue
+                term_mean, _term_std = aggregated_term
+                term_frames = frames[: len(term_mean)]
+                if np.all(np.isnan(term_mean)):
+                    continue
 
-            marker, term_linestyle = _reward_term_style(term_name)
+                marker, term_linestyle = _reward_term_style(term_name)
 
-            target_axis = ax_terminal if _is_terminal_reward_term(term_name) else ax_reward
-            target_axis.plot(
-                term_frames,
-                term_mean,
-                label=f"{algorithm.upper()} reward::{term_name}",
-                color=color,
-                linewidth=1.1,
-                linestyle=term_linestyle,
-                alpha=0.8,
-                marker=marker,
-                markersize=4,
-                markevery=max(1, len(term_frames) // 20),
-            )
+                target_axis = ax_terminal if _is_terminal_reward_term(term_name) else ax_reward
+                target_axis.plot(
+                    term_frames,
+                    term_mean,
+                    label=f"{algorithm.upper()} reward::{term_name}",
+                    color=color,
+                    linewidth=1.1,
+                    linestyle=term_linestyle,
+                    alpha=0.8,
+                    marker=marker,
+                    markersize=4,
+                    markevery=max(1, len(term_frames) // 20),
+                )
 
     max_display_frame = max(
         float(np.nanmax(payload["frames"]))
@@ -786,10 +824,42 @@ def main() -> None:
             linestyle="-",
             label="Epsilon",
         )
-    ax_reward.set_ylabel("Average and non-terminal rewards", color="dimgray")
+    for frame, label in _curriculum_transition_frames_from_meta(progress_meta):
+        if frame < 0.0 or frame > max_display_frame:
+            continue
+        ax.axvline(
+            x=frame,
+            color="#4d4d4d",
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.8,
+            zorder=2,
+        )
+        ax.text(
+            frame,
+            99.0,
+            label,
+            rotation=90,
+            va="top",
+            ha="right",
+            color="#4d4d4d",
+            fontsize=8,
+            alpha=0.9,
+            zorder=2,
+        )
+    reward_axis_label = (
+        "Average and non-terminal rewards"
+        if args.individual_reward_plotting
+        else "Average team reward per step"
+    )
+    ax_reward.set_ylabel(reward_axis_label, color="dimgray")
     ax_reward.tick_params(axis="y", colors="dimgray")
     ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
     ax_terminal.tick_params(axis="y", colors="#8c564b")
+    if not args.individual_reward_plotting:
+        ax_terminal.spines["right"].set_visible(False)
+        ax_terminal.tick_params(axis="y", right=False, labelright=False)
+        ax_terminal.set_ylabel("")
     ax_eps.set_ylabel("Epsilon", color="black")
     ax_eps.set_ylim(0.0, 1.05)
     ax_eps.tick_params(axis="y", colors="black")
