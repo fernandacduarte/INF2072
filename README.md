@@ -127,6 +127,30 @@ py -3.11 custom_environment\eval.py --learner qmixglobal --maze pinklike --devic
 
 Use `--checkpoint-select latest` to force newest-run behavior, or `--checkpoint` to provide an explicit `.pt` file.
 
+Evaluation now forces hard Pacman replay by default, regardless of whether the
+checkpoint was trained with fixed difficulty or curriculum. This guarantees that
+final checkpoint evaluation is always performed against hard Pacman.
+
+If you intentionally want to replay with the checkpoint's original Pacman
+difficulty/curriculum behavior, opt out with:
+
+```bash
+py -3.11 custom_environment\eval.py --learner qmixglobal --allow-non-hard-checkpoint
+```
+
+`custom_environment/eval_report.py` follows the same default behavior (hard-forced
+Pacman replay for all evaluated checkpoints). To preserve original checkpoint
+difficulty/curriculum behavior in reports, pass:
+
+```bash
+py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
+```
+
+Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
+`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
+and final paired evaluation. This keeps benchmark evaluation aligned with the
+checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 
 ```bash
@@ -134,6 +158,30 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 --init-random-frames 5000
 --ghost-view-size 3|5|7
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--pacman-difficulty easy|medium|hard
+--pacman-random-action-prob 0.0
+--pacman-safe-distance 1
+--pacman-curriculum off|easy-medium-hard --pacman-curriculum-max-frames 60000
+```
+
+Pacman training-difficulty control is now configurable:
+
+- `--pacman-difficulty hard` keeps the current deterministic safety-first controller.
+- `--pacman-difficulty easy` uses a weak random-valid Pacman baseline.
+- `--pacman-difficulty medium` uses the safety policy with exploration noise.
+- `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
+
+Examples:
+
+```bash
+# Fixed weak Pacman (bootstrap)
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike3 --pacman-difficulty easy
+
+# Fixed medium Pacman with stochasticity
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike3 --pacman-difficulty medium --pacman-random-action-prob 0.25
+
+# Curriculum: easy -> medium -> hard over the full run
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum easy-medium-hard --pacman-curriculum-max-frames 60000
 ```
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
@@ -143,6 +191,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --ascii-step-json
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--allow-non-hard-checkpoint
 --ghost-view-size 3|5|7
 ```
 
@@ -195,6 +244,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 --device-label auto|cpu|cuda|cuda_0
 --reward-id current --train-seeds 0,1,2
 --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
+--allow-non-hard-checkpoint
 --jobs-path path\to\benchmark_jobs.csv
 --ghost-view-size 3|5|7 --verbose
 ```

@@ -115,6 +115,44 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pacman-difficulty",
+        type=str,
+        default="hard",
+        choices=["easy", "medium", "hard"],
+        help="Fixed Pacman controller strength when --pacman-curriculum=off.",
+    )
+    parser.add_argument(
+        "--pacman-random-action-prob",
+        type=float,
+        default=0.0,
+        help="Exploration noise for Pacman policy in [0,1] when curriculum is off.",
+    )
+    parser.add_argument(
+        "--pacman-safe-distance",
+        type=int,
+        default=None,
+        help="Override safety cap used by Pacman heuristic (default uses policy preset).",
+    )
+    parser.add_argument(
+        "--pacman-curriculum",
+        type=str,
+        default="off",
+        choices=["off", "easy-medium-hard"],
+        help="Pacman curriculum schedule applied over frames.",
+    )
+    parser.add_argument(
+        "--pacman-curriculum-max-frames",
+        type=int,
+        default=0,
+        help="Frame budget used to complete the curriculum schedule.",
+    )
+    parser.add_argument(
+        "--pacman-curriculum-frame-offset",
+        type=int,
+        default=0,
+        help="Global frame offset used for curriculum when run is part of a benchmark matrix.",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -154,6 +192,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
+        raise ValueError("--pacman-random-action-prob must be in [0,1].")
+    if int(args.pacman_curriculum_max_frames) < 0:
+        raise ValueError("--pacman-curriculum-max-frames must be >= 0.")
+    if int(args.pacman_curriculum_frame_offset) < 0:
+        raise ValueError("--pacman-curriculum-frame-offset must be >= 0.")
     algorithm = normalize_algorithm(args.algorithm)
     resolved_reward_class = (
         str(args.reward_class).strip()
@@ -192,6 +236,12 @@ def main() -> None:
         "shared_memory_in_observation_enabled": True,
         "reward_class": resolved_reward_class,
         "reward_id": reward_strategy.strategy_id,
+        "pacman_difficulty": args.pacman_difficulty,
+        "pacman_random_action_prob": float(args.pacman_random_action_prob),
+        "pacman_safe_distance": args.pacman_safe_distance,
+        "pacman_curriculum": args.pacman_curriculum,
+        "pacman_curriculum_max_frames": int(args.pacman_curriculum_max_frames),
+        "pacman_curriculum_frame_offset": int(args.pacman_curriculum_frame_offset),
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)
@@ -226,6 +276,13 @@ def main() -> None:
     experiment_config.save_folder = str(save_root)
     experiment_config.checkpoint_interval = args.checkpoint_interval
     experiment_config.checkpoint_at_end = args.checkpoint_at_end
+    if hasattr(experiment_config, "keep_checkpoints_num"):
+        if args.checkpoint_interval > 0:
+            periodic_count = (args.max_frames + args.checkpoint_interval - 1) // args.checkpoint_interval
+            expected_total = periodic_count + (1 if args.checkpoint_at_end else 0)
+            keep_target = max(1, int(expected_total))
+            current_keep = int(getattr(experiment_config, "keep_checkpoints_num", 0) or 0)
+            experiment_config.keep_checkpoints_num = max(current_keep, keep_target)
 
     # Apply one shared schedule so common hyperparameters stay aligned.
     _tune_shared_experiment(experiment_config, algorithm, args.max_frames, args.maze)

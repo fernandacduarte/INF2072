@@ -34,6 +34,7 @@ from benchmarl_setup.device_utils import resolve_device
 from benchmarl_setup.pacman_benchmarl_task import register_pacman_task
 from custom_environment.eval import (
     _best_checkpoint_for_learner,
+    _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
     _resolve_checkpoint_view_size,
     _set_global_ghost_view_size,
@@ -382,6 +383,7 @@ def _evaluate_checkpoint(
     verbose: bool,
     device: str,
     expected_reward_id: str | None,
+    allow_non_hard_checkpoint: bool,
 ) -> tuple[dict[str, ReportValue], list[EpisodeResult]]:
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -402,6 +404,13 @@ def _evaluate_checkpoint(
     raw_env = _unwrap_pacman_env(env)
     raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None
+    if allow_non_hard_checkpoint:
+        print(
+            "Pacman eval_report mode: keeping checkpoint-defined difficulty/curriculum "
+            "(--allow-non-hard-checkpoint)."
+        )
+    else:
+        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
     actual_reward_id = str(getattr(raw_env, "reward_strategy_id", "current"))
     actual_reward_class = str(getattr(raw_env, "reward_strategy_class", ""))
 
@@ -653,6 +662,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                 verbose=args.verbose,
                 device=device,
                 expected_reward_id=args.reward_id,
+                allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
             )
             row["train_seed"] = "" if train_seed is None else train_seed
             row["run_dir"] = run_dir.name
@@ -715,6 +725,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             verbose=args.verbose,
             device=device,
             expected_reward_id=reward_id,
+            allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
         )
         row["train_seed"] = train_seed
         row["run_dir"] = run_dir_name
@@ -834,6 +845,14 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Print per-episode outcomes.",
+    )
+    parser.add_argument(
+        "--allow-non-hard-checkpoint",
+        action="store_true",
+        help=(
+            "Disable default hard-forcing in report evaluation and keep each checkpoint's "
+            "original Pacman difficulty/curriculum behavior."
+        ),
     )
     return parser.parse_args()
 

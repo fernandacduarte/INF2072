@@ -88,6 +88,38 @@ def parse_args() -> argparse.Namespace:
         help="Odd local observation width/height for ghosts (for example 3 or 5).",
     )
     parser.add_argument(
+        "--pacman-difficulty",
+        type=str,
+        default="hard",
+        choices=["easy", "medium", "hard"],
+        help="Fixed Pacman controller strength when curriculum is off.",
+    )
+    parser.add_argument(
+        "--pacman-random-action-prob",
+        type=float,
+        default=0.0,
+        help="Exploration noise for Pacman policy in [0,1] when curriculum is off.",
+    )
+    parser.add_argument(
+        "--pacman-safe-distance",
+        type=int,
+        default=None,
+        help="Override safety cap used by Pacman heuristic (default uses preset).",
+    )
+    parser.add_argument(
+        "--pacman-curriculum",
+        type=str,
+        default="off",
+        choices=["off", "easy-medium-hard"],
+        help="Pacman curriculum schedule applied over frames.",
+    )
+    parser.add_argument(
+        "--pacman-curriculum-max-frames",
+        type=int,
+        default=0,
+        help="Frame budget used to complete the curriculum schedule.",
+    )
+    parser.add_argument(
         "--maze",
         type=str,
         default="default",
@@ -247,6 +279,13 @@ def _build_command(
     if args.ghost_view_size is not None:
         command.extend(["--ghost-view-size", str(args.ghost_view_size)])
 
+    command.extend(["--pacman-difficulty", str(args.pacman_difficulty)])
+    command.extend(["--pacman-random-action-prob", str(args.pacman_random_action_prob)])
+    if args.pacman_safe_distance is not None:
+        command.extend(["--pacman-safe-distance", str(args.pacman_safe_distance)])
+    command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
+    command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
+
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
     else:
@@ -317,6 +356,46 @@ def _latest_checkpoint_path(run_dir: Path) -> Path | None:
         reverse=True,
     )
     return checkpoints[0] if checkpoints else None
+
+
+def _list_checkpoints_in_creation_order(run_dir: Path) -> list[Path]:
+    checkpoints_dir = _resolve_checkpoints_dir(run_dir)
+    if checkpoints_dir is None:
+        return []
+
+    def _sort_key(path: Path) -> tuple[int, float, str]:
+        stem = path.stem
+        prefix = "checkpoint_"
+        frame_idx = -1
+        if stem.startswith(prefix):
+            suffix = stem[len(prefix):]
+            if suffix.isdigit():
+                frame_idx = int(suffix)
+        return (frame_idx, path.stat().st_mtime, path.name)
+
+    return sorted(checkpoints_dir.glob("checkpoint_*.pt"), key=_sort_key)
+
+
+def _checkpoint_frame_from_path(path: Path) -> int | None:
+    stem = path.stem
+    prefix = "checkpoint_"
+    if not stem.startswith(prefix):
+        return None
+    suffix = stem[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _step_index_for_checkpoint_frame(frames: list[float], checkpoint_frame: int | None) -> int:
+    if not frames:
+        return 1
+    if checkpoint_frame is None:
+        return len(frames)
+    for idx, frame_value in enumerate(frames, start=1):
+        if frame_value >= float(checkpoint_frame):
+            return idx
+    return len(frames)
 
 
 def _read_capture_pct_from_eval_csv(path: Path) -> float | None:
@@ -391,6 +470,8 @@ def _run_eval_capture_snapshot(
         "--out",
         str(out_csv),
     ]
+    # Benchmark evaluation should reflect checkpoint-native curriculum stage.
+    command.append("--allow-non-hard-checkpoint")
     command.append("--allow-cpu-fallback" if allow_cpu_fallback else "--no-allow-cpu-fallback")
 
     completed = subprocess.run(command, check=False)
@@ -441,7 +522,7 @@ class ProgressReporter:
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         self.eval_device_by_label = eval_device_by_label
         self._last_step_by_run: dict[tuple[str, str, str], int] = {}
-        self._last_eval_checkpoint_by_run: dict[tuple[str, str, str], str] = {}
+        self._evaluated_checkpoint_keys_by_run: dict[tuple[str, str, str], set[str]] = {}
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._existing_run_ids: set[tuple[str, str, str]] = set()
@@ -686,50 +767,61 @@ class ProgressReporter:
                     if self.live_capture_eval_episodes <= 0:
                         continue
 
-                    checkpoint_path = _latest_checkpoint_path(run_dir)
-                    if checkpoint_path is None:
+                    checkpoints = _list_checkpoints_in_creation_order(run_dir)
+                    if not checkpoints:
                         continue
 
-                    checkpoint_key = str(checkpoint_path.resolve())
-                    if self._last_eval_checkpoint_by_run.get(run_key) == checkpoint_key:
-                        continue
+                    seen_keys = self._evaluated_checkpoint_keys_by_run.setdefault(run_key, set())
 
                     reward_id, _, _device_label = label.partition("@")
                     eval_device = self.eval_device_by_label.get(label)
                     if not reward_id or not eval_device:
                         continue
 
-                    capture_pct, eval_breakdown_per_step = _run_eval_capture_snapshot(
-                        algorithm=algorithm,
-                        reward_id=reward_id,
-                        run_dir=run_dir,
-                        checkpoint_path=checkpoint_path,
-                        episodes=self.live_capture_eval_episodes,
-                        eval_seed_base=self.eval_seed_base,
-                        device=eval_device,
-                        allow_cpu_fallback=self.allow_cpu_fallback,
-                    )
-                    if capture_pct is None:
-                        continue
+                    for checkpoint_path in checkpoints:
+                        checkpoint_key = str(checkpoint_path.resolve())
+                        if checkpoint_key in seen_keys:
+                            continue
 
-                    if eval_breakdown_per_step:
-                        self._run_eval_term_snapshot_cache[run_key] = eval_breakdown_per_step
-
-                    frame_value = frames[n - 1]
-                    reward_value = rewards[n - 1]
-                    step_term_series = self._term_series_for_step(run_key, term_series, n)
-                    lines.append(
-                        self._build_progress_row(
-                            algorithm_label=f"{algorithm}@{label}",
-                            run_id=run_dir.name,
-                            step=n,
-                            frame_value=frame_value,
-                            capture_pct=capture_pct,
-                            reward_value=reward_value,
-                            term_series=step_term_series,
+                        capture_pct, eval_breakdown_per_step = _run_eval_capture_snapshot(
+                            algorithm=algorithm,
+                            reward_id=reward_id,
+                            run_dir=run_dir,
+                            checkpoint_path=checkpoint_path,
+                            episodes=self.live_capture_eval_episodes,
+                            eval_seed_base=self.eval_seed_base,
+                            device=eval_device,
+                            allow_cpu_fallback=self.allow_cpu_fallback,
                         )
-                    )
-                    self._last_eval_checkpoint_by_run[run_key] = checkpoint_key
+                        if capture_pct is None:
+                            continue
+
+                        seen_keys.add(checkpoint_key)
+
+                        if eval_breakdown_per_step:
+                            self._run_eval_term_snapshot_cache[run_key] = eval_breakdown_per_step
+
+                        checkpoint_frame = _checkpoint_frame_from_path(checkpoint_path)
+                        checkpoint_step = _step_index_for_checkpoint_frame(frames, checkpoint_frame)
+                        checkpoint_step = max(1, min(n, checkpoint_step))
+                        frame_value = frames[checkpoint_step - 1]
+                        reward_value = rewards[checkpoint_step - 1]
+                        step_term_series = self._term_series_for_step(
+                            run_key,
+                            term_series,
+                            checkpoint_step,
+                        )
+                        lines.append(
+                            self._build_progress_row(
+                                algorithm_label=f"{algorithm}@{label}",
+                                run_id=run_dir.name,
+                                step=checkpoint_step,
+                                frame_value=frame_value,
+                                capture_pct=capture_pct,
+                                reward_value=reward_value,
+                                term_series=step_term_series,
+                            )
+                        )
 
         if lines:
             with self._io_lock:
@@ -916,6 +1008,10 @@ def _run_algorithm_serial_seeds(
 
 def main() -> None:
     args = parse_args()
+    if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
+        raise ValueError("--pacman-random-action-prob must be in [0,1].")
+    if int(args.pacman_curriculum_max_frames) < 0:
+        raise ValueError("--pacman-curriculum-max-frames must be >= 0.")
 
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
@@ -1109,6 +1205,8 @@ def main() -> None:
             "--out",
             str(eval_out),
         ]
+        # Benchmark evaluation should reflect checkpoint-native curriculum stage.
+        eval_command.append("--allow-non-hard-checkpoint")
         print("Running paired objective evaluation:")
         print(" ".join(eval_command))
         completed_eval = subprocess.run(eval_command, check=False)
