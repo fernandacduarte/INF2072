@@ -196,6 +196,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable writing live progress updates for liveplot.py.",
     )
     parser.add_argument(
+        "--reset-live-progress",
+        action="store_true",
+        help="Truncate live_progress.csvl before starting this benchmark session.",
+    )
+    parser.add_argument(
         "--jobs-out",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_jobs.csv").resolve()),
@@ -504,6 +509,7 @@ class ProgressReporter:
         eval_seed_base: int,
         allow_cpu_fallback: bool,
         eval_device_by_label: dict[str, str],
+        reset_output_file: bool,
     ) -> None:
         self.runs_roots_by_label = runs_roots_by_label
         self.algorithms = algorithms
@@ -521,6 +527,7 @@ class ProgressReporter:
         self.eval_seed_base = int(eval_seed_base)
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         self.eval_device_by_label = eval_device_by_label
+        self.reset_output_file = bool(reset_output_file)
         self._last_step_by_run: dict[tuple[str, str, str], int] = {}
         self._evaluated_checkpoint_keys_by_run: dict[tuple[str, str, str], set[str]] = {}
         self._stop_event = threading.Event()
@@ -699,8 +706,11 @@ class ProgressReporter:
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
         self._refresh_reward_terms_order()
         self._seed_reward_terms_from_strategy()
-        # Truncate at the beginning of a new benchmark session.
-        self.output_file.write_text(self._build_meta_line(), encoding="utf-8")
+        if self.reset_output_file or not self.output_file.exists():
+            self.output_file.write_text(self._build_meta_line(), encoding="utf-8")
+        else:
+            with self.output_file.open("a", encoding="utf-8") as handle:
+                handle.write(self._build_meta_line())
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -1119,6 +1129,7 @@ def main() -> None:
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,
             eval_device_by_label=eval_device_by_label,
+            reset_output_file=args.reset_live_progress,
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")

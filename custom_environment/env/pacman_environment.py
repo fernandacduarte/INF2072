@@ -54,10 +54,10 @@ from custom_environment.env.rewards import (
 from collections import deque
 
 
-# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7. Change this single value to resize the ghosts'
+# 3 -> 3x3, 5 -> 5x5, 7 -> 7x7, 11 -> 11x11. Change this single value to resize the ghosts'
 # local observation for all trainings. Off-grid cells (near the map border) are
 # padded with WALL, so the maze never needs to change when this value changes.
-GHOST_VIEW_SIZE = 5
+GHOST_VIEW_SIZE = 11
 
 
 # Main environment class following PettingZoo parallel interface.

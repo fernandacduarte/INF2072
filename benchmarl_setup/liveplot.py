@@ -32,6 +32,15 @@ def _parse_reward_terms_from_meta(meta: dict[str, str]) -> list[str]:
     return [term.strip() for term in raw_terms.split("|") if term.strip()]
 
 
+def _is_terminal_reward_term(term_name: str) -> bool:
+    normalized = str(term_name).strip().lower()
+    return normalized in {
+        "get_pacman",
+        "pacman_timeout_win",
+        "pacman_win_pellets",
+    }
+
+
 def _parse_progress_file(
     progress_file: Path,
 ) -> tuple[
@@ -304,10 +313,13 @@ class LiveComparisonPlotter:
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
         self.ax_reward = self.ax.twinx()
         self.ax_eps = self.ax.twinx()
-        self.ax_eps.spines["right"].set_position(("outward", 55))
+        self.ax_terminal = self.ax.twinx()
+        self.ax_terminal.spines["right"].set_position(("outward", 55))
+        self.ax_eps.spines["right"].set_position(("outward", 110))
         self.lines_capture: dict[str, any] = {}
         self.lines_reward: dict[str, any] = {}
         self.lines_reward_terms: dict[str, any] = {}
+        self.lines_terminal_terms: dict[str, any] = {}
         self.fills_capture: dict[str, any] = {}
         self.marker_scatter_capture: dict[str, any] = {}
         self.epsilon_line = None
@@ -336,11 +348,13 @@ class LiveComparisonPlotter:
         # Keep a small negative margin so zero-valued capture lines/markers are visible above the axis frame.
         self.ax.set_ylim(-1.0, 100.0)
         self.ax.grid(True, alpha=0.3)
-        self.ax_reward.set_ylabel("Average Reward", color="dimgray")
+        self.ax_reward.set_ylabel("Average and non-terminal rewards", color="dimgray")
         self.ax_reward.tick_params(axis="y", colors="dimgray")
         self.ax_eps.set_ylabel("Epsilon", color="black")
         self.ax_eps.set_ylim(0.0, 1.05)
         self.ax_eps.tick_params(axis="y", colors="black")
+        self.ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
+        self.ax_terminal.tick_params(axis="y", colors="#8c564b")
         plt.ion()
         plt.show(block=False)
 
@@ -543,12 +557,23 @@ class LiveComparisonPlotter:
                         stale = self.lines_reward_terms.pop(term_series_key, None)
                         if stale is not None:
                             stale.remove()
+                        stale_terminal = self.lines_terminal_terms.pop(term_series_key, None)
+                        if stale_terminal is not None:
+                            stale_terminal.remove()
                         continue
 
                     legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
                     marker, term_linestyle = self._reward_term_style(term_name)
-                    if term_series_key not in self.lines_reward_terms:
-                        (term_line,) = self.ax_reward.plot(
+                    is_terminal_term = _is_terminal_reward_term(term_name)
+                    target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
+                    other_lines = self.lines_reward_terms if is_terminal_term else self.lines_terminal_terms
+                    stale_other = other_lines.pop(term_series_key, None)
+                    if stale_other is not None:
+                        stale_other.remove()
+
+                    target_axis = self.ax_terminal if is_terminal_term else self.ax_reward
+                    if term_series_key not in target_lines:
+                        (term_line,) = target_axis.plot(
                             term_frames,
                             term_mean,
                             color=color,
@@ -560,9 +585,9 @@ class LiveComparisonPlotter:
                             markevery=max(1, len(term_frames) // 20),
                             label=legend_term,
                         )
-                        self.lines_reward_terms[term_series_key] = term_line
+                        target_lines[term_series_key] = term_line
                     else:
-                        term_line = self.lines_reward_terms[term_series_key]
+                        term_line = target_lines[term_series_key]
                         term_line.set_data(term_frames, term_mean)
                         term_line.set_label(legend_term)
                         term_line.set_linestyle(term_linestyle)
@@ -590,6 +615,13 @@ class LiveComparisonPlotter:
             term_line = self.lines_reward_terms.pop(key)
             term_line.remove()
 
+        stale_terminal_term_keys = [
+            key for key in self.lines_terminal_terms.keys() if key.split("::reward::", 1)[0] not in active_keys
+        ]
+        for key in stale_terminal_term_keys:
+            term_line = self.lines_terminal_terms.pop(key)
+            term_line.remove()
+
         # Keep legend current with active algorithms.
         show_epsilon = "iql" in self.algorithms and self.show_epsilon_overlay
         self._update_epsilon_curve(max_display_frame, show=show_epsilon)
@@ -598,6 +630,9 @@ class LiveComparisonPlotter:
         reward_handles, reward_labels = self.ax_reward.get_legend_handles_labels()
         handles += reward_handles
         labels += reward_labels
+        terminal_handles, terminal_labels = self.ax_terminal.get_legend_handles_labels()
+        handles += terminal_handles
+        labels += terminal_labels
         if self.epsilon_line is not None:
             eps_handles, eps_labels = self.ax_eps.get_legend_handles_labels()
             handles += eps_handles
@@ -609,6 +644,8 @@ class LiveComparisonPlotter:
         self.ax.autoscale_view()
         self.ax_reward.relim()
         self.ax_reward.autoscale_view()
+        self.ax_terminal.relim()
+        self.ax_terminal.autoscale_view()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 

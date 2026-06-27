@@ -93,7 +93,7 @@ Each JSON line includes action/reward by ghost, Pacman and ghost positions,
 visibility and sighting memory, capture/timeout/pacman-win flags, pellet counts,
 and reward decomposition.
 
-The Pygame renderer highlights each ghost's current local observation (5x5 by default) with
+The Pygame renderer highlights each ghost's current local observation (11x11 by default) with
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
@@ -448,6 +448,10 @@ Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benc
 - y2: rolling average reward plus rolling averages for individual reward terms
 - y3: epsilon schedule overlay
 
+Liveplot now adds a fourth axis dedicated to terminal reward terms only
+(`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`). Non-terminal
+reward terms and average reward remain on y2.
+
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 When `iql` is included, the epsilon overlay is resolved from benchmark metadata
 written to `live_progress.csvl` (for example:
@@ -474,6 +478,10 @@ consume these columns to draw term-specific averages alongside total reward.
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
 training; when it is zero, snapshots appear only at end-of-run checkpoints.
+By default, `run_benchmark.py` preserves `live_progress.csvl` across sessions,
+so live/offline plots can include algorithms completed in earlier runs for the
+same maze. Use `--reset-live-progress` to truncate the file for a clean,
+session-only stream.
 
 Start live monitor:
 
@@ -516,6 +524,10 @@ This script can aggregate runs from multiple algorithms and plot all of them in 
 - mean true capture snapshot percentage curve per algorithm (+/- std band)
 - mean reward curve per algorithm plus per-term mean reward curves
 - epsilon overlay when `iql` is included
+
+The offline plot now also includes a fourth axis dedicated to terminal reward
+terms only (`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`).
+Average reward and non-terminal reward terms remain on the reward axis.
 
 Examples:
 

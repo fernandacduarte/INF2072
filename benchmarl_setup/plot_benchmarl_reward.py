@@ -18,6 +18,11 @@ from algorithm_utils import (
 from device_utils import device_label
 
 
+# Fixed output resolution for benchmark plots: 1280x720 (720p).
+_FIGURE_DPI = 100
+_FIGURE_SIZE_INCHES_720P = (12.8, 7.2)
+
+
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
@@ -224,6 +229,15 @@ def _reward_term_style(term_name: str) -> tuple[str, str]:
     linestyles = ["--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2)), (0, (1, 1))]
     stable_index = sum(ord(ch) for ch in term_name)
     return markers[stable_index % len(markers)], linestyles[stable_index % len(linestyles)]
+
+
+def _is_terminal_reward_term(term_name: str) -> bool:
+    normalized = str(term_name).strip().lower()
+    return normalized in {
+        "get_pacman",
+        "pacman_timeout_win",
+        "pacman_win_pellets",
+    }
 
 
 def _resolve_epsilon_from_cli_or_meta(
@@ -654,10 +668,17 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    fig, ax = plt.subplots(
+        1,
+        1,
+        figsize=_FIGURE_SIZE_INCHES_720P,
+        dpi=_FIGURE_DPI,
+    )
     ax_reward = ax.twinx()
     ax_eps = ax.twinx()
-    ax_eps.spines["right"].set_position(("outward", 55))
+    ax_terminal = ax.twinx()
+    ax_terminal.spines["right"].set_position(("outward", 55))
+    ax_eps.spines["right"].set_position(("outward", 110))
 
     for algorithm, payload in per_algorithm.items():
         frames = payload["frames"]
@@ -728,7 +749,8 @@ def main() -> None:
 
             marker, term_linestyle = _reward_term_style(term_name)
 
-            ax_reward.plot(
+            target_axis = ax_terminal if _is_terminal_reward_term(term_name) else ax_reward
+            target_axis.plot(
                 term_frames,
                 term_mean,
                 label=f"{algorithm.upper()} reward::{term_name}",
@@ -764,8 +786,10 @@ def main() -> None:
             linestyle="-",
             label="Epsilon",
         )
-    ax_reward.set_ylabel("Average Reward", color="dimgray")
+    ax_reward.set_ylabel("Average and non-terminal rewards", color="dimgray")
     ax_reward.tick_params(axis="y", colors="dimgray")
+    ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
+    ax_terminal.tick_params(axis="y", colors="#8c564b")
     ax_eps.set_ylabel("Epsilon", color="black")
     ax_eps.set_ylim(0.0, 1.05)
     ax_eps.tick_params(axis="y", colors="black")
@@ -779,13 +803,16 @@ def main() -> None:
     reward_handles, reward_labels = ax_reward.get_legend_handles_labels()
     handles += reward_handles
     labels += reward_labels
+    terminal_handles, terminal_labels = ax_terminal.get_legend_handles_labels()
+    handles += terminal_handles
+    labels += terminal_labels
     eps_handles, eps_labels = ax_eps.get_legend_handles_labels()
     handles += eps_handles
     labels += eps_labels
     ax.legend(handles, labels)
 
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    fig.savefig(args.out, dpi=_FIGURE_DPI)
 
     print(f"Algorithms: {', '.join(sorted(per_algorithm.keys()))}")
     print(
