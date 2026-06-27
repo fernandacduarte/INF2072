@@ -10,16 +10,18 @@
 PYTHON ?= .venv/Scripts/python.exe
 DELAY  ?= 0.12
 SEED   ?= 11
-MAZE   ?= pinklike
+MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
-ALGOS   ?= iql,vdn,qmixlocal,qmixglobal
-SEEDS   ?= 0,1,2,3,4
-FRAMES  ?= 200000
+ALGOS   ?= qmixglobal
+SEEDS   ?= 0
+FRAMES  ?= 100000
+CHECKPOINT_INTERVAL ?= 5000
+DEVICE  ?= cuda
+REWARD_ID ?= capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 LEARNER ?= qmixglobal
-DEVICE  ?= cpu
-REWARDS ?= custom_environment.env.rewards.current:CurrentTeamReward
-REWARD_ID ?= current
+CURRICULUM ?= easy-medium-hard
+CURRICULUM_MAX_FRAMES ?= 100000
 
 .DEFAULT_GOAL := help
 
@@ -50,7 +52,7 @@ eval-latest: ## Watch trained ghosts (latest checkpoint) in a Pygame window
 	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select latest --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
-	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-classes $(REWARDS) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE)
+	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-ids $(REWARD_ID) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE) --checkpoint-interval $(CHECKPOINT_INTERVAL) --pacman-curriculum $(CURRICULUM) --pacman-curriculum-max-frames $(CURRICULUM_MAX_FRAMES)
 
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)

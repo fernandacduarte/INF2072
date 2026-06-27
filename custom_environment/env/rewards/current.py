@@ -684,3 +684,87 @@ class CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction(CaptureV0Re
         return reverse_action_by_action.get(previous_action) == current_action
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureV0ImproveStrategiesWeights:
+    get_pacman: float = 100.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    timestep: float = -0.01
+    pacman_legal_moves_delta: float = 0.2
+    reverse_action: float = -0.02
+
+
+class CaptureV0ImproveStrategies(CaptureV0Reward):
+    """Working copy of the reverse-action variant for iterating on strategy shaping."""
+
+    strategy_id = "capture_v0_improve_strategies"
+
+    def __init__(
+        self,
+        weights: CaptureV0ImproveStrategiesWeights | None = None,
+    ) -> None:
+        self.weights = weights or CaptureV0ImproveStrategiesWeights()
+        self._last_action_by_ghost: dict[str, int | None] = {}
+
+    def reset(self, initial_context: RewardContext) -> None:
+        self._last_action_by_ghost = {
+            ghost.ghost_id: ghost.action for ghost in initial_context.ghosts
+        }
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        if context.pacman_visible:
+            previous_legal_moves = self._count_pacman_legal_moves(
+                context.pacman_previous_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            current_legal_moves = self._count_pacman_legal_moves(
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            legal_delta = float(previous_legal_moves - current_legal_moves)
+            if legal_delta != 0.0:
+                terms.append(
+                    RewardTerm(
+                        "pacman_legal_moves_delta",
+                        w.pacman_legal_moves_delta * legal_delta,
+                    )
+                )
+
+        for ghost in context.ghosts:
+            previous_action = self._last_action_by_ghost.get(ghost.ghost_id)
+            current_action = ghost.action
+            if (
+                previous_action is not None
+                and current_action is not None
+                and self._is_reverse_action(previous_action, current_action)
+            ):
+                terms.append(RewardTerm("reverse_action", w.reverse_action))
+            self._last_action_by_ghost[ghost.ghost_id] = current_action
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))
+
+    @staticmethod
+    def _is_reverse_action(previous_action: int, current_action: int) -> bool:
+        reverse_action_by_action = {
+            0: 1,  # RIGHT -> LEFT
+            1: 0,  # LEFT -> RIGHT
+            2: 3,  # UP -> DOWN
+            3: 2,  # DOWN -> UP
+        }
+        return reverse_action_by_action.get(previous_action) == current_action
+
+
+
