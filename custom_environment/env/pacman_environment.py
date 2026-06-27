@@ -57,7 +57,10 @@ from collections import deque
 # 3 -> 3x3, 5 -> 5x5, 7 -> 7x7. Change this single value to resize the ghosts'
 # local observation for all trainings. Off-grid cells (near the map border) are
 # padded with WALL, so the maze never needs to change when this value changes.
-GHOST_VIEW_SIZE = 5
+# 11 -> 11x11 = radius 5: ghosts see 5 cells in every direction (10 cells across),
+# giving a wider field of view to make pursuit/coordination learnable on the 20x20
+# maze. Must stay an odd integer. Per-run override: --ghost-view-size.
+GHOST_VIEW_SIZE = 11
 
 
 # Main environment class following PettingZoo parallel interface.
