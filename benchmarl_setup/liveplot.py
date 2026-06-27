@@ -41,6 +41,35 @@ def _is_terminal_reward_term(term_name: str) -> bool:
     }
 
 
+def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
+    curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
+    if curriculum_mode != "easy-medium-hard":
+        return []
+
+    max_frames_raw = (meta.get("pacman_curriculum_max_frames") or "").strip()
+    if not max_frames_raw:
+        return []
+
+    try:
+        curriculum_max_frames = float(max_frames_raw)
+    except ValueError:
+        return []
+
+    if curriculum_max_frames <= 0.0:
+        return []
+
+    offset_raw = (meta.get("pacman_curriculum_frame_offset") or "0").strip()
+    try:
+        frame_offset = float(offset_raw)
+    except ValueError:
+        frame_offset = 0.0
+
+    return [
+        (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
+        (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
+    ]
+
+
 def _parse_progress_file(
     progress_file: Path,
 ) -> tuple[
@@ -298,6 +327,7 @@ class LiveComparisonPlotter:
         epsilon_end: float,
         epsilon_anneal_ratio: float,
         show_epsilon_overlay: bool,
+        show_individual_reward_terms: bool,
         reward_terms_filter: set[str] | None,
     ) -> None:
         self.algorithms = algorithms
@@ -308,6 +338,7 @@ class LiveComparisonPlotter:
         self.epsilon_end = float(epsilon_end)
         self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
         self.show_epsilon_overlay = bool(show_epsilon_overlay)
+        self.show_individual_reward_terms = bool(show_individual_reward_terms)
         self.reward_terms_filter = reward_terms_filter
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
@@ -323,6 +354,8 @@ class LiveComparisonPlotter:
         self.fills_capture: dict[str, any] = {}
         self.marker_scatter_capture: dict[str, any] = {}
         self.epsilon_line = None
+        self.curriculum_lines: list[any] = []
+        self.curriculum_texts: list[any] = []
 
         self.color_map = {
             "iql": "#1f77b4",
@@ -348,13 +381,22 @@ class LiveComparisonPlotter:
         # Keep a small negative margin so zero-valued capture lines/markers are visible above the axis frame.
         self.ax.set_ylim(-1.0, 100.0)
         self.ax.grid(True, alpha=0.3)
-        self.ax_reward.set_ylabel("Average and non-terminal rewards", color="dimgray")
+        reward_axis_label = (
+            "Average and non-terminal rewards"
+            if self.show_individual_reward_terms
+            else "Average team reward per step"
+        )
+        self.ax_reward.set_ylabel(reward_axis_label, color="dimgray")
         self.ax_reward.tick_params(axis="y", colors="dimgray")
         self.ax_eps.set_ylabel("Epsilon", color="black")
         self.ax_eps.set_ylim(0.0, 1.05)
         self.ax_eps.tick_params(axis="y", colors="black")
         self.ax_terminal.set_ylabel("Terminal Reward", color="#8c564b")
         self.ax_terminal.tick_params(axis="y", colors="#8c564b")
+        if not self.show_individual_reward_terms:
+            self.ax_terminal.spines["right"].set_visible(False)
+            self.ax_terminal.tick_params(axis="y", right=False, labelright=False)
+            self.ax_terminal.set_ylabel("")
         plt.ion()
         plt.show(block=False)
 
@@ -398,6 +440,45 @@ class LiveComparisonPlotter:
             )
         else:
             self.epsilon_line.set_data(x, y)
+
+    def _update_curriculum_markers(self, meta: dict[str, str], max_display_frame: float) -> None:
+        for line in self.curriculum_lines:
+            line.remove()
+        self.curriculum_lines.clear()
+        for text in self.curriculum_texts:
+            text.remove()
+        self.curriculum_texts.clear()
+
+        if max_display_frame <= 0.0:
+            return
+
+        transitions = _curriculum_transition_frames_from_meta(meta)
+        for frame, label in transitions:
+            if frame < 0.0 or frame > max_display_frame:
+                continue
+
+            marker_line = self.ax.axvline(
+                x=frame,
+                color="#4d4d4d",
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=2,
+            )
+            marker_text = self.ax.text(
+                frame,
+                99.0,
+                label,
+                rotation=90,
+                va="top",
+                ha="right",
+                color="#4d4d4d",
+                fontsize=8,
+                alpha=0.9,
+                zorder=2,
+            )
+            self.curriculum_lines.append(marker_line)
+            self.curriculum_texts.append(marker_text)
 
     def set_epsilon_schedule(
         self,
@@ -528,71 +609,72 @@ class LiveComparisonPlotter:
                     stale_reward = self.lines_reward.pop(series_key)
                     stale_reward.remove()
 
-                by_term_for_device = term_data.get(algorithm, {}).get(device_key, {})
-                all_term_names: set[str] = set()
-                for run_term_map in by_term_for_device.values():
-                    all_term_names.update(run_term_map.keys())
+                if self.show_individual_reward_terms:
+                    by_term_for_device = term_data.get(algorithm, {}).get(device_key, {})
+                    all_term_names: set[str] = set()
+                    for run_term_map in by_term_for_device.values():
+                        all_term_names.update(run_term_map.keys())
 
-                for term_name in sorted(all_term_names):
-                    if self.reward_terms_filter is not None and term_name not in self.reward_terms_filter:
-                        continue
+                    for term_name in sorted(all_term_names):
+                        if self.reward_terms_filter is not None and term_name not in self.reward_terms_filter:
+                            continue
 
-                    term_run_series: dict[str, dict[int, float]] = {}
-                    for run_id, run_term_map in by_term_for_device.items():
-                        step_map = run_term_map.get(term_name)
-                        if step_map:
-                            term_run_series[run_id] = step_map
+                        term_run_series: dict[str, dict[int, float]] = {}
+                        for run_id, run_term_map in by_term_for_device.items():
+                            step_map = run_term_map.get(term_name)
+                            if step_map:
+                                term_run_series[run_id] = step_map
 
-                    aggregated_term = _aggregate_term_runs(term_run_series, self.window)
-                    term_series_key = f"{series_key}::reward::{term_name}"
-                    if aggregated_term is None:
-                        stale = self.lines_reward_terms.pop(term_series_key, None)
-                        if stale is not None:
-                            stale.remove()
-                        continue
+                        aggregated_term = _aggregate_term_runs(term_run_series, self.window)
+                        term_series_key = f"{series_key}::reward::{term_name}"
+                        if aggregated_term is None:
+                            stale = self.lines_reward_terms.pop(term_series_key, None)
+                            if stale is not None:
+                                stale.remove()
+                            continue
 
-                    term_mean, _term_std = aggregated_term
-                    term_frames = frames[: len(term_mean)]
-                    if np.all(np.isnan(term_mean)):
-                        stale = self.lines_reward_terms.pop(term_series_key, None)
-                        if stale is not None:
-                            stale.remove()
-                        stale_terminal = self.lines_terminal_terms.pop(term_series_key, None)
-                        if stale_terminal is not None:
-                            stale_terminal.remove()
-                        continue
+                        term_mean, _term_std = aggregated_term
+                        term_frames = frames[: len(term_mean)]
+                        if np.all(np.isnan(term_mean)):
+                            stale = self.lines_reward_terms.pop(term_series_key, None)
+                            if stale is not None:
+                                stale.remove()
+                            stale_terminal = self.lines_terminal_terms.pop(term_series_key, None)
+                            if stale_terminal is not None:
+                                stale_terminal.remove()
+                            continue
 
-                    legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
-                    marker, term_linestyle = self._reward_term_style(term_name)
-                    is_terminal_term = _is_terminal_reward_term(term_name)
-                    target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
-                    other_lines = self.lines_reward_terms if is_terminal_term else self.lines_terminal_terms
-                    stale_other = other_lines.pop(term_series_key, None)
-                    if stale_other is not None:
-                        stale_other.remove()
+                        legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
+                        marker, term_linestyle = self._reward_term_style(term_name)
+                        is_terminal_term = _is_terminal_reward_term(term_name)
+                        target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
+                        other_lines = self.lines_reward_terms if is_terminal_term else self.lines_terminal_terms
+                        stale_other = other_lines.pop(term_series_key, None)
+                        if stale_other is not None:
+                            stale_other.remove()
 
-                    target_axis = self.ax_terminal if is_terminal_term else self.ax_reward
-                    if term_series_key not in target_lines:
-                        (term_line,) = target_axis.plot(
-                            term_frames,
-                            term_mean,
-                            color=color,
-                            linestyle=term_linestyle,
-                            linewidth=1.2,
-                            alpha=0.8,
-                            marker=marker,
-                            markersize=4,
-                            markevery=max(1, len(term_frames) // 20),
-                            label=legend_term,
-                        )
-                        target_lines[term_series_key] = term_line
-                    else:
-                        term_line = target_lines[term_series_key]
-                        term_line.set_data(term_frames, term_mean)
-                        term_line.set_label(legend_term)
-                        term_line.set_linestyle(term_linestyle)
-                        term_line.set_marker(marker)
-                        term_line.set_markevery(max(1, len(term_frames) // 20))
+                        target_axis = self.ax_terminal if is_terminal_term else self.ax_reward
+                        if term_series_key not in target_lines:
+                            (term_line,) = target_axis.plot(
+                                term_frames,
+                                term_mean,
+                                color=color,
+                                linestyle=term_linestyle,
+                                linewidth=1.2,
+                                alpha=0.8,
+                                marker=marker,
+                                markersize=4,
+                                markevery=max(1, len(term_frames) // 20),
+                                label=legend_term,
+                            )
+                            target_lines[term_series_key] = term_line
+                        else:
+                            term_line = target_lines[term_series_key]
+                            term_line.set_data(term_frames, term_mean)
+                            term_line.set_label(legend_term)
+                            term_line.set_linestyle(term_linestyle)
+                            term_line.set_marker(marker)
+                            term_line.set_markevery(max(1, len(term_frames) // 20))
 
         stale_keys = [key for key in self.lines_capture.keys() if key not in active_keys]
         for key in stale_keys:
@@ -625,6 +707,7 @@ class LiveComparisonPlotter:
         # Keep legend current with active algorithms.
         show_epsilon = "iql" in self.algorithms and self.show_epsilon_overlay
         self._update_epsilon_curve(max_display_frame, show=show_epsilon)
+        self._update_curriculum_markers(meta, max_display_frame)
 
         handles, labels = self.ax.get_legend_handles_labels()
         reward_handles, reward_labels = self.ax_reward.get_legend_handles_labels()
@@ -733,6 +816,11 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help="Comma-separated reward terms to display (default: all).",
     )
+    parser.add_argument(
+        "--individual-reward-plotting",
+        action="store_true",
+        help="Enable plotting individual reward terms (disabled by default).",
+    )
     return parser.parse_args()
 
 
@@ -761,14 +849,17 @@ def main() -> None:
         raise ValueError("--window must be >= 1")
 
     reward_terms_filter: set[str] | None
-    if args.reward_terms.strip().lower() == "all":
-        reward_terms_filter = None
+    if args.individual_reward_plotting:
+        if args.reward_terms.strip().lower() == "all":
+            reward_terms_filter = None
+        else:
+            reward_terms_filter = {
+                item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
+            }
+            if not reward_terms_filter:
+                raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
     else:
-        reward_terms_filter = {
-            item.strip().lower() for item in args.reward_terms.split(",") if item.strip()
-        }
-        if not reward_terms_filter:
-            raise ValueError("--reward-terms must be 'all' or a non-empty comma-separated list.")
+        reward_terms_filter = set()
 
     show_epsilon = "iql" in algorithms
     waiting_for_meta = False
@@ -815,6 +906,7 @@ def main() -> None:
         epsilon_end=epsilon_end,
         epsilon_anneal_ratio=epsilon_anneal_ratio,
         show_epsilon_overlay=show_epsilon and not waiting_for_meta,
+        show_individual_reward_terms=args.individual_reward_plotting,
         reward_terms_filter=reward_terms_filter,
     )
     try:

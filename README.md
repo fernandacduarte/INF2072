@@ -445,17 +445,21 @@ Training now reports live progress to:
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
 - y1: rolling true capture snapshot percentage (mean ± std)
-- y2: rolling average reward plus rolling averages for individual reward terms
+- y2: rolling average reward (plus rolling averages for individual reward terms if --individual-reward-plotting is passed).
 - y3: epsilon schedule overlay
 
 Liveplot now adds a fourth axis dedicated to terminal reward terms only
 (`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`). Non-terminal
-reward terms and average reward remain on y2.
+reward terms and average reward remain on y2 when individual reward plotting is enabled.
+When benchmark metadata indicates `--pacman-curriculum easy-medium-hard`, liveplot also draws
+vertical markers at the frame boundaries for `easy->medium` and `medium->hard`.
 
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 When `iql` is included, the epsilon overlay is resolved from benchmark metadata
 written to `live_progress.csvl` (for example:
 `#meta,max_frames=...,epsilon_init=...,epsilon_end=...,epsilon_anneal_ratio=...`).
+Curriculum markers use the same metadata stream (`pacman_curriculum`,
+`pacman_curriculum_max_frames`, `pacman_curriculum_frame_offset`).
 There are no built-in epsilon fallback defaults in plotting anymore.
 If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
 
@@ -471,9 +475,10 @@ when available from deterministic `eval_report.py` snapshots using
 breakdown terms such as `timestep`, `reverse_action`, and
 `pacman_legal_moves_delta`).
 The metadata header includes `reward_terms=...`, and both live/offline plotters
-consume these columns to draw term-specific averages alongside total reward.
-`--reward-terms` is optional and only filters what is displayed; default is
-`all` (show every emitted breakdown key).
+can consume these columns to draw term-specific averages alongside total reward.
+Individual reward-term plotting is disabled by default; enable it with
+`--individual-reward-plotting`. `--reward-terms` filters terms only when
+individual plotting is enabled.
 
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
@@ -508,8 +513,8 @@ Useful options:
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
-py -3.11 benchmarl_setup\liveplot.py --reward-terms all
-py -3.11 benchmarl_setup\liveplot.py --reward-terms timestep,potential_shaping
+py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms all
+py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms timestep,potential_shaping
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
 
@@ -522,12 +527,15 @@ Use:
 This script can aggregate runs from multiple algorithms and plot all of them in the same figure with three y-axes:
 
 - mean true capture snapshot percentage curve per algorithm (+/- std band)
-- mean reward curve per algorithm plus per-term mean reward curves
+- mean reward curve per algorithm
 - epsilon overlay when `iql` is included
 
 The offline plot now also includes a fourth axis dedicated to terminal reward
 terms only (`get_pacman`, `pacman_timeout_win`, `pacman_win_pellets`).
-Average reward and non-terminal reward terms remain on the reward axis.
+Average reward and non-terminal reward terms remain on the reward axis when
+individual reward plotting is enabled.
+When progress metadata indicates `--pacman-curriculum easy-medium-hard`, the
+offline plot also draws vertical `easy->medium` and `medium->hard` transition markers.
 
 Examples:
 
@@ -543,7 +551,7 @@ Useful options:
 --reward-id current --device auto|cpu|cuda|cuda:0
 --progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
 --epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
---reward-terms all|timestep,potential_shaping
+--individual-reward-plotting --reward-terms all|timestep,potential_shaping
 --maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
@@ -559,8 +567,9 @@ Capture metric note: this plot reads capture values from `live_progress.csvl`.
 For current benchmark runs, these capture points are true deterministic eval
 snapshots (with non-evaluated steps as `NaN`).
 
-Reward terms note: use `--reward-terms all` (default) to show all available
-term averages, or provide a comma list to focus on selected terms.
+Reward terms note: individual reward-term plotting is disabled by default.
+Enable it with `--individual-reward-plotting`; then use `--reward-terms all`
+or provide a comma list to focus on selected terms.
 
 ### Plot CPU vs GPU Speedup and Rewards (From Summary CSV)
 

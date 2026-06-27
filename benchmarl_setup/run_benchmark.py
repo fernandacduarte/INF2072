@@ -504,6 +504,9 @@ class ProgressReporter:
         interval_seconds: float,
         max_frames: int,
         maze: str,
+        pacman_curriculum: str,
+        pacman_curriculum_max_frames: int,
+        pacman_curriculum_frame_offset: int,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
@@ -517,6 +520,9 @@ class ProgressReporter:
         self.interval_seconds = max(0.2, interval_seconds)
         self.max_frames = int(max_frames)
         self.maze = maze
+        self.pacman_curriculum = str(pacman_curriculum).strip().lower()
+        self.pacman_curriculum_max_frames = int(pacman_curriculum_max_frames)
+        self.pacman_curriculum_frame_offset = int(pacman_curriculum_frame_offset)
         self.epsilon_algorithm = normalize_algorithm(epsilon_algorithm)
         self.epsilon_schedule = training_exploration_schedule(
             self.epsilon_algorithm,
@@ -587,6 +593,9 @@ class ProgressReporter:
             f"epsilon_anneal_frames={self.epsilon_schedule['epsilon_anneal_frames']},"
             f"epsilon_algorithm={self.epsilon_algorithm},"
             f"maze={self.maze},"
+            f"pacman_curriculum={self.pacman_curriculum},"
+            f"pacman_curriculum_max_frames={self.pacman_curriculum_max_frames},"
+            f"pacman_curriculum_frame_offset={self.pacman_curriculum_frame_offset},"
             "metric=capture_pct_eval,"
             "reward=collection_reward_reward_mean,"
             f"reward_terms={self._reward_terms_metadata_value()}\n"
@@ -1124,6 +1133,9 @@ def main() -> None:
             interval_seconds=args.report_interval_seconds,
             max_frames=args.max_frames,
             maze=args.maze,
+            pacman_curriculum=args.pacman_curriculum,
+            pacman_curriculum_max_frames=args.pacman_curriculum_max_frames,
+            pacman_curriculum_frame_offset=0,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
