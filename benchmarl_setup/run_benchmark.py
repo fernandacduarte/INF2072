@@ -1247,7 +1247,7 @@ def main() -> None:
         tail_window=args.tail_window,
         out=summary_out,
         devices=[cfg["label"] for cfg in device_configs],
-        jobs_path=jobs_out,
+        jobs_paths=[jobs_out],
     )
 
 
