@@ -135,3 +135,30 @@ Because PBRS is *policy-invariant by construction*, the claim is **not** "higher
 **R6 (MEDIUM) — Tune and document α (start 0.5–0.9); ablate `d1+0.5·d2` vs `min`-distance** to substantiate the coordination thesis and avoid the lazy-second-ghost pattern.
 
 **R7 (LOW) — Consolidate reward code.** Delete the dead commented-out PBRS blocks (current.py:489–576); ensure the active variant contains exactly the terms claimed in the report, with α/γ as named documented weights.
+
+---
+
+## Follow-up — 2026-06-28 | PBRS reward-farming loophole found in eval
+
+### Q2: After training `capture_v0_pure_potential_shaping`, eval shows ghosts moving in circles even with Pacman visible. Why?
+
+**Short answer:** The γ-correct PBRS I shipped (R1–R4) had a **reward-farming loophole** that the policy learned to exploit. I ran a headless 80-step eval (`--render-mode ascii --ascii-step-json`) on the latest PBRS checkpoint (`b1eedebe`, 3 ghosts). Findings:
+
+- **No capture in 80 steps, yet Pacman was visible 60/80 (75%)** and sat *stationary* 3 cells from ghost_3 for 40+ steps. Ghosts never closed in.
+- **Every ghost collapsed to a 2-cell oscillation** (ghost_1: (7,1)↔(7,2) 40/40; ghost_3: (8,12)↔(9,12) 38/36).
+- ghost_3's up/down cycle yielded `potential_shaping` of **−1.995 then +2.184** repeatedly → **+0.19 net per cycle**. Cumulative `potential_shaping = +17.50` over 80 steps with **zero captures** (×3 ghosts = the +50 episode reward).
+
+**Root cause (two compounding bugs in the shipped variant):**
+1. **Discounted telescoping subsidizes camping.** With `F = γΦ(s′) − Φ(s)`, γ=0.99, and `Φ = −α·dist ≤ 0`, a round trip nets `(1−γ)·(−Φ) > 0`. The γ factor added for "policy invariance" *created* a per-cycle camping subsidy because Φ is always negative.
+2. **`d1 + 0.5·d2` (two nearest ghosts) is discontinuous.** As ghosts bob, the nearest-ghost identity swaps, producing large non-cancelling per-step potential swings (±2) instead of clean telescoping.
+
+Capturing would *end* the lucrative shaping stream and is hard against an evading hard-mode Pacman, so the greedy policy settled on a **herd-and-camp** local optimum. This is the PBRS truncation / non-zero-potential farming pathology (research-reviewer's caveat) made concrete; more training exploits it *more*.
+
+**Fix shipped** (commit `256b761`): exact **γ=1 telescoping** `F = Φ(s′) − Φ(s)` over the smooth **min** ghost distance (`_minimum_distance`). With γ=1 the cumulative shaping = `Φ(end) − Φ(start)` is path-independent, so any in-place oscillation nets exactly 0; min-distance removes the nearest-pair discontinuity; `timestep` strengthened to **−0.05** so camping is strictly negative. **Verified:** an 80-step camp now nets **−3.30** (was +50.1). Regression test `test_pure_pbrs_in_place_oscillation_cannot_be_farmed` added. This supersedes R2 (the γ factor) and the `d1+0.5·d2` choice from R1/R6.
+
+### Follow-up Recommendations Summary
+
+**FR1 (HIGH) — Retrain with the fixed reward.** The fix only affects new runs; the `b1eedebe`/`a04cc3d7` checkpoints carry the farmed policy. Retrain `capture_v0_pure_potential_shaping` (≥300k frames) and re-eval.
+**FR2 (HIGH, supersedes R2/R1-metric) — Use γ=1 exact telescoping over min-distance.** Done in `256b761`. The discounted form is unsafe here because `Φ ≤ 0`.
+**FR3 (MEDIUM) — Treat timeout as truncation/bootstrap.** The env reports timeout as `terminations=True` (plan-000025 deferred concern); bootstrapping would further discourage banking shaping over capture. Still open.
+**FR4 (MEDIUM, reaffirms earlier) — Add a *relative* bearing to last-seen Pacman to the ghost observation.** Even farm-proof, the actor cannot pursue an unseen Pacman from its absolute coordinate alone. Still the key lever for off-screen pursuit. Still open.
