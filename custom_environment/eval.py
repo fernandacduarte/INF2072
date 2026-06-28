@@ -230,6 +230,85 @@ def _capture_rate_for_run_checkpoint(
     return float(snapshot["capture_rate"])
 
 
+def _extract_seed_from_run_dir(run_dir: Path) -> int | None:
+    candidates = [
+        run_dir / run_dir.name / "texts" / "hparams0.txt",
+        run_dir / "texts" / "hparams0.txt",
+    ]
+    for hparams_path in candidates:
+        if not hparams_path.exists():
+            continue
+        try:
+            for raw_line in hparams_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw_line.strip()
+                if not line.startswith("seed:"):
+                    continue
+                _, _, tail = line.partition(":")
+                value = tail.strip()
+                if not value:
+                    return None
+                return int(value)
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def _format_optional_float(value: float | None, digits: int = 4) -> str:
+    if value is None:
+        return "n/a"
+    if value != value:
+        return "n/a"
+    return f"{value:.{digits}f}"
+
+
+def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> None:
+    run_dir = checkpoint_path.parent.parent
+    seed = _extract_seed_from_run_dir(run_dir)
+
+    final_reward: float | None = None
+    tail_mean_reward: float | None = None
+    best_reward: float | None = None
+    scalars_dir = _scalars_dir_for_run(run_dir)
+    if scalars_dir is not None:
+        reward_file = scalars_dir / "collection_reward_reward_mean.csv"
+        if reward_file.exists():
+            rewards = _read_scalar_values(reward_file)
+            if rewards:
+                final_reward = rewards[-1]
+                window = min(tail_window, len(rewards))
+                tail_mean_reward = sum(rewards[-window:]) / float(window)
+                best_reward = max(rewards)
+
+    capture_pct: float | None = None
+    checkpoint_match = False
+    checkpoint_match_mode = "none"
+    snapshot = _capture_snapshot_for_run(run_dir)
+    if snapshot is not None and isinstance(snapshot.get("checkpoint_path"), Path):
+        checkpoint_match, checkpoint_match_mode = _checkpoint_matches_expected(
+            snapshot["checkpoint_path"],
+            checkpoint_path,
+        )
+        if checkpoint_match:
+            capture_pct = 100.0 * float(snapshot["capture_rate"])
+
+    print("Selected seed stats (human mode):")
+    print(
+        f"  run={run_dir.name} seed={seed if seed is not None else 'n/a'} checkpoint={checkpoint_path.name}"
+    )
+    print(
+        "  training_reward="
+        f"final={_format_optional_float(final_reward)} "
+        f"tail{tail_window}={_format_optional_float(tail_mean_reward)} "
+        f"best={_format_optional_float(best_reward)}"
+    )
+    print(
+        "  capture_snapshot="
+        f"matched={checkpoint_match} "
+        f"match_mode={checkpoint_match_mode} "
+        f"capture_pct={_format_optional_float(capture_pct, digits=2)}"
+    )
+
+
 def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
     return candidate_run_dirs(runs_root, learner)
 
@@ -738,6 +817,8 @@ def run_episode(
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
     print(f"Runs root for checkpoint discovery: {runs_root_for_device}")
+    if render_mode == "human":
+        _print_selected_seed_stats(checkpoint_path)
 
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:

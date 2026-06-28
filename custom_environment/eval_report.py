@@ -416,6 +416,7 @@ def _evaluate_checkpoint(
     device: str,
     expected_reward_id: str | None,
     allow_non_hard_checkpoint: bool,
+    curriculum_frame_offset: int,
 ) -> tuple[dict[str, ReportValue], list[EpisodeResult]]:
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -436,10 +437,17 @@ def _evaluate_checkpoint(
     raw_env = _unwrap_pacman_env(env)
     raw_env.shared_memory_in_observation_enabled = False
     raw_env.render_mode = None
+    if curriculum_frame_offset > 0:
+        raw_env.pacman_curriculum_frame_offset = int(curriculum_frame_offset)
+        if hasattr(raw_env, "_curriculum_global_step"):
+            raw_env._curriculum_global_step = 0
+        if hasattr(raw_env, "_build_pacman_policy") and callable(raw_env._build_pacman_policy):
+            raw_env._pacman_policy = raw_env._build_pacman_policy()
     if allow_non_hard_checkpoint:
         print(
             "Pacman eval_report mode: keeping checkpoint-defined difficulty/curriculum "
-            "(--allow-non-hard-checkpoint)."
+            "(--allow-non-hard-checkpoint). "
+            f"curriculum_frame_offset={curriculum_frame_offset}"
         )
     else:
         _force_hard_pacman_for_eval(raw_env, checkpoint_path)
@@ -697,6 +705,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                 device=device,
                 expected_reward_id=args.reward_id,
                 allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
+                curriculum_frame_offset=args.curriculum_frame_offset,
             )
             row["train_seed"] = "" if train_seed is None else train_seed
             row["run_dir"] = run_dir.name
@@ -777,6 +786,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             device=device,
             expected_reward_id=reward_id,
             allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
+            curriculum_frame_offset=args.curriculum_frame_offset,
         )
         row["train_seed"] = train_seed
         row["run_dir"] = run_dir_name
@@ -912,6 +922,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Disable default hard-forcing in report evaluation and keep each checkpoint's "
             "original Pacman difficulty/curriculum behavior."
+        ),
+    )
+    parser.add_argument(
+        "--curriculum-frame-offset",
+        type=int,
+        default=0,
+        help=(
+            "Absolute curriculum frame offset applied before evaluation episodes. "
+            "Use checkpoint frame to reconstruct checkpoint-stage curriculum in checkpoint-native eval."
         ),
     )
     return parser.parse_args()
