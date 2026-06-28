@@ -571,6 +571,7 @@ Useful options:
 ```bash
 py -3.11 benchmarl_setup\liveplot.py --interval 1.0 --window 30
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0 --window 30
+py -3.11 benchmarl_setup\liveplot.py --maze pinklike3 --algorithms iql,vdn --reward-ids capture_v0_pure_potential_shaping_pellets,capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms all
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms timestep,potential_shaping
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
@@ -783,6 +784,12 @@ Four-way comparison setup:
   `capture_v0_pure_potential_shaping` plus an extra shaping penalty
   `pacman_eats_pellet = -0.5 * pellets_eaten_this_step`.
 
+- `custom_environment.env.rewards.current:CaptureV0PurePotentialShapingPelletsFastCaptureBonus`
+  (`strategy_id = capture_v0_pure_potential_shaping_pellets_fast_capture_bonus`):
+  `capture_v0_pure_potential_shaping_pellets` plus
+  `fast_get_pacman_bonus = 20 * (1.0 - steps_elapsed / max_episode_steps)`
+  when Pacman is captured, to incentivize faster captures.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -884,6 +891,7 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id cur
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 ```
 
 </details>
@@ -912,6 +920,9 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_v0_pure_potential_shaping_pellets
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 ```
 
 </details>
@@ -971,6 +982,7 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --r
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0_pure_potential_shaping_pellets,capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 ```
 
 </details>
@@ -1004,6 +1016,10 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql \
   --seeds 0,1,2 \
   --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids capture_v0_pure_potential_shaping_pellets,capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 ```
 
 </details>

@@ -876,3 +876,35 @@ class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
                 ),
             )
         )
+
+
+class CaptureV0PurePotentialShapingPelletsFastCaptureBonus(
+    CaptureV0PurePotentialShapingPellets
+):
+    """Pellet-penalty PBRS variant with a time-decayed capture bonus."""
+
+    strategy_id = "capture_v0_pure_potential_shaping_pellets_fast_capture_bonus"
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        if not context.capture_happened:
+            return result
+
+        max_episode_steps = int(context.max_steps)
+        steps_elapsed = int(context.step_count)
+        if max_episode_steps <= 0:
+            bonus_multiplier = 0.0
+        else:
+            progress = float(steps_elapsed) / float(max_episode_steps)
+            progress = min(max(progress, 0.0), 1.0)
+            bonus_multiplier = 1.0 - progress
+
+        return RewardResult(
+            result.terms
+            + (
+                RewardTerm(
+                    "fast_get_pacman_bonus",
+                    20.0 * bonus_multiplier,
+                ),
+            )
+        )
