@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 import csv
 import os
 from pathlib import Path
@@ -163,7 +164,7 @@ def _parse_progress_data(
                 algorithm = token_parts[0] if token_parts else ""
                 if len(token_parts) >= 3:
                     # New format: algorithm@reward_id@device_label
-                    device_label_key = token_parts[-1]
+                    device_label_key = f"{token_parts[1]}@{token_parts[-1]}"
                 elif len(token_parts) == 2:
                     # Legacy format: algorithm@device_label
                     device_label_key = token_parts[1]
@@ -240,6 +241,81 @@ def _is_terminal_reward_term(term_name: str) -> bool:
     }
 
 
+def _split_reward_and_device(label: str) -> tuple[str | None, str]:
+    parts = [part.strip().lower() for part in str(label).split("@") if part.strip()]
+    if not parts:
+        return None, "default"
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[-1]
+
+
+def _device_matches_selector(label: str, selector: str) -> bool:
+    if selector == "auto":
+        return True
+    _reward_id, parsed_device = _split_reward_and_device(label)
+    return parsed_device == selector
+
+
+def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return hex_color
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return hex_color
+
+    clamp = lambda channel: max(0, min(255, int(round(channel * multiplier))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float] | None:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return None
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return None
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _rgb01_to_hex(rgb: tuple[float, float, float]) -> str:
+    r, g, b = rgb
+    clamp = lambda value: max(0, min(255, int(round(value * 255.0))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: list[str]) -> str:
+    if len(ordered_reward_ids) <= 1:
+        return base_color
+    rgb = _hex_to_rgb01(base_color)
+    if rgb is None:
+        return base_color
+    try:
+        idx = ordered_reward_ids.index(reward_id)
+    except ValueError:
+        idx = 0
+    count = len(ordered_reward_ids)
+    phase = 0.5 if count <= 1 else idx / float(count - 1)
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    hue_shift = -0.42 + 0.84 * phase
+    var_h = (h + hue_shift) % 1.0
+    sat_targets = (0.98, 0.42, 0.90, 0.50)
+    light_targets = (0.30, 0.72, 0.42, 0.62)
+    var_s = sat_targets[idx % len(sat_targets)]
+    var_l = light_targets[idx % len(light_targets)]
+
+    variant_rgb = colorsys.hls_to_rgb(var_h, var_l, var_s)
+    return _rgb01_to_hex(variant_rgb)
+
+
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
     curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
     if curriculum_mode != "easy-medium-hard":
@@ -267,6 +343,74 @@ def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[
         (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
         (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
     ]
+
+
+def _discover_progress_files(maze_runs_root: Path) -> list[Path]:
+    candidates = sorted(maze_runs_root.glob("live_progress*.csvl"))
+    if candidates:
+        return candidates
+
+    legacy_file = maze_runs_root / "live_progress.csvl"
+    if legacy_file.exists():
+        return [legacy_file]
+    return []
+
+
+def _merge_progress_payloads(
+    payloads: list[
+        tuple[
+            Path,
+            dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+            dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+            dict[str, str],
+        ]
+    ]
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+    dict[str, str],
+]:
+    merged_core: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = {}
+    merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = {}
+    merged_meta: dict[str, str] = {}
+
+    for file_path, core_data, term_data, meta in payloads:
+        source_name = file_path.stem
+        source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
+
+        for key, value in meta.items():
+            if key == "reward_terms":
+                existing = {
+                    item.strip().lower()
+                    for item in (merged_meta.get("reward_terms") or "").split("|")
+                    if item.strip()
+                }
+                incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
+                merged_meta["reward_terms"] = "|".join(sorted(existing | incoming))
+            elif key not in merged_meta:
+                merged_meta[key] = value
+
+        for algorithm, by_device in core_data.items():
+            algo_data = merged_core.setdefault(algorithm, {})
+            for device_key, by_run in by_device.items():
+                device_data = algo_data.setdefault(device_key, {})
+                for run_id, step_map in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    run_data = device_data.setdefault(merged_run_id, {})
+                    run_data.update(step_map)
+
+        for algorithm, by_device in term_data.items():
+            algo_term_data = merged_terms.setdefault(algorithm, {})
+            for device_key, by_run in by_device.items():
+                device_term_data = algo_term_data.setdefault(device_key, {})
+                for run_id, by_term in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    run_term_data = device_term_data.setdefault(merged_run_id, {})
+                    for term_name, step_map in by_term.items():
+                        term_step_map = run_term_data.setdefault(term_name, {})
+                        term_step_map.update(step_map)
+
+    return merged_core, merged_terms, merged_meta
 
 
 def _resolve_epsilon_from_cli_or_meta(
@@ -516,8 +660,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
-    progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
-    progress_data, progress_term_data = _parse_progress_data(progress_file)
+    progress_files = [args.progress_file] if args.progress_file is not None else _discover_progress_files(maze_runs_root)
+    if not progress_files:
+        expected_pattern = maze_runs_root / "live_progress*.csvl"
+        raise FileNotFoundError(f"No live progress files found for pattern: {expected_pattern}")
+
+    payloads = [
+        (path, *_parse_progress_data(path), _parse_progress_meta(path))
+        for path in progress_files
+    ]
+    progress_data, progress_term_data, progress_meta = _merge_progress_payloads(payloads)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():
@@ -574,7 +726,6 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
 
-    progress_meta = _parse_progress_meta(progress_file)
     epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
     epsilon_algorithm = (
         normalize_algorithm(epsilon_algorithm_raw)
@@ -644,15 +795,18 @@ def main() -> None:
         by_device = progress_data.get(algorithm, {})
         if not by_device:
             print(
-                f"Warning: no progress data found for algorithm={algorithm} in {progress_file}"
+                f"Warning: no progress data found for algorithm={algorithm} in merged progress files."
             )
             continue
 
         if requested_device == "auto":
             selected_devices = sorted(by_device.keys())
         else:
-            selected_label = device_label(requested_device)
-            selected_devices = [selected_label] if selected_label in by_device else []
+            selected_devices = [
+                key
+                for key in sorted(by_device.keys())
+                if _device_matches_selector(key, requested_device)
+            ]
 
         if not selected_devices:
             print(
@@ -664,6 +818,13 @@ def main() -> None:
         run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
         run_terms: dict[str, dict[str, dict[int, float]]] = {}
         used_run_dirs: list[str] = []
+        reward_ids = {
+            reward_id
+            for device_key in selected_devices
+            for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
+            if reward_id is not None
+        }
+        ordered_reward_ids = sorted(reward_ids)
 
         for device_key in selected_devices:
             for run_id, step_map in by_device.get(device_key, {}).items():
@@ -679,11 +840,18 @@ def main() -> None:
         if aggregated is None:
             print(
                 "Warning: no true capture snapshots found for algorithm="
-                f"{algorithm} in {progress_file}."
+                f"{algorithm} in merged progress files."
             )
             continue
 
         frames, capture_mean, capture_std, reward_mean, reward_std, captures_mat, n_runs = aggregated
+
+        series_label = algorithm.upper()
+        color = color_map.get(algorithm, "#1f77b4")
+        if len(ordered_reward_ids) == 1:
+            reward_id = ordered_reward_ids[0]
+            color = _reward_variant_color(color, reward_id, ordered_reward_ids)
+            series_label = f"{algorithm.upper()}@{reward_id}"
 
         per_algorithm[algorithm] = {
             "frames": frames,
@@ -695,7 +863,8 @@ def main() -> None:
             "run_terms": run_terms,
             "n_runs": n_runs,
             "used_run_dirs": used_run_dirs,
-            "color": color_map.get(algorithm, "#1f77b4"),
+            "color": color,
+            "series_label": series_label,
         }
 
     if not per_algorithm:
@@ -725,6 +894,7 @@ def main() -> None:
         reward_mean = payload["reward_mean"]
         run_terms = payload["run_terms"]
         color = payload["color"]
+        series_label = payload.get("series_label", algorithm.upper())
 
         valid_capture_mask = ~np.isnan(capture_mean)
         valid_frames = frames[valid_capture_mask]
@@ -738,7 +908,7 @@ def main() -> None:
         ax.plot(
             valid_frames,
             valid_captures,
-            label=f"{algorithm.upper()} mean capture % (n={payload['n_runs']})",
+            label=f"{series_label} mean capture % (n={payload['n_runs']})",
             color=color,
             linewidth=2,
         )
@@ -755,7 +925,7 @@ def main() -> None:
             ax_reward.plot(
                 frames,
                 reward_mean,
-                label=f"{algorithm.upper()} mean reward",
+                label=f"{series_label} mean reward",
                 color=color,
                 linewidth=1.8,
                 linestyle=":",
@@ -791,7 +961,7 @@ def main() -> None:
                 target_axis.plot(
                     term_frames,
                     term_mean,
-                    label=f"{algorithm.upper()} reward::{term_name}",
+                    label=f"{series_label} reward::{term_name}",
                     color=color,
                     linewidth=1.1,
                     linestyle=term_linestyle,

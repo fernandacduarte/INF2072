@@ -80,6 +80,9 @@ benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
 	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device all
 
+plot:
+	$(PYTHON) benchmarl_setup/plot_benchmarl_reward.py --algorithms $(ALGOS) --maze $(MAZE) --device $(DEVICE) --reward-id $(REWARD_ID)
+
 smoke: ## PettingZoo parallel-API compliance (runs without pytest)
 	$(PYTHON) test/test_petting_zoo.py
 
