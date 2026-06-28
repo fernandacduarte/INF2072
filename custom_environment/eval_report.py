@@ -35,7 +35,7 @@ from benchmarl_setup.device_utils import resolve_device
 from benchmarl_setup.pacman_benchmarl_task import register_pacman_task
 from custom_environment.eval import (
     CHECKPOINT_BEST_METRICS,
-    _capture_rate_for_run,
+    _capture_rate_for_run_checkpoint,
     _best_checkpoint_for_learner,
     _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
@@ -215,7 +215,10 @@ def _select_runs_by_train_seed(
             continue
         if checkpoint_select == "best":
             if checkpoint_best_metric == "capture_rate":
-                score = _capture_rate_for_run(run_dir)
+                score = _capture_rate_for_run_checkpoint(
+                    run_dir,
+                    expected_checkpoint=checkpoint,
+                )
             else:
                 score = _tail_mean_reward(run_dir)
         else:

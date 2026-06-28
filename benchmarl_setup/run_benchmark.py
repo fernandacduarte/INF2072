@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -252,6 +253,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--live-capture-allow-non-hard-checkpoint",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use checkpoint-defined difficulty/curriculum for live capture snapshots. "
+            "Default is hard-forced to align capture-based best selection with human eval."
+        ),
+    )
+    parser.add_argument(
         "--eval-seed-base",
         type=int,
         default=0,
@@ -482,8 +492,12 @@ def _run_eval_capture_snapshot(
     eval_seed_base: int,
     device: str,
     allow_cpu_fallback: bool,
+    allow_non_hard_checkpoint: bool,
 ) -> tuple[float | None, dict[str, float]]:
-    out_csv = run_dir / "evaluation_report_live_capture.csv"
+    latest_out_csv = run_dir / "evaluation_report_live_capture.csv"
+    checkpoint_frame = _checkpoint_frame_from_path(checkpoint_path)
+    checkpoint_suffix = str(checkpoint_frame) if checkpoint_frame is not None else "latest"
+    out_csv = run_dir / f"evaluation_report_live_capture_checkpoint_{checkpoint_suffix}.csv"
     command = [
         sys.executable,
         str(EVAL_REPORT_PATH),
@@ -502,8 +516,8 @@ def _run_eval_capture_snapshot(
         "--out",
         str(out_csv),
     ]
-    # Benchmark evaluation should reflect checkpoint-native curriculum stage.
-    command.append("--allow-non-hard-checkpoint")
+    if allow_non_hard_checkpoint:
+        command.append("--allow-non-hard-checkpoint")
     command.append("--allow-cpu-fallback" if allow_cpu_fallback else "--no-allow-cpu-fallback")
 
     completed = subprocess.run(command, check=False)
@@ -515,11 +529,66 @@ def _run_eval_capture_snapshot(
         )
         return None, {}
 
+    if out_csv != latest_out_csv:
+        try:
+            shutil.copyfile(out_csv, latest_out_csv)
+        except OSError as exc:
+            print(
+                "Live capture snapshot copy failed: "
+                f"source={out_csv} target={latest_out_csv} error={exc}"
+            )
+
     capture_pct = _read_capture_pct_from_eval_csv(out_csv)
     reward_breakdown = _read_breakdown_per_step_from_eval_csv(out_csv)
     if capture_pct is None:
         print(f"Live capture snapshot missing capture_rate in {out_csv}")
     return capture_pct, reward_breakdown
+
+
+def _refresh_latest_capture_snapshots(
+    *,
+    runs_roots_by_label: dict[str, Path],
+    algorithms: list[str],
+    eval_device_by_label: dict[str, str],
+    episodes: int,
+    eval_seed_base: int,
+    allow_cpu_fallback: bool,
+    live_capture_allow_non_hard_checkpoint: bool,
+) -> None:
+    if episodes <= 0:
+        return
+
+    refreshed = 0
+    skipped = 0
+    print("Refreshing latest checkpoint capture snapshots for completed runs...")
+    for label, runs_root in runs_roots_by_label.items():
+        reward_id, _, _device_label = label.partition("@")
+        eval_device = eval_device_by_label.get(label)
+        if not reward_id or not eval_device:
+            continue
+
+        for algorithm in algorithms:
+            for run_dir in candidate_run_dirs(runs_root, algorithm):
+                checkpoint_path = _latest_checkpoint_path(run_dir)
+                if checkpoint_path is None:
+                    skipped += 1
+                    continue
+                capture_pct, _reward_breakdown = _run_eval_capture_snapshot(
+                    algorithm=algorithm,
+                    reward_id=reward_id,
+                    run_dir=run_dir,
+                    checkpoint_path=checkpoint_path,
+                    episodes=episodes,
+                    eval_seed_base=eval_seed_base,
+                    device=eval_device,
+                    allow_cpu_fallback=allow_cpu_fallback,
+                    allow_non_hard_checkpoint=live_capture_allow_non_hard_checkpoint,
+                )
+                if capture_pct is None:
+                    skipped += 1
+                    continue
+                refreshed += 1
+    print(f"Latest capture snapshot refresh finished: refreshed={refreshed} skipped={skipped}")
 
 
 class ProgressReporter:
@@ -537,6 +606,7 @@ class ProgressReporter:
         machine_id: str,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
+        live_capture_allow_non_hard_checkpoint: bool,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
         eval_device_by_label: dict[str, str],
@@ -559,6 +629,7 @@ class ProgressReporter:
             self.max_frames,
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
+        self.live_capture_allow_non_hard_checkpoint = bool(live_capture_allow_non_hard_checkpoint)
         self.eval_seed_base = int(eval_seed_base)
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         self.eval_device_by_label = eval_device_by_label
@@ -841,6 +912,7 @@ class ProgressReporter:
                             eval_seed_base=self.eval_seed_base,
                             device=eval_device,
                             allow_cpu_fallback=self.allow_cpu_fallback,
+                            allow_non_hard_checkpoint=self.live_capture_allow_non_hard_checkpoint,
                         )
                         if capture_pct is None:
                             continue
@@ -1178,6 +1250,7 @@ def main() -> None:
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
+            live_capture_allow_non_hard_checkpoint=args.live_capture_allow_non_hard_checkpoint,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,
             eval_device_by_label=eval_device_by_label,
@@ -1242,6 +1315,16 @@ def main() -> None:
     finally:
         if reporter is not None:
             reporter.stop()
+
+    _refresh_latest_capture_snapshots(
+        runs_roots_by_label=runs_roots_by_label,
+        algorithms=algorithms,
+        eval_device_by_label=eval_device_by_label,
+        episodes=args.live_capture_eval_episodes,
+        eval_seed_base=args.eval_seed_base,
+        allow_cpu_fallback=args.allow_cpu_fallback,
+        live_capture_allow_non_hard_checkpoint=args.live_capture_allow_non_hard_checkpoint,
+    )
 
     _write_job_records(jobs_out, job_records)
 

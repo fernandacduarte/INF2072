@@ -119,6 +119,20 @@ py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-se
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best --checkpoint-best-metric capture_rate
 ```
 
+For `--checkpoint-best-metric capture_rate`, best selection is checkpoint-coupled: the
+run is considered only when `evaluation_report_live_capture.csv` includes a
+`checkpoint_path` that matches that run's latest checkpoint. This avoids stale
+run-level capture files selecting a different checkpoint than the one replayed.
+If run artifacts were moved/copied (for example `runs` -> `runs100000`), selection
+also accepts a relocation-safe identity match (`run_dir` + checkpoint filename)
+while still rejecting stale checkpoint-frame mismatches.
+If no checkpoint-coupled capture files are available, rerun live snapshot evaluation
+or temporarily use `--checkpoint-best-metric reward`.
+
+Benchmark live snapshots now write both `evaluation_report_live_capture.csv`
+(latest-pointer file) and checkpoint-specific files such as
+`evaluation_report_live_capture_checkpoint_100000.csv` for provenance.
+
 Evaluation also supports explicit device selection:
 
 ```bash
@@ -147,10 +161,17 @@ difficulty/curriculum behavior in reports, pass:
 py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
 ```
 
-Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
-`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
-and final paired evaluation. This keeps benchmark evaluation aligned with the
-checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+Benchmark note: `benchmarl_setup/run_benchmark.py` now hard-forces live capture
+snapshots by default so `--checkpoint-best-metric capture_rate` stays aligned with
+human `eval.py` (which is also hard-forced by default). If you intentionally want
+checkpoint-native curriculum snapshots, pass:
+
+```bash
+py -3.11 benchmarl_setup\run_benchmark.py --live-capture-allow-non-hard-checkpoint
+```
+
+Final paired benchmark evaluation (`--eval-episodes`) still uses checkpoint-native
+mode by default.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 
