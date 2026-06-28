@@ -1,6 +1,7 @@
 # Research 000026 | fernanda-INF2072 | 2026-06-28 18:04 | Branch capture_v0_pure_potential_shaping merge-prep & salvage inventory
 
 tags: git-branch-management, merge-conflict, reward-shaping, marl-environment, salvage-artifact
+spawned: research-000027
 
 > **UPDATE 2026-06-28 ~21:30 — RESOLVED: the merge was completed, not a recreate.**
 > Rather than delete-and-recreate, we committed the at-risk work and merged

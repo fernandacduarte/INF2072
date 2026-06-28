@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-28 23:57 UTC | STARTED | 2026-06-28 23:54 UTC | research | what happened with the code that was at the main branch and was merged here
+
 DONE | 2026-06-27 22:06 UTC | STARTED | 2026-06-27 22:00 UTC | implement | plan-000025 | PLAN | 000025
 
 DONE | 2026-06-27 21:59 UTC | STARTED | 2026-06-27 21:57 UTC | plan | Reintroduce pure potential-based reward shaping (PBRS) as a new reward variant on the sparse capture_v0 base, per research-000024 | PLAN | 000025
