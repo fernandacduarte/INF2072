@@ -97,6 +97,9 @@ The Pygame renderer highlights each ghost's current local observation (11x11 by 
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
+Before replay starts, `eval.py` also prints selected-seed statistics for the
+chosen checkpoint (run id, seed, reward final/tail/best, and checkpoint-coupled
+capture snapshot percentage when available).
 
 You can test the renderer before training any checkpoint with a random-policy
 episode:
@@ -118,6 +121,20 @@ It now supports futebol2d-style best-run selection across multiple runs:
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best --checkpoint-best-metric capture_rate
 ```
+
+For `--checkpoint-best-metric capture_rate`, best selection is checkpoint-coupled: the
+run is considered only when `evaluation_report_live_capture.csv` includes a
+`checkpoint_path` that matches that run's latest checkpoint. This avoids stale
+run-level capture files selecting a different checkpoint than the one replayed.
+If run artifacts were moved/copied (for example `runs` -> `runs100000`), selection
+also accepts a relocation-safe identity match (`run_dir` + checkpoint filename)
+while still rejecting stale checkpoint-frame mismatches.
+If no checkpoint-coupled capture files are available, rerun live snapshot evaluation
+or temporarily use `--checkpoint-best-metric reward`.
+
+Benchmark live snapshots now write both `evaluation_report_live_capture.csv`
+(latest-pointer file) and checkpoint-specific files such as
+`evaluation_report_live_capture_checkpoint_100000.csv` for provenance.
 
 Evaluation also supports explicit device selection:
 
@@ -147,10 +164,22 @@ difficulty/curriculum behavior in reports, pass:
 py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
 ```
 
-Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
-`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
-and final paired evaluation. This keeps benchmark evaluation aligned with the
-checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+Benchmark note: `benchmarl_setup/run_benchmark.py` now keeps live capture
+snapshots checkpoint-native by default during training, so capture follows each
+checkpoint's curriculum stage (easy -> medium -> hard over the configured thirds).
+This behavior is fixed (no CLI toggle).
+Snapshot evaluation now passes each checkpoint frame as curriculum offset to
+`eval_report.py`, so checkpoint-native snapshots reconstruct the expected
+curriculum stage for that checkpoint (for example late-third checkpoints evaluate
+under hard stage).
+
+After benchmark workers complete, `run_benchmark.py` performs a latest-checkpoint
+capture refresh in hard-forced mode so end-of-run selection by
+`--checkpoint-best-metric capture_rate` stays aligned with hard CLI replay in
+`custom_environment/eval.py`.
+
+Final paired benchmark evaluation (`--eval-episodes`) still uses checkpoint-native
+mode by default.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 

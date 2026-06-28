@@ -49,6 +49,54 @@ def _read_last_frame_count(path: Path) -> float | None:
                 continue
     return last_value
 
+
+def _read_capture_rate_from_eval_csv(path: Path) -> float | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                raw = (row.get("capture_rate") or "").strip()
+                if not raw:
+                    continue
+                value = float(raw)
+                if value != value:
+                    continue
+                return value * 100.0
+    except (OSError, csv.Error, ValueError):
+        return None
+    return None
+
+
+def _checkpoint_frame_from_capture_snapshot_name(path: Path) -> int | None:
+    match = re.search(r"evaluation_report_live_capture_checkpoint_(\d+)\.csv$", path.name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _capture_snapshot_series_pct(run_dir: Path) -> list[float]:
+    checkpoint_files = sorted(
+        run_dir.glob("evaluation_report_live_capture_checkpoint_*.csv"),
+        key=lambda p: (_checkpoint_frame_from_capture_snapshot_name(p) is None, _checkpoint_frame_from_capture_snapshot_name(p) or -1),
+    )
+
+    values: list[float] = []
+    for snapshot in checkpoint_files:
+        capture_pct = _read_capture_rate_from_eval_csv(snapshot)
+        if capture_pct is None:
+            continue
+        values.append(capture_pct)
+
+    if values:
+        return values
+
+    latest_snapshot = run_dir / "evaluation_report_live_capture.csv"
+    latest_capture_pct = _read_capture_rate_from_eval_csv(latest_snapshot)
+    if latest_capture_pct is None:
+        return []
+    return [latest_capture_pct]
+
 def _latest_checkpoint(run_dir: Path) -> Path | None:
     checkpoints_dir = run_dir / "checkpoints"
     if not checkpoints_dir.exists():
@@ -270,6 +318,10 @@ def summarize_runs(
                     episode_tail = _tail_mean(episode_rewards, tail_window) if episode_rewards else float("nan")
                     episode_best = max(episode_rewards) if episode_rewards else float("nan")
                     frames_value = _read_last_frame_count(scalars_dir / "counters_total_frames.csv")
+                    capture_series_pct = _capture_snapshot_series_pct(run_dir)
+                    capture_final_pct = capture_series_pct[-1] if capture_series_pct else float("nan")
+                    capture_tail_pct = _tail_mean(capture_series_pct, tail_window) if capture_series_pct else float("nan")
+                    capture_best_pct = max(capture_series_pct) if capture_series_pct else float("nan")
                     checkpoint = _latest_checkpoint(run_dir)
                     seed = _extract_seed(run_dir)
                     mtime = datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(timespec="seconds")
@@ -309,6 +361,9 @@ def summarize_runs(
                             "final_reward": f"{reward_values[-1]:.6f}",
                             "tail_mean_reward": f"{_tail_mean(reward_values, tail_window):.6f}",
                             "best_reward": f"{max(reward_values):.6f}",
+                            "final_capture_pct": _fmt_float(capture_final_pct),
+                            "tail_mean_capture_pct": _fmt_float(capture_tail_pct),
+                            "best_capture_pct": _fmt_float(capture_best_pct),
                             "final_episode_return": _fmt_float(episode_final),
                             "tail_mean_episode_return": _fmt_float(episode_tail),
                             "best_episode_return": _fmt_float(episode_best),
@@ -334,6 +389,9 @@ def summarize_runs(
         "final_reward",
         "tail_mean_reward",
         "best_reward",
+        "final_capture_pct",
+        "tail_mean_capture_pct",
+        "best_capture_pct",
         "final_episode_return",
         "tail_mean_episode_return",
         "best_episode_return",
@@ -363,6 +421,9 @@ def summarize_runs(
         final_mean = _mean_from_rows(group, "final_reward")
         tail_mean = _mean_from_rows(group, "tail_mean_reward")
         best_mean = _mean_from_rows(group, "best_reward")
+        final_capture_pct_mean = _mean_from_rows(group, "final_capture_pct")
+        tail_capture_pct_mean = _mean_from_rows(group, "tail_mean_capture_pct")
+        best_capture_pct_mean = _mean_from_rows(group, "best_capture_pct")
         final_episode_mean = _mean_from_rows(group, "final_episode_return")
         tail_episode_mean = _mean_from_rows(group, "tail_mean_episode_return")
         best_episode_mean = _mean_from_rows(group, "best_episode_return")
@@ -371,6 +432,9 @@ def summarize_runs(
         print(
             f"- {reward_id}/{algorithm}@{device}: runs={len(group)} "
             f"final_mean={final_mean:.4f} tail_mean={tail_mean:.4f} best_mean={best_mean:.4f} "
+            f"capture_final_pct_mean={final_capture_pct_mean:.2f}% "
+            f"capture_tail_pct_mean={tail_capture_pct_mean:.2f}% "
+            f"capture_best_pct_mean={best_capture_pct_mean:.2f}% "
             f"episode_final_mean={final_episode_mean:.4f} "
             f"episode_tail_mean={tail_episode_mean:.4f} "
             f"episode_best_mean={best_episode_mean:.4f} "
