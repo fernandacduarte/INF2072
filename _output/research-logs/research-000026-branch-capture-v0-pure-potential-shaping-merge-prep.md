@@ -2,6 +2,25 @@
 
 tags: git-branch-management, merge-conflict, reward-shaping, marl-environment, salvage-artifact
 
+> **UPDATE 2026-06-28 ~21:30 — RESOLVED: the merge was completed, not a recreate.**
+> Rather than delete-and-recreate, we committed the at-risk work and merged
+> `origin/main` directly into this branch. Outcome:
+> - The uncommitted spawn-randomization + eval fix were committed (`ddd4ef7`) and
+>   the salvage patches/report committed (`4287fbd`) and pushed first.
+> - `git merge origin/main` (PR #25, `210e5ac`) → **merge commit `52003eb`, ZERO
+>   conflicts.** The 3 predicted overlap files (`Makefile`, `run_benchmark.py`,
+>   `eval.py`) auto-merged; verified semantically (all knobs intact, the eval
+>   observation-match fix held — `shared_memory` is no longer force-disabled).
+> - 2 reward tests failed but were **pre-existing** (also fail at merge-base
+>   `3818f6c`, inherited from main's lineage — not caused by our work or the
+>   merge). Fixed in `5f615ae`: test 1 expectation corrected to 0.4 (code was
+>   right); `my_rewards/movement_bonus.py` rebased onto `CurrentRewardWeightsV2`
+>   so the example again changes exactly one weight. **Full suite: 81 passed.**
+> - All commits pushed to `origin/capture_v0_pure_potential_shaping`.
+> - The recreation playbook in §6 is no longer needed for this cycle, but the
+>   salvage patches remain valid as a backup. **Caveat:** local `main` is still
+>   stale at PR #14 — `git pull` it before basing future work on it.
+
 ## User brief
 
 > tudo o que foi feito até agora nesta branch. Vamos nos preparar para fazer um merge com a main. pode ser que dê muitos conflitos. eu quero ter a chance de apagar o que foi feito aqui e o que tem potencial de ser usado em uma branch limpa, e refazer depois. quero guardar um artefato de informação que permita fazer isso.
