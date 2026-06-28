@@ -97,6 +97,9 @@ The Pygame renderer highlights each ghost's current local observation (11x11 by 
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
+Before replay starts, `eval.py` also prints selected-seed statistics for the
+chosen checkpoint (run id, seed, reward final/tail/best, and checkpoint-coupled
+capture snapshot percentage when available).
 
 You can test the renderer before training any checkpoint with a random-policy
 episode:
@@ -116,7 +119,22 @@ It now supports futebol2d-style best-run selection across multiple runs:
 
 ```bash
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
+py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best --checkpoint-best-metric capture_rate
 ```
+
+For `--checkpoint-best-metric capture_rate`, best selection is checkpoint-coupled: the
+run is considered only when `evaluation_report_live_capture.csv` includes a
+`checkpoint_path` that matches that run's latest checkpoint. This avoids stale
+run-level capture files selecting a different checkpoint than the one replayed.
+If run artifacts were moved/copied (for example `runs` -> `runs100000`), selection
+also accepts a relocation-safe identity match (`run_dir` + checkpoint filename)
+while still rejecting stale checkpoint-frame mismatches.
+If no checkpoint-coupled capture files are available, rerun live snapshot evaluation
+or temporarily use `--checkpoint-best-metric reward`.
+
+Benchmark live snapshots now write both `evaluation_report_live_capture.csv`
+(latest-pointer file) and checkpoint-specific files such as
+`evaluation_report_live_capture_checkpoint_100000.csv` for provenance.
 
 Evaluation also supports explicit device selection:
 
@@ -146,10 +164,22 @@ difficulty/curriculum behavior in reports, pass:
 py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
 ```
 
-Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
-`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
-and final paired evaluation. This keeps benchmark evaluation aligned with the
-checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+Benchmark note: `benchmarl_setup/run_benchmark.py` now keeps live capture
+snapshots checkpoint-native by default during training, so capture follows each
+checkpoint's curriculum stage (easy -> medium -> hard over the configured thirds).
+This behavior is fixed (no CLI toggle).
+Snapshot evaluation now passes each checkpoint frame as curriculum offset to
+`eval_report.py`, so checkpoint-native snapshots reconstruct the expected
+curriculum stage for that checkpoint (for example late-third checkpoints evaluate
+under hard stage).
+
+After benchmark workers complete, `run_benchmark.py` performs a latest-checkpoint
+capture refresh in hard-forced mode so end-of-run selection by
+`--checkpoint-best-metric capture_rate` stays aligned with hard CLI replay in
+`custom_environment/eval.py`.
+
+Final paired benchmark evaluation (`--eval-episodes`) still uses checkpoint-native
+mode by default.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 
@@ -193,6 +223,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --allow-non-hard-checkpoint
 --ghost-view-size 3|5|7
+--checkpoint-best-metric capture_rate|reward
 ```
 
 If a legacy checkpoint was trained with a different local view size and auto-detection fails,
@@ -212,6 +243,7 @@ For a compact post-training quality report (deterministic policy, multiple episo
 
 ```bash
 py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --checkpoint-best-metric capture_rate --episodes 30
 ```
 
 When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
@@ -240,6 +272,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 ```bash
 --episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
 --learner qmixglobal --checkpoint-select latest
+--checkpoint-select best --checkpoint-best-metric capture_rate|reward
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
 --device-label auto|cpu|cuda|cuda_0
 --reward-id current --train-seeds 0,1,2

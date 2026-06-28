@@ -47,6 +47,9 @@ ACTION_NAME = {
 }
 
 
+CHECKPOINT_BEST_METRICS = ("reward", "capture_rate")
+
+
 def _configure_warning_filters() -> None:
     warnings.filterwarnings(
         "ignore",
@@ -139,6 +142,173 @@ def _score_run_for_selection(run_dir: Path) -> tuple[float, float, float]:
     return (tail_mean, best_single, recency)
 
 
+def _capture_rate_for_run(run_dir: Path) -> float:
+    return _capture_rate_for_run_checkpoint(run_dir, expected_checkpoint=None)
+
+
+def _paths_equivalent(left: Path, right: Path) -> bool:
+    left_resolved = str(left.resolve(strict=False)).replace("\\", "/").lower()
+    right_resolved = str(right.resolve(strict=False)).replace("\\", "/").lower()
+    return left_resolved == right_resolved
+
+
+def _checkpoint_identity(path: Path) -> tuple[str, str]:
+    run_dir_name = ""
+    if len(path.parents) >= 2:
+        run_dir_name = path.parents[1].name.strip().lower()
+    return run_dir_name, path.name.strip().lower()
+
+
+def _checkpoint_matches_expected(
+    snapshot_checkpoint: Path,
+    expected_checkpoint: Path,
+) -> tuple[bool, str]:
+    if _paths_equivalent(snapshot_checkpoint, expected_checkpoint):
+        return True, "absolute"
+
+    snapshot_run_name, snapshot_checkpoint_name = _checkpoint_identity(snapshot_checkpoint)
+    expected_run_name, expected_checkpoint_name = _checkpoint_identity(expected_checkpoint)
+    if (
+        snapshot_run_name
+        and expected_run_name
+        and snapshot_run_name == expected_run_name
+        and snapshot_checkpoint_name == expected_checkpoint_name
+    ):
+        return True, "identity"
+
+    return False, "none"
+
+
+def _capture_snapshot_for_run(run_dir: Path) -> dict[str, object] | None:
+    report_path = run_dir / "evaluation_report_live_capture.csv"
+    if not report_path.exists():
+        return None
+
+    try:
+        with report_path.open("r", newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                raw_capture = (row.get("capture_rate") or "").strip()
+                if not raw_capture:
+                    continue
+                capture_rate = float(raw_capture)
+                if capture_rate != capture_rate:
+                    continue
+
+                raw_checkpoint = (row.get("checkpoint_path") or "").strip()
+                checkpoint_path = Path(raw_checkpoint) if raw_checkpoint else None
+                return {
+                    "capture_rate": capture_rate,
+                    "report_path": report_path,
+                    "report_mtime": report_path.stat().st_mtime,
+                    "checkpoint_path": checkpoint_path,
+                }
+    except (OSError, ValueError, csv.Error):
+        return None
+    return None
+
+
+def _capture_rate_for_run_checkpoint(
+    run_dir: Path,
+    expected_checkpoint: Path | None,
+) -> float:
+    snapshot = _capture_snapshot_for_run(run_dir)
+    if snapshot is None:
+        return float("-inf")
+
+    if expected_checkpoint is None:
+        return float(snapshot["capture_rate"])
+
+    snapshot_checkpoint = snapshot["checkpoint_path"]
+    if not isinstance(snapshot_checkpoint, Path):
+        return float("-inf")
+    matches_checkpoint, _match_mode = _checkpoint_matches_expected(
+        snapshot_checkpoint,
+        expected_checkpoint,
+    )
+    if not matches_checkpoint:
+        return float("-inf")
+    return float(snapshot["capture_rate"])
+
+
+def _extract_seed_from_run_dir(run_dir: Path) -> int | None:
+    candidates = [
+        run_dir / run_dir.name / "texts" / "hparams0.txt",
+        run_dir / "texts" / "hparams0.txt",
+    ]
+    for hparams_path in candidates:
+        if not hparams_path.exists():
+            continue
+        try:
+            for raw_line in hparams_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw_line.strip()
+                if not line.startswith("seed:"):
+                    continue
+                _, _, tail = line.partition(":")
+                value = tail.strip()
+                if not value:
+                    return None
+                return int(value)
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def _format_optional_float(value: float | None, digits: int = 4) -> str:
+    if value is None:
+        return "n/a"
+    if value != value:
+        return "n/a"
+    return f"{value:.{digits}f}"
+
+
+def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> None:
+    run_dir = checkpoint_path.parent.parent
+    seed = _extract_seed_from_run_dir(run_dir)
+
+    final_reward: float | None = None
+    tail_mean_reward: float | None = None
+    best_reward: float | None = None
+    scalars_dir = _scalars_dir_for_run(run_dir)
+    if scalars_dir is not None:
+        reward_file = scalars_dir / "collection_reward_reward_mean.csv"
+        if reward_file.exists():
+            rewards = _read_scalar_values(reward_file)
+            if rewards:
+                final_reward = rewards[-1]
+                window = min(tail_window, len(rewards))
+                tail_mean_reward = sum(rewards[-window:]) / float(window)
+                best_reward = max(rewards)
+
+    capture_pct: float | None = None
+    checkpoint_match = False
+    checkpoint_match_mode = "none"
+    snapshot = _capture_snapshot_for_run(run_dir)
+    if snapshot is not None and isinstance(snapshot.get("checkpoint_path"), Path):
+        checkpoint_match, checkpoint_match_mode = _checkpoint_matches_expected(
+            snapshot["checkpoint_path"],
+            checkpoint_path,
+        )
+        if checkpoint_match:
+            capture_pct = 100.0 * float(snapshot["capture_rate"])
+
+    print("Selected seed stats (human mode):")
+    print(
+        f"  run={run_dir.name} seed={seed if seed is not None else 'n/a'} checkpoint={checkpoint_path.name}"
+    )
+    print(
+        "  training_reward="
+        f"final={_format_optional_float(final_reward)} "
+        f"tail{tail_window}={_format_optional_float(tail_mean_reward)} "
+        f"best={_format_optional_float(best_reward)}"
+    )
+    print(
+        "  capture_snapshot="
+        f"matched={checkpoint_match} "
+        f"match_mode={checkpoint_match_mode} "
+        f"capture_pct={_format_optional_float(capture_pct, digits=2)}"
+    )
+
+
 def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
     return candidate_run_dirs(runs_root, learner)
 
@@ -163,7 +333,17 @@ def _latest_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
     )
 
 
-def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
+def _best_checkpoint_for_learner(
+    learner: str,
+    runs_root: Path,
+    selection_metric: str = "reward",
+) -> Path:
+    if selection_metric not in CHECKPOINT_BEST_METRICS:
+        raise ValueError(
+            f"Unsupported best selection metric: {selection_metric}. "
+            f"Allowed: {list(CHECKPOINT_BEST_METRICS)}"
+        )
+
     run_dirs = _candidate_run_dirs(learner, runs_root)
     if not run_dirs:
         raise FileNotFoundError(
@@ -171,12 +351,34 @@ def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
         )
 
     scored_runs = []
+    capture_match_count = 0
+    capture_identity_match_count = 0
     for run_dir in run_dirs:
         checkpoint = _latest_checkpoint_in_run(run_dir)
         if checkpoint is None:
             continue
-        score = _score_run_for_selection(run_dir)
-        scored_runs.append((score, checkpoint, run_dir))
+        if selection_metric == "capture_rate":
+            snapshot = _capture_snapshot_for_run(run_dir)
+            snapshot_match_mode = "none"
+            capture_rate = float("-inf")
+            if snapshot is not None and isinstance(snapshot.get("checkpoint_path"), Path):
+                matches_checkpoint, snapshot_match_mode = _checkpoint_matches_expected(
+                    snapshot["checkpoint_path"],
+                    checkpoint,
+                )
+                if matches_checkpoint:
+                    capture_rate = float(snapshot["capture_rate"])
+            has_checkpoint_match = capture_rate != -float("inf")
+            if has_checkpoint_match:
+                capture_match_count += 1
+                if snapshot_match_mode == "identity":
+                    capture_identity_match_count += 1
+            score = (1.0 if has_checkpoint_match else 0.0, capture_rate, run_dir.stat().st_mtime)
+        else:
+            snapshot = None
+            snapshot_match_mode = "none"
+            score = _score_run_for_selection(run_dir)
+        scored_runs.append((score, checkpoint, run_dir, snapshot, snapshot_match_mode))
 
     if not scored_runs:
         raise FileNotFoundError(
@@ -184,12 +386,48 @@ def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
             f"py -3.11 benchmarl_setup\\run_pacman_benchmarl.py --algorithm {learner} --checkpoint-at-end"
         )
 
+    if selection_metric == "capture_rate" and capture_match_count == 0:
+        raise FileNotFoundError(
+            "No checkpoint-coupled capture metrics were found for capture-rate selection. "
+            "Each run needs evaluation_report_live_capture.csv with checkpoint_path matching the "
+            "latest checkpoint in that run (absolute path or run+checkpoint identity match). "
+            "Recompute snapshots or use --checkpoint-best-metric reward."
+        )
+
     scored_runs.sort(key=lambda item: item[0], reverse=True)
-    best_score, best_checkpoint, best_run_dir = scored_runs[0]
-    print(
-        "Best-run selection: "
-        f"run={best_run_dir.name} tail_mean={best_score[0]:.4f} best_single={best_score[1]:.4f}"
-    )
+    best_score, best_checkpoint, best_run_dir, best_snapshot, best_snapshot_match_mode = scored_runs[0]
+    if selection_metric == "capture_rate":
+        capture_text = "nan" if best_score[1] == -float("inf") else f"{best_score[1]:.4f}"
+        snapshot_checkpoint = (
+            str(best_snapshot["checkpoint_path"]) if best_snapshot and best_snapshot.get("checkpoint_path") else ""
+        )
+        snapshot_path = str(best_snapshot["report_path"]) if best_snapshot else ""
+        snapshot_mtime = (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(best_snapshot["report_mtime"])))
+            if best_snapshot and best_snapshot.get("report_mtime")
+            else ""
+        )
+        checkpoint_match = (
+            bool(best_snapshot)
+            and isinstance(best_snapshot.get("checkpoint_path"), Path)
+            and _checkpoint_matches_expected(best_snapshot["checkpoint_path"], best_checkpoint)[0]
+        )
+        print(
+            "Best-run selection: "
+            f"run={best_run_dir.name} metric=capture_rate capture_rate={capture_text} "
+            f"matched_runs={capture_match_count}/{len(scored_runs)} "
+            f"identity_matched_runs={capture_identity_match_count}/{capture_match_count} "
+            f"checkpoint_match={checkpoint_match} "
+            f"checkpoint_match_mode={best_snapshot_match_mode} "
+            f"capture_source={snapshot_path} capture_source_mtime={snapshot_mtime} "
+            f"capture_checkpoint={snapshot_checkpoint}"
+        )
+    else:
+        print(
+            "Best-run selection: "
+            f"run={best_run_dir.name} metric=reward "
+            f"tail_mean={best_score[0]:.4f} best_single={best_score[1]:.4f}"
+        )
     return best_checkpoint
 
 
@@ -538,6 +776,7 @@ def run_episode(
     checkpoint: Path | None,
     runs_root: Path,
     checkpoint_select: str,
+    checkpoint_best_metric: str,
     show_reward_breakdown: bool,
     render_mode: str,
     tile_size: int,
@@ -564,7 +803,11 @@ def run_episode(
     if checkpoint is not None:
         checkpoint_path = checkpoint
     elif checkpoint_select == "best":
-        checkpoint_path = _best_checkpoint_for_learner(learner, runs_root_for_device)
+        checkpoint_path = _best_checkpoint_for_learner(
+            learner,
+            runs_root_for_device,
+            selection_metric=checkpoint_best_metric,
+        )
     else:
         checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root_for_device)
     print(f"Using checkpoint: {checkpoint_path}")
@@ -574,6 +817,8 @@ def run_episode(
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
     print(f"Runs root for checkpoint discovery: {runs_root_for_device}")
+    if render_mode == "human":
+        _print_selected_seed_stats(checkpoint_path)
 
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -838,6 +1083,15 @@ def main() -> None:
         help="How to select checkpoint when --checkpoint is not provided.",
     )
     parser.add_argument(
+        "--checkpoint-best-metric",
+        choices=list(CHECKPOINT_BEST_METRICS),
+        default="capture_rate",
+        help=(
+            "Metric used when --checkpoint-select best is active: reward uses training scalars; "
+            "capture_rate uses evaluation_report_live_capture.csv when available."
+        ),
+    )
+    parser.add_argument(
         "--show-reward-breakdown",
         action="store_true",
         help="Print per-step team reward term breakdown from the environment.",
@@ -919,6 +1173,7 @@ def main() -> None:
         checkpoint=args.checkpoint,
         runs_root=maze_runs_root,
         checkpoint_select=args.checkpoint_select,
+        checkpoint_best_metric=args.checkpoint_best_metric,
         show_reward_breakdown=args.show_reward_breakdown,
         render_mode=args.render_mode,
         tile_size=args.tile_size,

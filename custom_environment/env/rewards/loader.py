@@ -21,6 +21,9 @@ _REWARD_CLASS_BY_ID = {
     "capture_v0_improve_strategies": (
         "custom_environment.env.rewards.current:CaptureV0ImproveStrategies"
     ),
+    "capture_v0_pure_potential_shaping": (
+        "custom_environment.env.rewards.current:CaptureV0PurePotentialShaping"
+    ),
     "current_git": "custom_environment.env.rewards.current:CurrentGitTeamReward",
     "current": "custom_environment.env.rewards.current:CurrentTeamReward",
     "current_with_overlap_or_same_corridor": (

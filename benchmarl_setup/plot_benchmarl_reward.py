@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 import csv
 import os
 from pathlib import Path
@@ -163,7 +164,7 @@ def _parse_progress_data(
                 algorithm = token_parts[0] if token_parts else ""
                 if len(token_parts) >= 3:
                     # New format: algorithm@reward_id@device_label
-                    device_label_key = token_parts[-1]
+                    device_label_key = f"{token_parts[1]}@{token_parts[-1]}"
                 elif len(token_parts) == 2:
                     # Legacy format: algorithm@device_label
                     device_label_key = token_parts[1]
@@ -238,6 +239,81 @@ def _is_terminal_reward_term(term_name: str) -> bool:
         "pacman_timeout_win",
         "pacman_win_pellets",
     }
+
+
+def _split_reward_and_device(label: str) -> tuple[str | None, str]:
+    parts = [part.strip().lower() for part in str(label).split("@") if part.strip()]
+    if not parts:
+        return None, "default"
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[-1]
+
+
+def _device_matches_selector(label: str, selector: str) -> bool:
+    if selector == "auto":
+        return True
+    _reward_id, parsed_device = _split_reward_and_device(label)
+    return parsed_device == selector
+
+
+def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return hex_color
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return hex_color
+
+    clamp = lambda channel: max(0, min(255, int(round(channel * multiplier))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float] | None:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return None
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return None
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _rgb01_to_hex(rgb: tuple[float, float, float]) -> str:
+    r, g, b = rgb
+    clamp = lambda value: max(0, min(255, int(round(value * 255.0))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: list[str]) -> str:
+    if len(ordered_reward_ids) <= 1:
+        return base_color
+    rgb = _hex_to_rgb01(base_color)
+    if rgb is None:
+        return base_color
+    try:
+        idx = ordered_reward_ids.index(reward_id)
+    except ValueError:
+        idx = 0
+    count = len(ordered_reward_ids)
+    phase = 0.5 if count <= 1 else idx / float(count - 1)
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    hue_shift = -0.42 + 0.84 * phase
+    var_h = (h + hue_shift) % 1.0
+    sat_targets = (0.98, 0.42, 0.90, 0.50)
+    light_targets = (0.30, 0.72, 0.42, 0.62)
+    var_s = sat_targets[idx % len(sat_targets)]
+    var_l = light_targets[idx % len(light_targets)]
+
+    variant_rgb = colorsys.hls_to_rgb(var_h, var_l, var_s)
+    return _rgb01_to_hex(variant_rgb)
 
 
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
@@ -726,8 +802,11 @@ def main() -> None:
         if requested_device == "auto":
             selected_devices = sorted(by_device.keys())
         else:
-            selected_label = device_label(requested_device)
-            selected_devices = [selected_label] if selected_label in by_device else []
+            selected_devices = [
+                key
+                for key in sorted(by_device.keys())
+                if _device_matches_selector(key, requested_device)
+            ]
 
         if not selected_devices:
             print(
@@ -739,6 +818,13 @@ def main() -> None:
         run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
         run_terms: dict[str, dict[str, dict[int, float]]] = {}
         used_run_dirs: list[str] = []
+        reward_ids = {
+            reward_id
+            for device_key in selected_devices
+            for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
+            if reward_id is not None
+        }
+        ordered_reward_ids = sorted(reward_ids)
 
         for device_key in selected_devices:
             for run_id, step_map in by_device.get(device_key, {}).items():
@@ -760,6 +846,13 @@ def main() -> None:
 
         frames, capture_mean, capture_std, reward_mean, reward_std, captures_mat, n_runs = aggregated
 
+        series_label = algorithm.upper()
+        color = color_map.get(algorithm, "#1f77b4")
+        if len(ordered_reward_ids) == 1:
+            reward_id = ordered_reward_ids[0]
+            color = _reward_variant_color(color, reward_id, ordered_reward_ids)
+            series_label = f"{algorithm.upper()}@{reward_id}"
+
         per_algorithm[algorithm] = {
             "frames": frames,
             "capture_mean": capture_mean,
@@ -770,7 +863,8 @@ def main() -> None:
             "run_terms": run_terms,
             "n_runs": n_runs,
             "used_run_dirs": used_run_dirs,
-            "color": color_map.get(algorithm, "#1f77b4"),
+            "color": color,
+            "series_label": series_label,
         }
 
     if not per_algorithm:
@@ -800,6 +894,7 @@ def main() -> None:
         reward_mean = payload["reward_mean"]
         run_terms = payload["run_terms"]
         color = payload["color"]
+        series_label = payload.get("series_label", algorithm.upper())
 
         valid_capture_mask = ~np.isnan(capture_mean)
         valid_frames = frames[valid_capture_mask]
@@ -813,7 +908,7 @@ def main() -> None:
         ax.plot(
             valid_frames,
             valid_captures,
-            label=f"{algorithm.upper()} mean capture % (n={payload['n_runs']})",
+            label=f"{series_label} mean capture % (n={payload['n_runs']})",
             color=color,
             linewidth=2,
         )
@@ -830,7 +925,7 @@ def main() -> None:
             ax_reward.plot(
                 frames,
                 reward_mean,
-                label=f"{algorithm.upper()} mean reward",
+                label=f"{series_label} mean reward",
                 color=color,
                 linewidth=1.8,
                 linestyle=":",
@@ -866,7 +961,7 @@ def main() -> None:
                 target_axis.plot(
                     term_frames,
                     term_mean,
-                    label=f"{algorithm.upper()} reward::{term_name}",
+                    label=f"{series_label} reward::{term_name}",
                     color=color,
                     linewidth=1.1,
                     linestyle=term_linestyle,
