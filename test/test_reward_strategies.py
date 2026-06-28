@@ -14,6 +14,7 @@ from custom_environment.env.rewards import (
 )
 from custom_environment.env.rewards.current import (
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
+    CaptureV0PurePotentialShaping,
     CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
@@ -615,3 +616,128 @@ def test_current_git_variant_applies_overlap_penalty_for_adjacent_opposite_direc
     )
 
     assert result.breakdown["overlap_or_same_corridor"] == pytest.approx(-0.05)
+
+
+# --- Pure potential-based reward shaping (capture_v0_pure_potential_shaping) ---
+
+ALPHA = 0.7
+GAMMA = 0.99
+
+
+def _pbrs_context(
+    ghost_col: int,
+    pacman_col: int,
+    *,
+    step_count: int = 1,
+    capture_happened: bool = False,
+    timeout_happened: bool = False,
+    pacman_win_happened: bool = False,
+    ghost_action: int = 0,
+) -> RewardContext:
+    """One ghost on a 1xN corridor (no walls), so BFS distance == |ghost_col - pacman_col|."""
+    ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(0, ghost_col),
+        current_position=(0, ghost_col),
+        action=ghost_action,
+        invalid_move=False,
+        local_observation=((1, 1, 1),),
+    )
+    return RewardContext(
+        step_count=step_count,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(ghost,),
+        pacman_previous_position=(0, pacman_col),
+        pacman_position=(0, pacman_col),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=capture_happened,
+        timeout_happened=timeout_happened,
+        pacman_win_happened=pacman_win_happened,
+    )
+
+
+def test_loader_resolves_pure_pbrs_id():
+    strategy = load_reward_strategy(
+        reward_class_from_id("capture_v0_pure_potential_shaping")
+    )
+    assert isinstance(strategy, CaptureV0PurePotentialShaping)
+    assert strategy.strategy_id == "capture_v0_pure_potential_shaping"
+    assert strategy.weights.gamma == pytest.approx(0.99)
+    assert strategy.weights.potential_shaping_alpha == pytest.approx(0.7)
+
+
+def test_pure_pbrs_telescoping_term():
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(0, 5))
+
+    # First compute after reset has no prior potential -> no shaping term yet.
+    first = strategy.compute(_pbrs_context(0, 5, step_count=1))  # distance 5
+    assert "potential_shaping" not in first.breakdown
+
+    # Move one tile closer (distance 4): F = gamma*Phi(s') - Phi(s).
+    second = strategy.compute(_pbrs_context(1, 5, step_count=2))  # distance 4
+    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
+    assert second.breakdown["potential_shaping"] == pytest.approx(expected)
+    assert expected > 0.0  # closing distance is rewarded
+
+
+def test_pure_pbrs_capture_pulse():
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(4, 5))
+
+    strategy.compute(_pbrs_context(4, 5, step_count=1))  # distance 1 -> sets last potential
+    capture = strategy.compute(
+        _pbrs_context(5, 5, step_count=2, capture_happened=True)  # ghost reaches Pacman
+    )
+
+    assert capture.breakdown["GET_PACMAN"] == pytest.approx(100.0)
+    # Phi(capture) = 0; pulse = gamma*0 - (-alpha*dist_before) = +alpha*1.
+    assert capture.breakdown["potential_shaping"] == pytest.approx(ALPHA * 1.0)
+
+
+def test_pure_pbrs_timeout_does_not_zero_potential():
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(0, 5))
+
+    strategy.compute(_pbrs_context(0, 5, step_count=1))  # distance 5
+    timeout = strategy.compute(
+        _pbrs_context(1, 5, step_count=2, timeout_happened=True)  # distance 4, Pacman alive
+    )
+
+    assert timeout.breakdown["PACMAN_TIMEOUT_WIN"] == pytest.approx(-100.0)
+    # Real telescoping using the actual distance, NOT a forced +alpha*dist_before pulse.
+    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
+    assert timeout.breakdown["potential_shaping"] == pytest.approx(expected)
+    assert timeout.breakdown["potential_shaping"] != pytest.approx(ALPHA * 5.0)
+
+
+def test_pure_pbrs_magnitude_between_timestep_and_terminal():
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(0, 5))
+    strategy.compute(_pbrs_context(0, 5, step_count=1))
+    result = strategy.compute(_pbrs_context(1, 5, step_count=2))
+
+    magnitude = abs(result.breakdown["potential_shaping"])
+    assert magnitude > abs(strategy.weights.timestep)  # > 0.01
+    assert magnitude < abs(strategy.weights.get_pacman)  # < 100
+
+
+def test_pure_pbrs_emits_no_reverse_action_term():
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(0, 5))
+    # Multi-step rollout including a direction reversal (action 0 then 1).
+    rollout = [
+        _pbrs_context(0, 5, step_count=1, ghost_action=0),
+        _pbrs_context(1, 5, step_count=2, ghost_action=0),
+        _pbrs_context(0, 5, step_count=3, ghost_action=1),  # reverse
+    ]
+    for context in rollout:
+        breakdown = strategy.compute(context).breakdown
+        assert "reverse_action" not in breakdown
