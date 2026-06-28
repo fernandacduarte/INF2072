@@ -94,6 +94,83 @@ def _epsilon_for_frames(
     return np.maximum(eps, float(epsilon_end))
 
 
+def _epsilon_schedule_from_meta(meta: dict[str, str]) -> dict[str, float | int | str] | None:
+    schedule_mode = (meta.get("epsilon_schedule_mode") or "").strip().lower()
+    if schedule_mode == "curriculum_piecewise":
+        try:
+            return {
+                "epsilon_schedule_mode": "curriculum_piecewise",
+                "max_frames": int(meta["max_frames"]),
+                "epsilon_stage_boundary_1": int(meta.get("epsilon_stage_boundary_1", "0")),
+                "epsilon_stage_boundary_2": int(meta.get("epsilon_stage_boundary_2", "0")),
+                "epsilon_easy_init": float(meta.get("epsilon_easy_init", "1.0")),
+                "epsilon_easy_end": float(meta.get("epsilon_easy_end", "0.25")),
+                "epsilon_medium_init": float(meta.get("epsilon_medium_init", "0.65")),
+                "epsilon_medium_end": float(meta.get("epsilon_medium_end", "0.20")),
+                "epsilon_hard_init": float(meta.get("epsilon_hard_init", "0.55")),
+                "epsilon_hard_end": float(meta.get("epsilon_hard_end", "0.08")),
+                "epsilon_init": float(meta.get("epsilon_init", "1.0")),
+                "epsilon_end": float(meta.get("epsilon_end", "0.08")),
+                "epsilon_anneal_ratio": float(meta.get("epsilon_anneal_ratio", "1.0")),
+                "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", meta["max_frames"])),
+            }
+        except (KeyError, ValueError):
+            return None
+
+    try:
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": int(meta["max_frames"]),
+            "epsilon_init": float(meta["epsilon_init"]),
+            "epsilon_end": float(meta["epsilon_end"]),
+            "epsilon_anneal_ratio": float(meta["epsilon_anneal_ratio"]),
+            "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", "0") or 0),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+def _epsilon_for_frames_schedule(frames: np.ndarray, schedule: dict[str, float | int | str]) -> np.ndarray:
+    mode = str(schedule.get("epsilon_schedule_mode", "global")).strip().lower()
+    x = np.maximum(frames.astype(np.float64), 0.0)
+
+    if mode == "curriculum_piecewise":
+        max_frames = max(1, int(schedule.get("max_frames", 1) or 1))
+        b1 = max(0, min(max_frames, int(schedule.get("epsilon_stage_boundary_1", max_frames // 3) or 0)))
+        b2 = max(b1, min(max_frames, int(schedule.get("epsilon_stage_boundary_2", (2 * max_frames) // 3) or b1)))
+
+        easy_init = float(schedule.get("epsilon_easy_init", 1.0))
+        easy_end = float(schedule.get("epsilon_easy_end", easy_init))
+        medium_init = float(schedule.get("epsilon_medium_init", 0.65))
+        medium_end = float(schedule.get("epsilon_medium_end", medium_init))
+        hard_init = float(schedule.get("epsilon_hard_init", 0.55))
+        hard_end = float(schedule.get("epsilon_hard_end", hard_init))
+
+        y = np.empty_like(x)
+
+        def _interp(start_frame: float, end_frame: float, start_eps: float, end_eps: float, values: np.ndarray) -> np.ndarray:
+            span = max(1.0, end_frame - start_frame)
+            progress = np.clip((values - start_frame) / span, 0.0, 1.0)
+            return start_eps + (end_eps - start_eps) * progress
+
+        easy_mask = x < float(b1)
+        medium_mask = (x >= float(b1)) & (x < float(b2))
+        hard_mask = x >= float(b2)
+
+        y[easy_mask] = _interp(0.0, float(b1), easy_init, easy_end, x[easy_mask])
+        y[medium_mask] = _interp(float(b1), float(b2), medium_init, medium_end, x[medium_mask])
+        y[hard_mask] = _interp(float(b2), float(max_frames), hard_init, hard_end, np.minimum(x[hard_mask], float(max_frames)))
+        return y
+
+    return _epsilon_for_frames(
+        x,
+        epsilon_max_frames=int(schedule.get("max_frames", 1) or 1),
+        epsilon_init=float(schedule.get("epsilon_init", 1.0)),
+        epsilon_end=float(schedule.get("epsilon_end", 0.1)),
+        epsilon_anneal_ratio=float(schedule.get("epsilon_anneal_ratio", 0.95)),
+    )
+
+
 def _parse_progress_meta(progress_file: Path) -> dict[str, str]:
     if not progress_file.exists():
         return {}
@@ -416,7 +493,7 @@ def _merge_progress_payloads(
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
     meta: dict[str, str],
-) -> tuple[int, float, float, float]:
+) -> dict[str, float | int | str]:
     resolved: dict[str, float | int] = {}
     missing: list[str] = []
 
@@ -479,7 +556,35 @@ def _resolve_epsilon_from_cli_or_meta(
     if not (0.0 < epsilon_anneal_ratio <= 1.0):
         raise ValueError("--epsilon-anneal-ratio must be in (0, 1]")
 
-    return epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio
+    schedule_from_meta = _epsilon_schedule_from_meta(meta)
+    if schedule_from_meta is None:
+        schedule_from_meta = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+
+    if any(
+        value is not None
+        for value in (
+            args.epsilon_max_frames,
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    ):
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+    return schedule_from_meta
 
 
 def _open_file(path: Path) -> None:
@@ -747,10 +852,14 @@ def main() -> None:
         or has_cli_epsilon_override
     )
     if show_epsilon:
-        epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = _resolve_epsilon_from_cli_or_meta(
+        epsilon_schedule = _resolve_epsilon_from_cli_or_meta(
             args,
             progress_meta,
         )
+        epsilon_max_frames = int(epsilon_schedule.get("max_frames", 1) or 1)
+        epsilon_init = float(epsilon_schedule.get("epsilon_init", 1.0))
+        epsilon_end = float(epsilon_schedule.get("epsilon_end", 0.0))
+        epsilon_anneal_ratio = float(epsilon_schedule.get("epsilon_anneal_ratio", 1.0))
         epsilon_source = (
             "metadata"
             if all(
@@ -765,6 +874,14 @@ def main() -> None:
             else "cli+metadata"
         )
     else:
+        epsilon_schedule = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": 1,
+            "epsilon_init": 1.0,
+            "epsilon_end": 0.0,
+            "epsilon_anneal_ratio": 1.0,
+            "epsilon_anneal_frames": 1,
+        }
         epsilon_max_frames = 1
         epsilon_init = 1.0
         epsilon_end = 0.0
@@ -979,13 +1096,7 @@ def main() -> None:
 
     if show_epsilon and max_display_frame > 0.0:
         x_eps = np.linspace(0.0, max_display_frame, 256, dtype=np.float64)
-        y_eps = _epsilon_for_frames(
-            x_eps,
-            epsilon_max_frames=epsilon_max_frames,
-            epsilon_init=epsilon_init,
-            epsilon_end=epsilon_end,
-            epsilon_anneal_ratio=epsilon_anneal_ratio,
-        )
+        y_eps = _epsilon_for_frames_schedule(x_eps, epsilon_schedule)
         ax_eps.plot(
             x_eps,
             y_eps,

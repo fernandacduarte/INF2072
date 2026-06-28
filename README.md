@@ -201,6 +201,18 @@ Pacman training-difficulty control is now configurable:
 - `--pacman-difficulty medium` uses the safety policy with exploration noise.
 - `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
 
+When `--pacman-curriculum easy-medium-hard` is enabled, exploration epsilon now
+uses stage-aligned bumps (for all algorithms) to help adaptation at each
+transition:
+
+- Easy phase (`[0, 1/3)`): `1.00 -> 0.25`
+- Medium phase (`[1/3, 2/3)`): reset `0.65 -> 0.20`
+- Hard phase (`[2/3, 1]`): reset `0.55 -> 0.08`
+
+Transition boundaries use exact thirds of `--max-frames`.
+With `--pacman-curriculum off`, the previous global schedule remains unchanged
+(`1.00 -> 0.10` over 95% of `--max-frames`).
+
 Examples:
 
 ```bash

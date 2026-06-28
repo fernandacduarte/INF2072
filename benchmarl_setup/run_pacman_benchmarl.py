@@ -58,9 +58,15 @@ def _tune_shared_experiment(
     algorithm: str,
     max_frames: int,
     maze: str,
+    pacman_curriculum: str,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
-    schedule = training_exploration_schedule(algorithm, maze, max_frames)
+    schedule = training_exploration_schedule(
+        algorithm,
+        maze,
+        max_frames,
+        pacman_curriculum=pacman_curriculum,
+    )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
         "exploration_eps_end": schedule["epsilon_end"],
@@ -300,7 +306,13 @@ def main() -> None:
             experiment_config.keep_checkpoints_num = max(current_keep, keep_target)
 
     # Apply one shared schedule so common hyperparameters stay aligned.
-    _tune_shared_experiment(experiment_config, algorithm, args.max_frames, args.maze)
+    _tune_shared_experiment(
+        experiment_config,
+        algorithm,
+        args.max_frames,
+        args.maze,
+        args.pacman_curriculum,
+    )
 
     experiment = Experiment(
         task=task,
