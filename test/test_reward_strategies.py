@@ -194,8 +194,9 @@ def test_capture_v0_improved_uses_smooth_legal_delta_and_reverse_action_penalty(
     )
 
     result = strategy.compute(context)
-    # legal_delta = 3 - 2 = 1, reward = 0.2 * 1
-    assert result.breakdown["pacman_legal_moves_delta"] == pytest.approx(0.2)
+    # (1,1) has 4 legal moves; (1,2) has 2 (walls at (0,2),(1,3)).
+    # legal_delta = 4 - 2 = 2, reward = 0.2 * 2
+    assert result.breakdown["pacman_legal_moves_delta"] == pytest.approx(0.4)
     # previous action 0 (RIGHT), current action 1 (LEFT) => reverse penalty
     assert result.breakdown["reverse_action"] == pytest.approx(-0.02)
 
