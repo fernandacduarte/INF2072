@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -41,6 +42,82 @@ def _is_terminal_reward_term(term_name: str) -> bool:
     }
 
 
+def _split_reward_and_device(label: str) -> tuple[str | None, str]:
+    parts = [part.strip().lower() for part in str(label).split("@") if part.strip()]
+    if not parts:
+        return None, "default"
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[-1]
+
+
+def _device_matches_selector(label: str, selector: str) -> bool:
+    if selector == "all":
+        return True
+    _reward_id, parsed_device = _split_reward_and_device(label)
+    return parsed_device == selector
+
+
+def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return hex_color
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return hex_color
+
+    clamp = lambda channel: max(0, min(255, int(round(channel * multiplier))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float] | None:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return None
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return None
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _rgb01_to_hex(rgb: tuple[float, float, float]) -> str:
+    r, g, b = rgb
+    clamp = lambda value: max(0, min(255, int(round(value * 255.0))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: list[str]) -> str:
+    if len(ordered_reward_ids) <= 1:
+        return base_color
+    rgb = _hex_to_rgb01(base_color)
+    if rgb is None:
+        return base_color
+    try:
+        idx = ordered_reward_ids.index(reward_id)
+    except ValueError:
+        idx = 0
+    count = len(ordered_reward_ids)
+    phase = 0.5 if count <= 1 else idx / float(count - 1)
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    # Stronger separation for multiple reward IDs of the same algorithm.
+    hue_shift = -0.42 + 0.84 * phase
+    var_h = (h + hue_shift) % 1.0
+    sat_targets = (0.98, 0.42, 0.90, 0.50)
+    light_targets = (0.30, 0.72, 0.42, 0.62)
+    var_s = sat_targets[idx % len(sat_targets)]
+    var_l = light_targets[idx % len(light_targets)]
+
+    variant_rgb = colorsys.hls_to_rgb(var_h, var_l, var_s)
+    return _rgb01_to_hex(variant_rgb)
+
+
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
     curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
     if curriculum_mode != "easy-medium-hard":
@@ -68,6 +145,72 @@ def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[
         (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
         (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "medium->hard"),
     ]
+
+
+def _discover_progress_files(maze_runs_root: Path) -> list[Path]:
+    candidates = sorted(maze_runs_root.glob("live_progress*.csvl"))
+    if candidates:
+        return candidates
+
+    legacy_file = maze_runs_root / "live_progress.csvl"
+    if legacy_file.exists():
+        return [legacy_file]
+    return []
+
+
+def _merge_progress_payloads(
+    payloads: list[
+        tuple[
+            Path,
+            dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+            dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+            dict[str, str],
+        ]
+    ]
+) -> tuple[
+    dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+    dict[str, str],
+]:
+    merged_core: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(dict))
+    )
+    merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    )
+    merged_meta: dict[str, str] = {}
+
+    for file_path, core_data, term_data, meta in payloads:
+        source_name = file_path.stem
+        source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
+
+        for key, value in meta.items():
+            if key == "reward_terms":
+                existing = {
+                    item.strip().lower()
+                    for item in (merged_meta.get("reward_terms") or "").split("|")
+                    if item.strip()
+                }
+                incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
+                merged_terms_meta = sorted(existing | incoming)
+                merged_meta["reward_terms"] = "|".join(merged_terms_meta)
+            elif key not in merged_meta:
+                merged_meta[key] = value
+
+        for algorithm, by_device in core_data.items():
+            for device_key, by_run in by_device.items():
+                for run_id, step_map in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    merged_core[algorithm][device_key][merged_run_id].update(step_map)
+
+        for algorithm, by_device in term_data.items():
+            for device_key, by_run in by_device.items():
+                for run_id, by_term in by_run.items():
+                    merged_run_id = f"{source_machine_id}:{run_id}"
+                    for term_name, step_map in by_term.items():
+                        merged_terms[algorithm][device_key][merged_run_id][term_name].update(step_map)
+
+    return merged_core, merged_terms, merged_meta
 
 
 def _parse_progress_file(
@@ -137,7 +280,7 @@ def _parse_progress_file(
                 algorithm = token_parts[0] if token_parts else ""
                 if len(token_parts) >= 3:
                     # New format: algorithm@reward_id@device_label
-                    label = token_parts[-1]
+                    label = f"{token_parts[1]}@{token_parts[-1]}"
                 elif len(token_parts) == 2:
                     # Legacy format: algorithm@device_label
                     label = token_parts[1]
@@ -401,7 +544,8 @@ class LiveComparisonPlotter:
         plt.show(block=False)
 
     def _line_style_for_device(self, device_key: str) -> str:
-        key = (device_key or "").strip().lower()
+        _reward_id, parsed_device = _split_reward_and_device(device_key)
+        key = parsed_device
         if key.startswith("cuda"):
             return "-"
         if key.startswith("cpu"):
@@ -493,8 +637,12 @@ class LiveComparisonPlotter:
         self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
         self.show_epsilon_overlay = True
 
-    def update_from_file(self, progress_file: Path) -> None:
-        data, term_data, meta = _parse_progress_file(progress_file)
+    def update_from_payload(
+        self,
+        data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+        term_data: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]],
+        meta: dict[str, str],
+    ) -> None:
 
         metric_name = (meta.get("metric") or "").strip().lower()
         if metric_name == "capture_pct_live_eval":
@@ -518,6 +666,17 @@ class LiveComparisonPlotter:
 
         active_keys: set[str] = set()
         max_display_frame = 0.0
+        reward_ids_by_algorithm: dict[str, list[str]] = {}
+        for algorithm in self.algorithms:
+            by_device = data.get(algorithm, {})
+            reward_ids = {
+                reward_id
+                for device_key in by_device.keys()
+                for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
+                if reward_id is not None
+            }
+            reward_ids_by_algorithm[algorithm] = sorted(reward_ids)
+
         for algorithm in self.algorithms:
             by_device = data.get(algorithm, {})
             if not by_device:
@@ -526,7 +685,9 @@ class LiveComparisonPlotter:
             if self.device_selector == "all":
                 selected_labels = sorted(by_device.keys())
             else:
-                selected_labels = [self.device_selector] if self.device_selector in by_device else []
+                selected_labels = [
+                    key for key in sorted(by_device.keys()) if _device_matches_selector(key, self.device_selector)
+                ]
 
             for device_key in selected_labels:
                 run_steps = by_device.get(device_key, {})
@@ -537,12 +698,19 @@ class LiveComparisonPlotter:
                 frames, mean_captures, std_captures, mean_rewards, _std_rewards, n_runs = aggregated
                 if frames.size:
                     max_display_frame = max(max_display_frame, float(np.nanmax(frames)))
-                color = self.color_map.get(algorithm, "#1f77b4")
                 line_style = self._line_style_for_device(device_key)
                 series_key = f"{algorithm}@{device_key}"
                 active_keys.add(series_key)
-                legend_capture = f"{algorithm.upper()}@{device_key} capture snapshot% (n={n_runs})"
-                legend_reward = f"{algorithm.upper()}@{device_key} reward"
+                reward_id, parsed_device = _split_reward_and_device(device_key)
+                legend_suffix = (
+                    f"{reward_id}@{parsed_device}" if reward_id is not None else parsed_device
+                )
+                ordered_reward_ids = reward_ids_by_algorithm.get(algorithm, [])
+                color = self.color_map.get(algorithm, "#1f77b4")
+                if reward_id is not None:
+                    color = _reward_variant_color(color, reward_id, ordered_reward_ids)
+                legend_capture = f"{algorithm.upper()}@{legend_suffix} capture snapshot% (n={n_runs})"
+                legend_reward = f"{algorithm.upper()}@{legend_suffix} reward"
                 valid_mask = ~np.isnan(mean_captures)
                 valid_frames = frames[valid_mask]
                 valid_captures = mean_captures[valid_mask]
@@ -644,7 +812,7 @@ class LiveComparisonPlotter:
                                 stale_terminal.remove()
                             continue
 
-                        legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
+                        legend_term = f"{algorithm.upper()}@{legend_suffix} reward::{term_name}"
                         marker, term_linestyle = self._reward_term_style(term_name)
                         is_terminal_term = _is_terminal_reward_term(term_name)
                         target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
@@ -836,7 +1004,10 @@ def _normalize_device_selector(raw: str) -> str:
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
-    progress_file = args.progress_file if args.progress_file is not None else maze_runs_root / "live_progress.csvl"
+    progress_files = [args.progress_file] if args.progress_file is not None else _discover_progress_files(maze_runs_root)
+    if not progress_files:
+        expected_pattern = maze_runs_root / "live_progress*.csvl"
+        raise FileNotFoundError(f"No live progress files found for pattern: {expected_pattern}")
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
         raise ValueError("At least one algorithm must be provided.")
@@ -863,11 +1034,15 @@ def main() -> None:
 
     show_epsilon = "iql" in algorithms
     waiting_for_meta = False
+    init_payloads = [
+        (path, *_parse_progress_file(path))
+        for path in progress_files
+    ]
+    init_core_data, init_term_data, init_meta = _merge_progress_payloads(init_payloads)
     if show_epsilon:
-        _core_data, _term_data, meta = _parse_progress_file(progress_file)
         epsilon_cfg = _resolve_epsilon_from_cli_or_meta(
             args,
-            meta,
+            init_meta,
         )
         if epsilon_cfg is None:
             waiting_for_meta = True
@@ -883,7 +1058,9 @@ def main() -> None:
         epsilon_end = 0.0
         epsilon_anneal_ratio = 1.0
 
-    print(f"[LivePlot] Watching: {progress_file}")
+    print("[LivePlot] Watching progress files:")
+    for progress_file in progress_files:
+        print(f"- {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
     print(f"[LivePlot] Device selector: {device_selector}")
     print(
@@ -912,7 +1089,11 @@ def main() -> None:
     try:
         while True:
             if show_epsilon and not plotter.show_epsilon_overlay:
-                _loop_core_data, _loop_term_data, loop_meta = _parse_progress_file(progress_file)
+                loop_payloads = [
+                    (path, *_parse_progress_file(path))
+                    for path in progress_files
+                ]
+                _loop_core_data, _loop_term_data, loop_meta = _merge_progress_payloads(loop_payloads)
                 loop_epsilon_cfg = _resolve_epsilon_from_cli_or_meta(args, loop_meta)
                 if loop_epsilon_cfg is not None:
                     loop_max_frames, loop_init, loop_end, loop_ratio = loop_epsilon_cfg
@@ -927,7 +1108,12 @@ def main() -> None:
                         f"init={loop_init} end={loop_end} anneal_ratio={loop_ratio} "
                         f"max_frames={loop_max_frames}"
                     )
-            plotter.update_from_file(progress_file)
+            payloads = [
+                (path, *_parse_progress_file(path))
+                for path in progress_files
+            ]
+            merged_core_data, merged_term_data, merged_meta = _merge_progress_payloads(payloads)
+            plotter.update_from_payload(merged_core_data, merged_term_data, merged_meta)
             time.sleep(max(0.2, args.interval))
     except KeyboardInterrupt:
         print("\n[LivePlot] Exiting on user interrupt.")

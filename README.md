@@ -97,6 +97,9 @@ The Pygame renderer highlights each ghost's current local observation (11x11 by 
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
+Before replay starts, `eval.py` also prints selected-seed statistics for the
+chosen checkpoint (run id, seed, reward final/tail/best, and checkpoint-coupled
+capture snapshot percentage when available).
 
 You can test the renderer before training any checkpoint with a random-policy
 episode:
@@ -116,7 +119,22 @@ It now supports futebol2d-style best-run selection across multiple runs:
 
 ```bash
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
+py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best --checkpoint-best-metric capture_rate
 ```
+
+For `--checkpoint-best-metric capture_rate`, best selection is checkpoint-coupled: the
+run is considered only when `evaluation_report_live_capture.csv` includes a
+`checkpoint_path` that matches that run's latest checkpoint. This avoids stale
+run-level capture files selecting a different checkpoint than the one replayed.
+If run artifacts were moved/copied (for example `runs` -> `runs100000`), selection
+also accepts a relocation-safe identity match (`run_dir` + checkpoint filename)
+while still rejecting stale checkpoint-frame mismatches.
+If no checkpoint-coupled capture files are available, rerun live snapshot evaluation
+or temporarily use `--checkpoint-best-metric reward`.
+
+Benchmark live snapshots now write both `evaluation_report_live_capture.csv`
+(latest-pointer file) and checkpoint-specific files such as
+`evaluation_report_live_capture_checkpoint_100000.csv` for provenance.
 
 Evaluation also supports explicit device selection:
 
@@ -146,10 +164,22 @@ difficulty/curriculum behavior in reports, pass:
 py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
 ```
 
-Benchmark note: `benchmarl_setup/run_benchmark.py` intentionally passes
-`--allow-non-hard-checkpoint` when calling `eval_report.py` for live snapshots
-and final paired evaluation. This keeps benchmark evaluation aligned with the
-checkpoint-native curriculum stage at each checkpoint instead of forcing hard.
+Benchmark note: `benchmarl_setup/run_benchmark.py` now keeps live capture
+snapshots checkpoint-native by default during training, so capture follows each
+checkpoint's curriculum stage (easy -> medium -> hard over the configured thirds).
+This behavior is fixed (no CLI toggle).
+Snapshot evaluation now passes each checkpoint frame as curriculum offset to
+`eval_report.py`, so checkpoint-native snapshots reconstruct the expected
+curriculum stage for that checkpoint (for example late-third checkpoints evaluate
+under hard stage).
+
+After benchmark workers complete, `run_benchmark.py` performs a latest-checkpoint
+capture refresh in hard-forced mode so end-of-run selection by
+`--checkpoint-best-metric capture_rate` stays aligned with hard CLI replay in
+`custom_environment/eval.py`.
+
+Final paired benchmark evaluation (`--eval-episodes`) still uses checkpoint-native
+mode by default.
 
 Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.py`):
 
@@ -193,6 +223,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --allow-non-hard-checkpoint
 --ghost-view-size 3|5|7
+--checkpoint-best-metric capture_rate|reward
 ```
 
 If a legacy checkpoint was trained with a different local view size and auto-detection fails,
@@ -212,6 +243,7 @@ For a compact post-training quality report (deterministic policy, multiple episo
 
 ```bash
 py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --checkpoint-best-metric capture_rate --episodes 30
 ```
 
 When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
@@ -240,6 +272,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 ```bash
 --episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
 --learner qmixglobal --checkpoint-select latest
+--checkpoint-select best --checkpoint-best-metric capture_rate|reward
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
 --device-label auto|cpu|cuda|cuda_0
 --reward-id current --train-seeds 0,1,2
@@ -364,12 +397,19 @@ Useful optional parameters:
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 5000
 --ghost-view-size 3|5|7
---devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\default\benchmark_jobs.csv
+--devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\benchmark_jobs_myhost.csv --machine-id myhost
 ```
 
 This command now trains and then automatically writes a benchmark summary CSV.
 
-It also writes a per-job timing ledger (`benchmark_jobs.csv`) with wall-clock duration and run mapping.
+By default (when explicit output paths are omitted), it writes machine-suffixed artifacts:
+
+- `benchmarl_setup/runs/<maze>/benchmark_summary_<machine_id>.csv`
+- `benchmarl_setup/runs/<maze>/reward_eval_<machine_id>.csv`
+- `benchmarl_setup/runs/<maze>/live_progress_<machine_id>.csvl`
+- `benchmarl_setup/runs/benchmark_jobs_<machine_id>.csv`
+
+It also writes a per-job timing ledger (`benchmark_jobs_<machine_id>.csv`) with wall-clock duration and run mapping.
 
 The summary CSV includes, per run:
 
@@ -419,7 +459,8 @@ Useful options:
 Notes:
 
 - `--devices` filters device labels included in the summary (for example `cpu,cuda`).
-- `--jobs-path` merges timing metrics (`duration_seconds`, `frames_per_second`) when a benchmark jobs ledger is available.
+- `--jobs-path` accepts one or more jobs CSV files and merges timing metrics (`duration_seconds`, `frames_per_second`).
+- If `--jobs-path` is omitted, the script auto-discovers and merges all `benchmark_jobs*.csv` under the selected runs root.
 - The printed aggregate is grouped by `algorithm + device`.
 
 ### CPU vs GPU Benchmark Protocol
@@ -441,7 +482,7 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglo
 
 Training now reports live progress to:
 
-- `benchmarl_setup/runs/<maze>/live_progress.csvl`
+- `benchmarl_setup/runs/<maze>/live_progress_<machine_id>.csvl` (default)
 
 Use `benchmarl_setup/liveplot.py` in a separate terminal to monitor running benchmarks with three synchronized axes:
 - y1: rolling true capture snapshot percentage (mean ± std)
@@ -456,10 +497,11 @@ vertical markers at the frame boundaries for `easy->medium` and `medium->hard`.
 
 By default (`--device all`), it can display one line per algorithm-device pair (for example `IQL@cpu`, `IQL@cuda`).
 When `iql` is included, the epsilon overlay is resolved from benchmark metadata
-written to `live_progress.csvl` (for example:
+written to `live_progress*.csvl` (for example:
 `#meta,max_frames=...,epsilon_init=...,epsilon_end=...,epsilon_anneal_ratio=...`).
 Curriculum markers use the same metadata stream (`pacman_curriculum`,
 `pacman_curriculum_max_frames`, `pacman_curriculum_frame_offset`).
+Each metadata header also includes `machine_id=...`.
 There are no built-in epsilon fallback defaults in plotting anymore.
 If metadata is missing/incomplete, provide `--epsilon-*` flags explicitly.
 
@@ -483,10 +525,15 @@ individual plotting is enabled.
 Live snapshot cadence note: periodic updates require checkpoints. When
 `--checkpoint-interval` is greater than zero, snapshots can appear during
 training; when it is zero, snapshots appear only at end-of-run checkpoints.
-By default, `run_benchmark.py` preserves `live_progress.csvl` across sessions,
-so live/offline plots can include algorithms completed in earlier runs for the
-same maze. Use `--reset-live-progress` to truncate the file for a clean,
+By default, `run_benchmark.py` preserves machine-specific
+`live_progress_<machine_id>.csvl` across sessions, so live/offline plots can
+include algorithms completed in earlier runs for the same maze. Use
+`--reset-live-progress` to truncate the selected stream for a clean,
 session-only stream.
+
+When `--live-progress-file` is omitted, `benchmarl_setup/liveplot.py` and
+`benchmarl_setup/plot_benchmarl_reward.py` auto-discover and merge all
+`live_progress*.csvl` files under `benchmarl_setup/runs/<maze>/`.
 
 Start live monitor:
 
@@ -505,8 +552,19 @@ Then run benchmark normally:
 
 ```bash
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 100
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 20
 ```
+
+Shared network folder (many machines): when explicit output paths are not
+provided, `run_benchmark.py` now writes machine-suffixed files by default:
+
+- `live_progress_<machine_id>.csvl`
+- `benchmark_summary_<machine_id>.csv`
+- `reward_eval_<machine_id>.csv`
+- `benchmark_jobs_<machine_id>.csv`
+
+`machine_id` defaults to hostname (lowercased and filename-safe). Override it
+with `--machine-id` if needed.
 
 Useful options:
 
@@ -558,12 +616,13 @@ Useful options:
 By default, this script now reads from `--reward-id current` and `--device auto`
 (all device labels under the selected reward root). Use `--device cuda` or
 `--device cpu` to force one device folder. Epsilon overlay values are resolved
-from `live_progress.csvl` metadata (`max_frames`, `epsilon_init`,
+from merged `live_progress*.csvl` metadata (`max_frames`, `epsilon_init`,
 `epsilon_end`, `epsilon_anneal_ratio`) with optional `--epsilon-*` overrides.
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
 
-Capture metric note: this plot reads capture values from `live_progress.csvl`.
+Capture metric note: this plot reads capture values from merged
+`live_progress*.csvl` files (unless `--progress-file` is provided).
 For current benchmark runs, these capture points are true deterministic eval
 snapshots (with non-evaluated steps as `NaN`).
 
@@ -1114,6 +1173,10 @@ python benchmarl_setup/run_benchmark.py \
 
 Finally, evaluate the already-trained checkpoints together on the same 100 episode
 seeds:
+
+Note: `custom_environment/eval_report.py` only uses benchmark jobs mode when
+`--jobs-path` is provided. If omitted, it evaluates checkpoints via direct
+run-folder discovery (for the selected reward/algorithms/device-label).
 
 <details open>
 <summary><strong>Windows (default)</strong></summary>

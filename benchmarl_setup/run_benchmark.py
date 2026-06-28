@@ -1,6 +1,8 @@
 import argparse
 import csv
 import json
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -41,6 +43,26 @@ def _parse_seeds(raw: str) -> list[int]:
     if not seeds:
         raise ValueError("At least one seed must be provided.")
     return seeds
+
+
+def _sanitize_machine_id(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value:
+        return "unknown"
+
+    normalized_chars: list[str] = []
+    for ch in value:
+        if ch.isalnum() or ch in {"-", "_"}:
+            normalized_chars.append(ch)
+        else:
+            normalized_chars.append("-")
+
+    normalized = "".join(normalized_chars).strip("-_")
+    return normalized or "unknown"
+
+
+def _default_machine_id() -> str:
+    return _sanitize_machine_id(socket.gethostname())
 
 
 def parse_args() -> argparse.Namespace:
@@ -133,6 +155,12 @@ def parse_args() -> argparse.Namespace:
         help="Base runs directory. Benchmark writes runs under <save-folder>/<maze>.",
     )
     parser.add_argument(
+        "--machine-id",
+        type=str,
+        default=None,
+        help="Machine identity used to suffix default output files (default: hostname).",
+    )
+    parser.add_argument(
         "--checkpoint-interval",
         type=int,
         default=0,
@@ -203,8 +231,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--jobs-out",
         type=str,
-        default=str((PROJECT_ROOT / "benchmarl_setup" / "runs" / "benchmark_jobs.csv").resolve()),
-        help="Output CSV path for per-job wall-clock timing records.",
+        default=None,
+        help="Output CSV path for per-job wall-clock timing records (default: <save-folder>/benchmark_jobs_<machine-id>.csv).",
     )
     parser.add_argument(
         "--eval-episodes",
@@ -218,7 +246,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--live-capture-eval-episodes",
         type=int,
-        default=100,
+        default=20,
         help=(
             "Deterministic eval_report episodes used to periodically backfill true capture% "
             "in live progress (set 0 to disable)."
@@ -455,8 +483,13 @@ def _run_eval_capture_snapshot(
     eval_seed_base: int,
     device: str,
     allow_cpu_fallback: bool,
+    allow_non_hard_checkpoint: bool,
 ) -> tuple[float | None, dict[str, float]]:
-    out_csv = run_dir / "evaluation_report_live_capture.csv"
+    latest_out_csv = run_dir / "evaluation_report_live_capture.csv"
+    checkpoint_frame = _checkpoint_frame_from_path(checkpoint_path)
+    checkpoint_suffix = str(checkpoint_frame) if checkpoint_frame is not None else "latest"
+    curriculum_frame_offset = checkpoint_frame if checkpoint_frame is not None else 0
+    out_csv = run_dir / f"evaluation_report_live_capture_checkpoint_{checkpoint_suffix}.csv"
     command = [
         sys.executable,
         str(EVAL_REPORT_PATH),
@@ -470,13 +503,15 @@ def _run_eval_capture_snapshot(
         str(episodes),
         "--eval-seed-base",
         str(eval_seed_base),
+        "--curriculum-frame-offset",
+        str(curriculum_frame_offset),
         "--device",
         device,
         "--out",
         str(out_csv),
     ]
-    # Benchmark evaluation should reflect checkpoint-native curriculum stage.
-    command.append("--allow-non-hard-checkpoint")
+    if allow_non_hard_checkpoint:
+        command.append("--allow-non-hard-checkpoint")
     command.append("--allow-cpu-fallback" if allow_cpu_fallback else "--no-allow-cpu-fallback")
 
     completed = subprocess.run(command, check=False)
@@ -488,11 +523,70 @@ def _run_eval_capture_snapshot(
         )
         return None, {}
 
+    if out_csv != latest_out_csv:
+        try:
+            shutil.copyfile(out_csv, latest_out_csv)
+        except OSError as exc:
+            print(
+                "Live capture snapshot copy failed: "
+                f"source={out_csv} target={latest_out_csv} error={exc}"
+            )
+
     capture_pct = _read_capture_pct_from_eval_csv(out_csv)
     reward_breakdown = _read_breakdown_per_step_from_eval_csv(out_csv)
     if capture_pct is None:
         print(f"Live capture snapshot missing capture_rate in {out_csv}")
     return capture_pct, reward_breakdown
+
+
+def _refresh_latest_capture_snapshots(
+    *,
+    runs_roots_by_label: dict[str, Path],
+    algorithms: list[str],
+    eval_device_by_label: dict[str, str],
+    episodes: int,
+    eval_seed_base: int,
+    allow_cpu_fallback: bool,
+    final_allow_non_hard_checkpoint: bool,
+) -> None:
+    if episodes <= 0:
+        return
+
+    refreshed = 0
+    skipped = 0
+    refresh_mode = "checkpoint-native" if final_allow_non_hard_checkpoint else "hard-forced"
+    print(
+        "Refreshing latest checkpoint capture snapshots for completed runs "
+        f"(mode={refresh_mode})..."
+    )
+    for label, runs_root in runs_roots_by_label.items():
+        reward_id, _, _device_label = label.partition("@")
+        eval_device = eval_device_by_label.get(label)
+        if not reward_id or not eval_device:
+            continue
+
+        for algorithm in algorithms:
+            for run_dir in candidate_run_dirs(runs_root, algorithm):
+                checkpoint_path = _latest_checkpoint_path(run_dir)
+                if checkpoint_path is None:
+                    skipped += 1
+                    continue
+                capture_pct, _reward_breakdown = _run_eval_capture_snapshot(
+                    algorithm=algorithm,
+                    reward_id=reward_id,
+                    run_dir=run_dir,
+                    checkpoint_path=checkpoint_path,
+                    episodes=episodes,
+                    eval_seed_base=eval_seed_base,
+                    device=eval_device,
+                    allow_cpu_fallback=allow_cpu_fallback,
+                    allow_non_hard_checkpoint=final_allow_non_hard_checkpoint,
+                )
+                if capture_pct is None:
+                    skipped += 1
+                    continue
+                refreshed += 1
+    print(f"Latest capture snapshot refresh finished: refreshed={refreshed} skipped={skipped}")
 
 
 class ProgressReporter:
@@ -507,6 +601,7 @@ class ProgressReporter:
         pacman_curriculum: str,
         pacman_curriculum_max_frames: int,
         pacman_curriculum_frame_offset: int,
+        machine_id: str,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
@@ -523,6 +618,7 @@ class ProgressReporter:
         self.pacman_curriculum = str(pacman_curriculum).strip().lower()
         self.pacman_curriculum_max_frames = int(pacman_curriculum_max_frames)
         self.pacman_curriculum_frame_offset = int(pacman_curriculum_frame_offset)
+        self.machine_id = _sanitize_machine_id(machine_id)
         self.epsilon_algorithm = normalize_algorithm(epsilon_algorithm)
         self.epsilon_schedule = training_exploration_schedule(
             self.epsilon_algorithm,
@@ -596,6 +692,7 @@ class ProgressReporter:
             f"pacman_curriculum={self.pacman_curriculum},"
             f"pacman_curriculum_max_frames={self.pacman_curriculum_max_frames},"
             f"pacman_curriculum_frame_offset={self.pacman_curriculum_frame_offset},"
+            f"machine_id={self.machine_id},"
             "metric=capture_pct_eval,"
             "reward=collection_reward_reward_mean,"
             f"reward_terms={self._reward_terms_metadata_value()}\n"
@@ -811,6 +908,7 @@ class ProgressReporter:
                             eval_seed_base=self.eval_seed_base,
                             device=eval_device,
                             allow_cpu_fallback=self.allow_cpu_fallback,
+                            allow_non_hard_checkpoint=True,
                         )
                         if capture_pct is None:
                             continue
@@ -917,6 +1015,7 @@ def _discover_new_run_dir(
 def _write_job_records(path: Path, records: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "machine_id",
         "algorithm",
         "reward_id",
         "reward_class",
@@ -945,6 +1044,7 @@ def _run_algorithm_serial_seeds(
     save_folder: Path,
     reward_id: str,
     reward_class: str,
+    machine_id: str,
     seeds: list[int],
     stop_event: threading.Event,
 ) -> tuple[list[tuple[str, str, int, int, str]], list[dict[str, str]]]:
@@ -987,6 +1087,7 @@ def _run_algorithm_serial_seeds(
 
         job_records.append(
             {
+                "machine_id": _sanitize_machine_id(machine_id),
                 "algorithm": algorithm,
                 "reward_id": reward_id,
                 "reward_class": reward_class,
@@ -1079,21 +1180,27 @@ def main() -> None:
         )
 
     seeds = _parse_seeds(args.seeds)
+    machine_id = _sanitize_machine_id(args.machine_id) if args.machine_id is not None else _default_machine_id()
     maze_runs_root = runs_root_for_maze(Path(args.save_folder), args.maze)
     live_progress_file = (
         Path(args.live_progress_file)
         if args.live_progress_file is not None
-        else maze_runs_root / "live_progress.csvl"
+        else maze_runs_root / f"live_progress_{machine_id}.csvl"
     )
     summary_out = (
         Path(args.summary_out)
         if args.summary_out is not None
-        else maze_runs_root / "benchmark_summary.csv"
+        else maze_runs_root / f"benchmark_summary_{machine_id}.csv"
     )
     eval_out = (
         Path(args.eval_out)
         if args.eval_out is not None
-        else maze_runs_root / "reward_eval.csv"
+        else maze_runs_root / f"reward_eval_{machine_id}.csv"
+    )
+    jobs_out = (
+        Path(args.jobs_out)
+        if args.jobs_out is not None
+        else Path(args.save_folder) / f"benchmark_jobs_{machine_id}.csv"
     )
     device_configs = _build_device_configs(args)
 
@@ -1136,6 +1243,7 @@ def main() -> None:
             pacman_curriculum=args.pacman_curriculum,
             pacman_curriculum_max_frames=args.pacman_curriculum_max_frames,
             pacman_curriculum_frame_offset=0,
+            machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
@@ -1145,6 +1253,8 @@ def main() -> None:
         )
         reporter.start()
         print(f"Live progress enabled: {live_progress_file}")
+
+    print(f"Machine id: {machine_id}")
 
     total = len(algorithms) * len(reward_specs) * len(seeds) * len(device_configs)
     print(
@@ -1176,6 +1286,7 @@ def main() -> None:
                     save_folder,
                     reward_id,
                     reward_class,
+                    machine_id,
                     seeds,
                     stop_event,
                 ): (algorithm, reward_id, device_config["resolved"])
@@ -1200,7 +1311,16 @@ def main() -> None:
         if reporter is not None:
             reporter.stop()
 
-    jobs_out = Path(args.jobs_out)
+    _refresh_latest_capture_snapshots(
+        runs_roots_by_label=runs_roots_by_label,
+        algorithms=algorithms,
+        eval_device_by_label=eval_device_by_label,
+        episodes=args.live_capture_eval_episodes,
+        eval_seed_base=args.eval_seed_base,
+        allow_cpu_fallback=args.allow_cpu_fallback,
+        final_allow_non_hard_checkpoint=False,
+    )
+
     _write_job_records(jobs_out, job_records)
 
     print()

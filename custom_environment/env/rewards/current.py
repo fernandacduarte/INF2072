@@ -767,4 +767,91 @@ class CaptureV0ImproveStrategies(CaptureV0Reward):
         return reverse_action_by_action.get(previous_action) == current_action
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureV0PurePotentialShapingWeights:
+    get_pacman: float = 100.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    timestep: float = -0.01
+    potential_shaping_alpha: float = 0.7
+    potential_second_ghost_weight: float = 0.5
+    gamma: float = 0.99
 
+
+class CaptureV0PurePotentialShaping(CaptureV0Reward):
+    """Sparse capture base + pure potential-based reward shaping (PBRS).
+
+    Adds the Ng/Harada/Russell (1999) telescoping term ``F = gamma*Phi(s') - Phi(s)``
+    with ``Phi = -alpha*(d1 + 0.5*d2)``, where ``d1, d2`` are the BFS distances of the
+    two nearest ghosts to Pacman. This is the only shaping form that provably leaves
+    the optimal policy unchanged, so it stays defensible as "pure" PBRS.
+
+    ``Phi`` reads Pacman's true position even when it is not visible to the ghosts.
+    This is a centralized, training-time reward signal (CTDE): the executing ghost
+    policies still observe only their partial local view and never see this distance.
+
+    No movement, visibility, coordination, or ``reverse_action`` terms are emitted —
+    those are non-potential and would break the invariance guarantee. PBRS already
+    discourages useless oscillation for free (an A->B->A cycle nets zero potential
+    change while still paying the timestep cost). Phi reaches 0 naturally at capture
+    (BFS distance 0), which emits a final ``+alpha*dist`` pulse; timeout is left
+    untouched (no Phi-zeroing), so the truncation step carries its real potential.
+    """
+
+    strategy_id = "capture_v0_pure_potential_shaping"
+
+    def __init__(
+        self,
+        weights: CaptureV0PurePotentialShapingWeights | None = None,
+    ) -> None:
+        self.weights = weights or CaptureV0PurePotentialShapingWeights()
+        self._last_potential: float | None = None
+
+    def reset(self, initial_context: RewardContext) -> None:
+        _ = initial_context
+        self._last_potential = None
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        team_distance = self._team_distance(context)
+        if team_distance is not None:
+            potential = -w.potential_shaping_alpha * float(team_distance)
+            if self._last_potential is not None:
+                terms.append(
+                    RewardTerm(
+                        "potential_shaping",
+                        w.gamma * potential - self._last_potential,
+                    )
+                )
+            self._last_potential = potential
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))
+
+    def _team_distance(self, context: RewardContext) -> float | None:
+        distances = [
+            self._bfs_distance(
+                ghost.current_position,
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            for ghost in context.ghosts
+        ]
+        reachable = sorted(distance for distance in distances if distance is not None)
+        if not reachable:
+            return None
+        d1 = float(reachable[0])
+        if len(reachable) == 1:
+            return d1
+        d2 = float(reachable[1])
+        return d1 + self.weights.potential_second_ghost_weight * d2
