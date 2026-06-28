@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -39,6 +40,82 @@ def _is_terminal_reward_term(term_name: str) -> bool:
         "pacman_timeout_win",
         "pacman_win_pellets",
     }
+
+
+def _split_reward_and_device(label: str) -> tuple[str | None, str]:
+    parts = [part.strip().lower() for part in str(label).split("@") if part.strip()]
+    if not parts:
+        return None, "default"
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[-1]
+
+
+def _device_matches_selector(label: str, selector: str) -> bool:
+    if selector == "all":
+        return True
+    _reward_id, parsed_device = _split_reward_and_device(label)
+    return parsed_device == selector
+
+
+def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return hex_color
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return hex_color
+
+    clamp = lambda channel: max(0, min(255, int(round(channel * multiplier))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float] | None:
+    raw = str(hex_color).strip().lstrip("#")
+    if len(raw) != 6:
+        return None
+    try:
+        r = int(raw[0:2], 16)
+        g = int(raw[2:4], 16)
+        b = int(raw[4:6], 16)
+    except ValueError:
+        return None
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _rgb01_to_hex(rgb: tuple[float, float, float]) -> str:
+    r, g, b = rgb
+    clamp = lambda value: max(0, min(255, int(round(value * 255.0))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: list[str]) -> str:
+    if len(ordered_reward_ids) <= 1:
+        return base_color
+    rgb = _hex_to_rgb01(base_color)
+    if rgb is None:
+        return base_color
+    try:
+        idx = ordered_reward_ids.index(reward_id)
+    except ValueError:
+        idx = 0
+    count = len(ordered_reward_ids)
+    phase = 0.5 if count <= 1 else idx / float(count - 1)
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    # Stronger separation for multiple reward IDs of the same algorithm.
+    hue_shift = -0.42 + 0.84 * phase
+    var_h = (h + hue_shift) % 1.0
+    sat_targets = (0.98, 0.42, 0.90, 0.50)
+    light_targets = (0.30, 0.72, 0.42, 0.62)
+    var_s = sat_targets[idx % len(sat_targets)]
+    var_l = light_targets[idx % len(light_targets)]
+
+    variant_rgb = colorsys.hls_to_rgb(var_h, var_l, var_s)
+    return _rgb01_to_hex(variant_rgb)
 
 
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
@@ -203,7 +280,7 @@ def _parse_progress_file(
                 algorithm = token_parts[0] if token_parts else ""
                 if len(token_parts) >= 3:
                     # New format: algorithm@reward_id@device_label
-                    label = token_parts[-1]
+                    label = f"{token_parts[1]}@{token_parts[-1]}"
                 elif len(token_parts) == 2:
                     # Legacy format: algorithm@device_label
                     label = token_parts[1]
@@ -467,7 +544,8 @@ class LiveComparisonPlotter:
         plt.show(block=False)
 
     def _line_style_for_device(self, device_key: str) -> str:
-        key = (device_key or "").strip().lower()
+        _reward_id, parsed_device = _split_reward_and_device(device_key)
+        key = parsed_device
         if key.startswith("cuda"):
             return "-"
         if key.startswith("cpu"):
@@ -588,6 +666,17 @@ class LiveComparisonPlotter:
 
         active_keys: set[str] = set()
         max_display_frame = 0.0
+        reward_ids_by_algorithm: dict[str, list[str]] = {}
+        for algorithm in self.algorithms:
+            by_device = data.get(algorithm, {})
+            reward_ids = {
+                reward_id
+                for device_key in by_device.keys()
+                for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
+                if reward_id is not None
+            }
+            reward_ids_by_algorithm[algorithm] = sorted(reward_ids)
+
         for algorithm in self.algorithms:
             by_device = data.get(algorithm, {})
             if not by_device:
@@ -596,7 +685,9 @@ class LiveComparisonPlotter:
             if self.device_selector == "all":
                 selected_labels = sorted(by_device.keys())
             else:
-                selected_labels = [self.device_selector] if self.device_selector in by_device else []
+                selected_labels = [
+                    key for key in sorted(by_device.keys()) if _device_matches_selector(key, self.device_selector)
+                ]
 
             for device_key in selected_labels:
                 run_steps = by_device.get(device_key, {})
@@ -607,12 +698,19 @@ class LiveComparisonPlotter:
                 frames, mean_captures, std_captures, mean_rewards, _std_rewards, n_runs = aggregated
                 if frames.size:
                     max_display_frame = max(max_display_frame, float(np.nanmax(frames)))
-                color = self.color_map.get(algorithm, "#1f77b4")
                 line_style = self._line_style_for_device(device_key)
                 series_key = f"{algorithm}@{device_key}"
                 active_keys.add(series_key)
-                legend_capture = f"{algorithm.upper()}@{device_key} capture snapshot% (n={n_runs})"
-                legend_reward = f"{algorithm.upper()}@{device_key} reward"
+                reward_id, parsed_device = _split_reward_and_device(device_key)
+                legend_suffix = (
+                    f"{reward_id}@{parsed_device}" if reward_id is not None else parsed_device
+                )
+                ordered_reward_ids = reward_ids_by_algorithm.get(algorithm, [])
+                color = self.color_map.get(algorithm, "#1f77b4")
+                if reward_id is not None:
+                    color = _reward_variant_color(color, reward_id, ordered_reward_ids)
+                legend_capture = f"{algorithm.upper()}@{legend_suffix} capture snapshot% (n={n_runs})"
+                legend_reward = f"{algorithm.upper()}@{legend_suffix} reward"
                 valid_mask = ~np.isnan(mean_captures)
                 valid_frames = frames[valid_mask]
                 valid_captures = mean_captures[valid_mask]
@@ -714,7 +812,7 @@ class LiveComparisonPlotter:
                                 stale_terminal.remove()
                             continue
 
-                        legend_term = f"{algorithm.upper()}@{device_key} reward::{term_name}"
+                        legend_term = f"{algorithm.upper()}@{legend_suffix} reward::{term_name}"
                         marker, term_linestyle = self._reward_term_style(term_name)
                         is_terminal_term = _is_terminal_reward_term(term_name)
                         target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms

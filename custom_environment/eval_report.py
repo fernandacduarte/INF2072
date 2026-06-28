@@ -34,6 +34,8 @@ from benchmarl_setup.algorithm_utils import (
 from benchmarl_setup.device_utils import resolve_device
 from benchmarl_setup.pacman_benchmarl_task import register_pacman_task
 from custom_environment.eval import (
+    CHECKPOINT_BEST_METRICS,
+    _capture_rate_for_run,
     _best_checkpoint_for_learner,
     _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
@@ -69,12 +71,17 @@ def _select_checkpoint(
     learner: str,
     runs_root: Path,
     checkpoint_select: str,
+    checkpoint_best_metric: str,
     explicit_checkpoint: Path | None,
 ) -> Path:
     if explicit_checkpoint is not None:
         return explicit_checkpoint
     if checkpoint_select == "best":
-        return _best_checkpoint_for_learner(learner, runs_root)
+        return _best_checkpoint_for_learner(
+            learner,
+            runs_root,
+            selection_metric=checkpoint_best_metric,
+        )
     return _latest_checkpoint_for_learner(learner, runs_root)
 
 
@@ -198,6 +205,7 @@ def _select_runs_by_train_seed(
     runs_root: Path,
     train_seeds: set[int],
     checkpoint_select: str,
+    checkpoint_best_metric: str,
 ) -> list[tuple[int, Path, Path]]:
     selected: dict[int, tuple[float, Path, Path]] = {}
     for run_dir in candidate_run_dirs(runs_root, learner):
@@ -205,11 +213,13 @@ def _select_runs_by_train_seed(
         seed = _extract_train_seed(run_dir)
         if checkpoint is None or seed is None or seed not in train_seeds:
             continue
-        score = (
-            _tail_mean_reward(run_dir)
-            if checkpoint_select == "best"
-            else run_dir.stat().st_mtime
-        )
+        if checkpoint_select == "best":
+            if checkpoint_best_metric == "capture_rate":
+                score = _capture_rate_for_run(run_dir)
+            else:
+                score = _tail_mean_reward(run_dir)
+        else:
+            score = run_dir.stat().st_mtime
         previous = selected.get(seed)
         if previous is None or score > previous[0]:
             selected[seed] = (score, run_dir, checkpoint)
@@ -652,6 +662,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                     runs_root=learner_runs_root,
                     train_seeds=args.train_seeds,
                     checkpoint_select=args.checkpoint_select,
+                    checkpoint_best_metric=args.checkpoint_best_metric,
                 )
                 missing = args.train_seeds - {seed for seed, _, _ in selections}
                 if missing:
@@ -664,6 +675,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                     learner=learner,
                     runs_root=learner_runs_root,
                     checkpoint_select=args.checkpoint_select,
+                    checkpoint_best_metric=args.checkpoint_best_metric,
                     explicit_checkpoint=None,
                 )
                 run_dir = _run_dir_for_checkpoint(checkpoint)
@@ -838,6 +850,15 @@ def parse_args() -> argparse.Namespace:
         choices=["best", "latest"],
         default="best",
         help="Checkpoint selection mode when --checkpoint is not provided.",
+    )
+    parser.add_argument(
+        "--checkpoint-best-metric",
+        choices=list(CHECKPOINT_BEST_METRICS),
+        default="capture_rate",
+        help=(
+            "Metric used when --checkpoint-select best is active: reward uses training scalars; "
+            "capture_rate uses evaluation_report_live_capture.csv when available."
+        ),
     )
     parser.add_argument(
         "--checkpoint",

@@ -116,6 +116,7 @@ It now supports futebol2d-style best-run selection across multiple runs:
 
 ```bash
 py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best
+py -3.11 custom_environment\eval.py --learner iql --maze default --checkpoint-select best --checkpoint-best-metric capture_rate
 ```
 
 Evaluation also supports explicit device selection:
@@ -193,6 +194,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --allow-non-hard-checkpoint
 --ghost-view-size 3|5|7
+--checkpoint-best-metric capture_rate|reward
 ```
 
 If a legacy checkpoint was trained with a different local view size and auto-detection fails,
@@ -212,6 +214,7 @@ For a compact post-training quality report (deterministic policy, multiple episo
 
 ```bash
 py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --episodes 30
+py -3.11 custom_environment\eval_report.py --maze pinklike --algorithms iql,vdn,qmixglobal --checkpoint-select best --checkpoint-best-metric capture_rate --episodes 30
 ```
 
 When benchmark runs are stored under device subfolders (for example `runs/<maze>/cpu` and `runs/<maze>/cuda`), set `--device-label` explicitly or leave it as `auto`:
@@ -240,6 +243,7 @@ Useful options for deterministic report evaluation (`custom_environment\eval_rep
 ```bash
 --episodes 30 --max-steps 200 --seed-base 0 --out benchmarl_setup\runs\pinklike\evaluation_report_best.csv
 --learner qmixglobal --checkpoint-select latest
+--checkpoint-select best --checkpoint-best-metric capture_rate|reward
 --learner qmixglobal --checkpoint path\to\checkpoint.pt
 --device-label auto|cpu|cuda|cuda_0
 --reward-id current --train-seeds 0,1,2

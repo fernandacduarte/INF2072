@@ -47,6 +47,9 @@ ACTION_NAME = {
 }
 
 
+CHECKPOINT_BEST_METRICS = ("reward", "capture_rate")
+
+
 def _configure_warning_filters() -> None:
     warnings.filterwarnings(
         "ignore",
@@ -139,6 +142,25 @@ def _score_run_for_selection(run_dir: Path) -> tuple[float, float, float]:
     return (tail_mean, best_single, recency)
 
 
+def _capture_rate_for_run(run_dir: Path) -> float:
+    report_path = run_dir / "evaluation_report_live_capture.csv"
+    if not report_path.exists():
+        return float("-inf")
+
+    try:
+        with report_path.open("r", newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                raw = (row.get("capture_rate") or "").strip()
+                if not raw:
+                    continue
+                value = float(raw)
+                if value == value:
+                    return value
+    except (OSError, ValueError, csv.Error):
+        return float("-inf")
+    return float("-inf")
+
+
 def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
     return candidate_run_dirs(runs_root, learner)
 
@@ -163,7 +185,17 @@ def _latest_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
     )
 
 
-def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
+def _best_checkpoint_for_learner(
+    learner: str,
+    runs_root: Path,
+    selection_metric: str = "reward",
+) -> Path:
+    if selection_metric not in CHECKPOINT_BEST_METRICS:
+        raise ValueError(
+            f"Unsupported best selection metric: {selection_metric}. "
+            f"Allowed: {list(CHECKPOINT_BEST_METRICS)}"
+        )
+
     run_dirs = _candidate_run_dirs(learner, runs_root)
     if not run_dirs:
         raise FileNotFoundError(
@@ -175,7 +207,11 @@ def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
         checkpoint = _latest_checkpoint_in_run(run_dir)
         if checkpoint is None:
             continue
-        score = _score_run_for_selection(run_dir)
+        if selection_metric == "capture_rate":
+            capture_rate = _capture_rate_for_run(run_dir)
+            score = (capture_rate, run_dir.stat().st_mtime)
+        else:
+            score = _score_run_for_selection(run_dir)
         scored_runs.append((score, checkpoint, run_dir))
 
     if not scored_runs:
@@ -186,10 +222,18 @@ def _best_checkpoint_for_learner(learner: str, runs_root: Path) -> Path:
 
     scored_runs.sort(key=lambda item: item[0], reverse=True)
     best_score, best_checkpoint, best_run_dir = scored_runs[0]
-    print(
-        "Best-run selection: "
-        f"run={best_run_dir.name} tail_mean={best_score[0]:.4f} best_single={best_score[1]:.4f}"
-    )
+    if selection_metric == "capture_rate":
+        capture_text = "nan" if best_score[0] == -float("inf") else f"{best_score[0]:.4f}"
+        print(
+            "Best-run selection: "
+            f"run={best_run_dir.name} metric=capture_rate capture_rate={capture_text}"
+        )
+    else:
+        print(
+            "Best-run selection: "
+            f"run={best_run_dir.name} metric=reward "
+            f"tail_mean={best_score[0]:.4f} best_single={best_score[1]:.4f}"
+        )
     return best_checkpoint
 
 
@@ -538,6 +582,7 @@ def run_episode(
     checkpoint: Path | None,
     runs_root: Path,
     checkpoint_select: str,
+    checkpoint_best_metric: str,
     show_reward_breakdown: bool,
     render_mode: str,
     tile_size: int,
@@ -564,7 +609,11 @@ def run_episode(
     if checkpoint is not None:
         checkpoint_path = checkpoint
     elif checkpoint_select == "best":
-        checkpoint_path = _best_checkpoint_for_learner(learner, runs_root_for_device)
+        checkpoint_path = _best_checkpoint_for_learner(
+            learner,
+            runs_root_for_device,
+            selection_metric=checkpoint_best_metric,
+        )
     else:
         checkpoint_path = _latest_checkpoint_for_learner(learner, runs_root_for_device)
     print(f"Using checkpoint: {checkpoint_path}")
@@ -838,6 +887,15 @@ def main() -> None:
         help="How to select checkpoint when --checkpoint is not provided.",
     )
     parser.add_argument(
+        "--checkpoint-best-metric",
+        choices=list(CHECKPOINT_BEST_METRICS),
+        default="capture_rate",
+        help=(
+            "Metric used when --checkpoint-select best is active: reward uses training scalars; "
+            "capture_rate uses evaluation_report_live_capture.csv when available."
+        ),
+    )
+    parser.add_argument(
         "--show-reward-breakdown",
         action="store_true",
         help="Print per-step team reward term breakdown from the environment.",
@@ -919,6 +977,7 @@ def main() -> None:
         checkpoint=args.checkpoint,
         runs_root=maze_runs_root,
         checkpoint_select=args.checkpoint_select,
+        checkpoint_best_metric=args.checkpoint_best_metric,
         show_reward_breakdown=args.show_reward_breakdown,
         render_mode=args.render_mode,
         tile_size=args.tile_size,
