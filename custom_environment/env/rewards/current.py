@@ -786,26 +786,30 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
     episodic form ``F = Phi(s') - Phi(s)`` with ``Phi = -alpha * min_ghost_dist``,
     the BFS distance of the *nearest* ghost to Pacman.
 
-    Two deliberate choices avoid a reward-farming loophole observed empirically
-    (research-000024 follow-up: ghosts oscillated in place, banking +17.5 shaping
-    with zero captures):
+    Three deliberate choices, each fixing a failure mode observed empirically
+    (research-000024 follow-ups):
 
     * **Exact telescoping (gamma = 1).** The cumulative shaping over an episode
       then equals ``Phi(end) - Phi(start)`` regardless of path, so any in-place
       oscillation nets exactly zero. A discounted ``gamma*Phi(s') - Phi(s)`` with
       ``Phi <= 0`` instead pays ``(1-gamma)*(-Phi) > 0`` per back-and-forth cycle,
-      which a greedy policy will farm rather than capture.
-    * **Smooth ``min`` distance** over all ghosts (not "two nearest", which is
-      discontinuous when the nearest-ghost identity swaps and produced large
-      non-cancelling per-step swings).
+      which a greedy policy farmed rather than capturing.
+    * **Mean distance over ALL ghosts** (not ``min``, and not "two nearest"). With
+      a shared team reward, a ``min`` potential only responds to the single nearest
+      ghost, so the other ghosts receive a reward they cannot influence, get no
+      gradient, and park in corners -- leaving a lone pursuer that a perfectly
+      evading Pacman simply keeps at ``safe_distance`` forever. The mean rewards
+      *every* ghost for closing in, so the team converges and surrounds Pacman
+      (the coordination this project is about). It is also smooth, unlike the
+      discontinuous "two nearest" metric.
 
     ``Phi`` reads Pacman's true position even when it is not visible to the ghosts.
     This is a centralized, training-time reward signal (CTDE): the executing ghost
     policies still observe only their partial local view and never see this distance.
 
-    No movement, visibility, coordination, or ``reverse_action`` terms are emitted.
-    ``Phi`` reaches 0 naturally at capture (BFS distance 0), emitting a final
-    ``+alpha*dist`` pulse; timeout is left untouched (no Phi-zeroing).
+    No movement, visibility, or ``reverse_action`` terms are emitted. ``Phi``
+    shrinks toward 0 as the team closes in (0 only when every ghost sits on Pacman);
+    timeout is left untouched (no Phi-zeroing).
     """
 
     strategy_id = "capture_v0_pure_potential_shaping"
@@ -828,9 +832,9 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
         if context.capture_happened:
             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
 
-        min_distance = self._minimum_distance(context)
-        if min_distance is not None:
-            potential = -w.potential_shaping_alpha * float(min_distance)
+        mean_distance = self._mean_distance(context)
+        if mean_distance is not None:
+            potential = -w.potential_shaping_alpha * float(mean_distance)
             if self._last_potential is not None:
                 terms.append(
                     RewardTerm("potential_shaping", potential - self._last_potential)
@@ -843,3 +847,23 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
 
         return RewardResult(tuple(terms))
+
+    def _mean_distance(self, context: RewardContext) -> float | None:
+        """Mean BFS distance of all reachable ghosts to Pacman.
+
+        Rewards every ghost for closing in (so the team coordinates a surround),
+        unlike ``min`` which only the nearest ghost can influence.
+        """
+        distances = [
+            self._bfs_distance(
+                ghost.current_position,
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            for ghost in context.ghosts
+        ]
+        reachable = [distance for distance in distances if distance is not None]
+        if not reachable:
+            return None
+        return sum(reachable) / len(reachable)

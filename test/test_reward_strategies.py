@@ -764,3 +764,64 @@ def test_pure_pbrs_emits_no_reverse_action_term():
     for context in rollout:
         breakdown = strategy.compute(context).breakdown
         assert "reverse_action" not in breakdown
+
+
+def _pbrs_two_ghost_context(ghost_cols, pacman_col, *, step_count=1):
+    """Two ghosts on a 1xN corridor; BFS distance == |ghost_col - pacman_col|."""
+    ghosts = tuple(
+        GhostTransition(
+            ghost_id=f"ghost_{i}",
+            previous_position=(0, c),
+            current_position=(0, c),
+            action=0,
+            invalid_move=False,
+            local_observation=((1, 1, 1),),
+        )
+        for i, c in enumerate(ghost_cols)
+    )
+    return RewardContext(
+        step_count=step_count,
+        max_steps=200,
+        board_shape=(1, 16),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=ghosts,
+        pacman_previous_position=(0, pacman_col),
+        pacman_position=(0, pacman_col),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+
+def test_pure_pbrs_mean_rewards_coordination_over_solo_progress():
+    """Both ghosts closing in must out-reward only one closing in.
+
+    Regression for the min-distance failure mode (research-000024 follow-up:
+    non-nearest ghosts got no gradient and parked, leaving a lone pursuer that
+    could never breach an evading Pacman's safe distance).
+    """
+    pac = 10
+    # Solo: ghost_0 moves 0->1 (dist 10->9), ghost_1 stays at 2 (dist 8).
+    solo = CaptureV0PurePotentialShaping()
+    solo.reset(_pbrs_two_ghost_context((0, 2), pac))
+    solo.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
+    solo_term = solo.compute(
+        _pbrs_two_ghost_context((1, 2), pac, step_count=2)
+    ).breakdown["potential_shaping"]
+
+    # Coordinated: ghost_0 0->1 AND ghost_1 2->3 (both one step closer).
+    coord = CaptureV0PurePotentialShaping()
+    coord.reset(_pbrs_two_ghost_context((0, 2), pac))
+    coord.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
+    coord_term = coord.compute(
+        _pbrs_two_ghost_context((1, 3), pac, step_count=2)
+    ).breakdown["potential_shaping"]
+
+    assert solo_term > 0.0
+    assert coord_term > solo_term
