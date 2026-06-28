@@ -245,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--live-capture-eval-episodes",
         type=int,
-        default=100,
+        default=20,
         help=(
             "Deterministic eval_report episodes used to periodically backfill true capture% "
             "in live progress (set 0 to disable)."

@@ -3,6 +3,7 @@ import csv
 import json
 import math
 import time
+import warnings
 from pathlib import Path
 import sys
 from collections import Counter
@@ -44,6 +45,24 @@ ACTION_NAME = {
     2: "UP",
     3: "DOWN",
 }
+
+
+def _configure_warning_filters() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"^PettingZoo in TorchRL is tested using version == 1\.24\.3",
+        category=UserWarning,
+        module=r"^torchrl\.envs\.libs\.pettingzoo$",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"^SyncDataCollector has been deprecated and will be removed in v0\.13\. "
+            r"Please use Collector instead\.$"
+        ),
+        category=DeprecationWarning,
+        module=r"^torchrl\.collectors\._base$",
+    )
 
 
 def render_ascii(grid) -> str:
@@ -412,7 +431,14 @@ def _extract_view_size_from_hparams(checkpoint_path: Path) -> int | None:
 
 def _infer_view_size_from_checkpoint_weights(checkpoint_path: Path) -> int | None:
     try:
-        payload = torch.load(checkpoint_path, map_location="cpu")
+        try:
+            payload = torch.load(
+                checkpoint_path,
+                map_location="cpu",
+                weights_only=True,
+            )
+        except TypeError:
+            payload = torch.load(checkpoint_path, map_location="cpu")
     except Exception:
         return None
 
@@ -884,6 +910,7 @@ def main() -> None:
         )
 
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
+    _configure_warning_filters()
 
     run_episode(
         learner=normalized_learner,

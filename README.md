@@ -519,7 +519,7 @@ Then run benchmark normally:
 
 ```bash
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4
-py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 100
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn,qmixlocal,qmixglobal --seeds 0,1,2,3,4 --checkpoint-interval 10000 --live-capture-eval-episodes 20
 ```
 
 Shared network folder (many machines): when explicit output paths are not
@@ -1141,8 +1141,9 @@ python benchmarl_setup/run_benchmark.py \
 Finally, evaluate the already-trained checkpoints together on the same 100 episode
 seeds:
 
-Note: if `--jobs-path` is omitted, `custom_environment/eval_report.py` now
-auto-discovers all `benchmark_jobs*.csv` files under `--runs-root`.
+Note: `custom_environment/eval_report.py` only uses benchmark jobs mode when
+`--jobs-path` is provided. If omitted, it evaluates checkpoints via direct
+run-folder discovery (for the selected reward/algorithms/device-label).
 
 <details open>
 <summary><strong>Windows (default)</strong></summary>

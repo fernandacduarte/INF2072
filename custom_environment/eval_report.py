@@ -8,6 +8,7 @@ import csv
 import random
 import re
 import sys
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean, median, stdev
@@ -44,6 +45,24 @@ from custom_environment.eval import (
 
 ReportValue = float | int | str
 EpisodeResult = dict[str, Any]
+
+
+def _configure_warning_filters() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"^PettingZoo in TorchRL is tested using version == 1\.24\.3",
+        category=UserWarning,
+        module=r"^torchrl\.envs\.libs\.pettingzoo$",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"^SyncDataCollector has been deprecated and will be removed in v0\.13\. "
+            r"Please use Collector instead\.$"
+        ),
+        category=DeprecationWarning,
+        module=r"^torchrl\.collectors\._base$",
+    )
 
 
 def _select_checkpoint(
@@ -914,9 +933,10 @@ def main() -> None:
         allow_cpu_fallback=args.allow_cpu_fallback,
     )
     print(f"Eval device | requested={args.device} resolved={resolved_device} | {reason}")
+    _configure_warning_filters()
     register_pacman_task()
 
-    if args.jobs_path is not None or args.checkpoint is None:
+    if args.jobs_path is not None:
         rows, pooled = _evaluate_jobs(args, resolved_device)
         default_out = PROJECT_ROOT / "benchmarl_setup" / "runs" / "evaluation_report.csv"
     else:
