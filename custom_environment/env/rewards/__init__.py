@@ -10,6 +10,7 @@ from custom_environment.env.rewards.base import (
 from custom_environment.env.rewards.current import (
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
     CaptureV0PurePotentialShaping,
+    CaptureV0PurePotentialShapingPellets,
     CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
@@ -25,6 +26,7 @@ __all__ = [
     "DEFAULT_REWARD_CLASS",
     "CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction",
     "CaptureV0PurePotentialShaping",
+    "CaptureV0PurePotentialShapingPellets",
     "CaptureV0Reward",
     "CurrentGitTeamReward",
     "CurrentTeamReward",

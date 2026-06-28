@@ -855,3 +855,24 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
             return d1
         d2 = float(reachable[1])
         return d1 + self.weights.potential_second_ghost_weight * d2
+
+
+class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
+    """Pure potential shaping variant with a per-pellet Pacman penalty."""
+
+    strategy_id = "capture_v0_pure_potential_shaping_pellets"
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        pellets_eaten = int(context.pellets_eaten_this_step)
+        if pellets_eaten <= 0:
+            return result
+        return RewardResult(
+            result.terms
+            + (
+                RewardTerm(
+                    "pacman_eats_pellet",
+                    -0.5 * float(pellets_eaten),
+                ),
+            )
+        )
