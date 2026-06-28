@@ -253,15 +253,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--live-capture-allow-non-hard-checkpoint",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Use checkpoint-defined difficulty/curriculum for live capture snapshots. "
-            "Default is hard-forced to align capture-based best selection with human eval."
-        ),
-    )
-    parser.add_argument(
         "--eval-seed-base",
         type=int,
         default=0,
@@ -497,6 +488,7 @@ def _run_eval_capture_snapshot(
     latest_out_csv = run_dir / "evaluation_report_live_capture.csv"
     checkpoint_frame = _checkpoint_frame_from_path(checkpoint_path)
     checkpoint_suffix = str(checkpoint_frame) if checkpoint_frame is not None else "latest"
+    curriculum_frame_offset = checkpoint_frame if checkpoint_frame is not None else 0
     out_csv = run_dir / f"evaluation_report_live_capture_checkpoint_{checkpoint_suffix}.csv"
     command = [
         sys.executable,
@@ -511,6 +503,8 @@ def _run_eval_capture_snapshot(
         str(episodes),
         "--eval-seed-base",
         str(eval_seed_base),
+        "--curriculum-frame-offset",
+        str(curriculum_frame_offset),
         "--device",
         device,
         "--out",
@@ -553,14 +547,18 @@ def _refresh_latest_capture_snapshots(
     episodes: int,
     eval_seed_base: int,
     allow_cpu_fallback: bool,
-    live_capture_allow_non_hard_checkpoint: bool,
+    final_allow_non_hard_checkpoint: bool,
 ) -> None:
     if episodes <= 0:
         return
 
     refreshed = 0
     skipped = 0
-    print("Refreshing latest checkpoint capture snapshots for completed runs...")
+    refresh_mode = "checkpoint-native" if final_allow_non_hard_checkpoint else "hard-forced"
+    print(
+        "Refreshing latest checkpoint capture snapshots for completed runs "
+        f"(mode={refresh_mode})..."
+    )
     for label, runs_root in runs_roots_by_label.items():
         reward_id, _, _device_label = label.partition("@")
         eval_device = eval_device_by_label.get(label)
@@ -582,7 +580,7 @@ def _refresh_latest_capture_snapshots(
                     eval_seed_base=eval_seed_base,
                     device=eval_device,
                     allow_cpu_fallback=allow_cpu_fallback,
-                    allow_non_hard_checkpoint=live_capture_allow_non_hard_checkpoint,
+                    allow_non_hard_checkpoint=final_allow_non_hard_checkpoint,
                 )
                 if capture_pct is None:
                     skipped += 1
@@ -606,7 +604,6 @@ class ProgressReporter:
         machine_id: str,
         epsilon_algorithm: str,
         live_capture_eval_episodes: int,
-        live_capture_allow_non_hard_checkpoint: bool,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
         eval_device_by_label: dict[str, str],
@@ -629,7 +626,6 @@ class ProgressReporter:
             self.max_frames,
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
-        self.live_capture_allow_non_hard_checkpoint = bool(live_capture_allow_non_hard_checkpoint)
         self.eval_seed_base = int(eval_seed_base)
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         self.eval_device_by_label = eval_device_by_label
@@ -912,7 +908,7 @@ class ProgressReporter:
                             eval_seed_base=self.eval_seed_base,
                             device=eval_device,
                             allow_cpu_fallback=self.allow_cpu_fallback,
-                            allow_non_hard_checkpoint=self.live_capture_allow_non_hard_checkpoint,
+                            allow_non_hard_checkpoint=True,
                         )
                         if capture_pct is None:
                             continue
@@ -1250,7 +1246,6 @@ def main() -> None:
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
-            live_capture_allow_non_hard_checkpoint=args.live_capture_allow_non_hard_checkpoint,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,
             eval_device_by_label=eval_device_by_label,
@@ -1323,7 +1318,7 @@ def main() -> None:
         episodes=args.live_capture_eval_episodes,
         eval_seed_base=args.eval_seed_base,
         allow_cpu_fallback=args.allow_cpu_fallback,
-        live_capture_allow_non_hard_checkpoint=args.live_capture_allow_non_hard_checkpoint,
+        final_allow_non_hard_checkpoint=False,
     )
 
     _write_job_records(jobs_out, job_records)

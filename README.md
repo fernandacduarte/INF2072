@@ -97,6 +97,9 @@ The Pygame renderer highlights each ghost's current local observation (11x11 by 
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
+Before replay starts, `eval.py` also prints selected-seed statistics for the
+chosen checkpoint (run id, seed, reward final/tail/best, and checkpoint-coupled
+capture snapshot percentage when available).
 
 You can test the renderer before training any checkpoint with a random-policy
 episode:
@@ -161,14 +164,19 @@ difficulty/curriculum behavior in reports, pass:
 py -3.11 custom_environment\eval_report.py --maze pinklike3 --algorithms iql,vdn,qmixglobal --allow-non-hard-checkpoint
 ```
 
-Benchmark note: `benchmarl_setup/run_benchmark.py` now hard-forces live capture
-snapshots by default so `--checkpoint-best-metric capture_rate` stays aligned with
-human `eval.py` (which is also hard-forced by default). If you intentionally want
-checkpoint-native curriculum snapshots, pass:
+Benchmark note: `benchmarl_setup/run_benchmark.py` now keeps live capture
+snapshots checkpoint-native by default during training, so capture follows each
+checkpoint's curriculum stage (easy -> medium -> hard over the configured thirds).
+This behavior is fixed (no CLI toggle).
+Snapshot evaluation now passes each checkpoint frame as curriculum offset to
+`eval_report.py`, so checkpoint-native snapshots reconstruct the expected
+curriculum stage for that checkpoint (for example late-third checkpoints evaluate
+under hard stage).
 
-```bash
-py -3.11 benchmarl_setup\run_benchmark.py --live-capture-allow-non-hard-checkpoint
-```
+After benchmark workers complete, `run_benchmark.py` performs a latest-checkpoint
+capture refresh in hard-forced mode so end-of-run selection by
+`--checkpoint-best-metric capture_rate` stays aligned with hard CLI replay in
+`custom_environment/eval.py`.
 
 Final paired benchmark evaluation (`--eval-episodes`) still uses checkpoint-native
 mode by default.
