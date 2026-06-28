@@ -88,6 +88,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         pacman_curriculum: str = "off",
         pacman_curriculum_max_frames: int = 0,
         pacman_curriculum_frame_offset: int = 0,
+        randomize_spawns: bool = False,
+        randomize_spawns_min_distance: int = 4,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -165,6 +167,16 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             raise ValueError("pacman_random_action_prob must be in [0, 1].")
         self._pacman_rng = np.random.default_rng()
 
+        # Spawn randomization. When enabled, reset() draws fresh Pacman/ghost cells
+        # each episode (respecting a minimum BFS clearance) so the policy cannot
+        # memorize a fixed route to a fixed start cell and is forced to read the
+        # bearing channel and pursue reactively. Seeded once from the first seeded
+        # reset for reproducibility, then advanced so episodes differ.
+        self.randomize_spawns = bool(randomize_spawns)
+        self.randomize_spawns_min_distance = max(0, int(randomize_spawns_min_distance))
+        self._spawn_rng = np.random.default_rng()
+        self._spawn_seeded = False
+
         rows, cols = self.global_view.shape
         # +8 trailing scalars: 4 pacman-memory + team_min_dist + step + remaining + pallets_remaining
         self._state_dim = (rows * cols) + (3 * len(self.possible_agents)) + 8
@@ -225,10 +237,24 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
     # Reset environment and return initial per-agent observation/info dicts.
     def reset(self, seed: int = None, options: dict = None):
+        # Seed the spawn RNG once from the first seeded reset so randomized spawns
+        # are reproducible per training seed, then let it advance across episodes.
+        if seed is not None and not self._spawn_seeded:
+            self._spawn_rng = np.random.default_rng(int(seed))
+            self._spawn_seeded = True
         # Copy agent list for PettingZoo's active agent tracking
         self.agents = copy(self.possible_agents)
         # Restore clean grid state to avoid carrying over mutated cells across episodes.
         self.global_view = np.array(self._base_grid, copy=True)
+
+        # Choose this episode's spawn cells: map-authored by default, or random
+        # (with a minimum ghost->Pacman BFS clearance) when randomization is on.
+        # Sampled here, while global_view holds walls-only, so the BFS clearance
+        # check sees the true maze before any agent is painted onto the grid.
+        if self.randomize_spawns:
+            episode_pacman_spawn, episode_ghost_spawns = self._sample_random_spawns()
+        else:
+            episode_pacman_spawn, episode_ghost_spawns = self.pacman_spawn, self.ghost_spawns
 
         # Reset shared episode memory.
         self.step_count = 0
@@ -242,18 +268,18 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.last_reward_context = None
         self.last_reward_result = None
 
-        # --- Spawn ghosts at the map-authored spawn cells ---
+        # --- Spawn ghosts at this episode's spawn cells ---
         self.ghosts = [
             Ghost(id=f"ghost_{i+1}", current_position=pos)
-            for i, pos in enumerate(self.ghost_spawns)
+            for i, pos in enumerate(episode_ghost_spawns)
         ]
         # Place ghosts on the grid
         for ghost in self.ghosts:
             x, y = ghost.current_position  # Unpack position
             self.global_view[x, y] = Observation.GHOST.value  # Mark as ghost
 
-        # --- Spawn Pacman at the map-authored spawn cell ---
-        self.pacman = PacMan(id="pacman", current_position=self.pacman_spawn)
+        # --- Spawn Pacman at this episode's spawn cell ---
+        self.pacman = PacMan(id="pacman", current_position=episode_pacman_spawn)
         self.global_view[*self.pacman.current_position] = Observation.PAC_MAN.value
         self._reset_visual_pellets()
         # Capture the per-episode pallet count (after spawn cells are cleared) so
@@ -864,6 +890,41 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             global_pos = (ghost_x + (local_x - r), ghost_y + (local_y - r))
             seen_positions.append(global_pos)
         return len(seen_positions) > 0, seen_positions
+
+    def _sample_random_spawns(
+        self,
+    ) -> tuple[tuple[int, int], list[tuple[int, int]]]:
+        """Draw distinct Pacman/ghost spawn cells for one episode.
+
+        Cells are sampled without replacement from the traversable (non-wall)
+        tiles. A draw is accepted only when every ghost is BFS-reachable and at
+        least ``randomize_spawns_min_distance`` cells from Pacman, so the episode
+        never starts already captured (or trivially close). Falls back to the
+        map-authored spawns if no valid draw is found within the attempt budget.
+        """
+        free_cells = [
+            (int(r), int(c))
+            for r, c in np.argwhere(self._base_grid != Observation.WALL.value)
+        ]
+        num_ghosts = len(self.ghost_spawns)
+        if len(free_cells) < num_ghosts + 1:
+            return self.pacman_spawn, list(self.ghost_spawns)
+
+        min_dist = self.randomize_spawns_min_distance
+        for _ in range(200):
+            picks = self._spawn_rng.choice(
+                len(free_cells), size=num_ghosts + 1, replace=False
+            )
+            chosen = [free_cells[int(i)] for i in picks]
+            pacman_pos, ghost_positions = chosen[0], chosen[1:]
+            if all(
+                (d := self._bfs_distance(g, pacman_pos)) is not None and d >= min_dist
+                for g in ghost_positions
+            ):
+                return pacman_pos, ghost_positions
+
+        # No valid draw within budget (e.g. a tiny/cramped maze): keep the map's.
+        return self.pacman_spawn, list(self.ghost_spawns)
 
     def _bfs_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int | None:
         if start == goal:

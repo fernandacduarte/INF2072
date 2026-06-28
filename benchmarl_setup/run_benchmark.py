@@ -246,6 +246,21 @@ def parse_args() -> argparse.Namespace:
             "longer low-epsilon phase to converge and stabilizes the capture curve."
         ),
     )
+    parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
     return parser.parse_args()
 
 
@@ -301,6 +316,14 @@ def _build_command(
     command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
     command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
     command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
+
+    if args.randomize_spawns:
+        command.append("--randomize-spawns")
+    else:
+        command.append("--no-randomize-spawns")
+    command.extend(
+        ["--randomize-spawns-min-distance", str(args.randomize_spawns_min_distance)]
+    )
 
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")

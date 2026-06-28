@@ -156,6 +156,21 @@ def parse_args() -> argparse.Namespace:
         help="Global frame offset used for curriculum when run is part of a benchmark matrix.",
     )
     parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -255,6 +270,8 @@ def main() -> None:
         "pacman_curriculum": args.pacman_curriculum,
         "pacman_curriculum_max_frames": int(args.pacman_curriculum_max_frames),
         "pacman_curriculum_frame_offset": int(args.pacman_curriculum_frame_offset),
+        "randomize_spawns": bool(args.randomize_spawns),
+        "randomize_spawns_min_distance": int(args.randomize_spawns_min_distance),
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)
