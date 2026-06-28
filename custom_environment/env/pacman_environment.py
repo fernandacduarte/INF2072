@@ -267,10 +267,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         if any_visible:
             self.last_pacman_sighting_position = seen_positions[0]
             self.last_pacman_sighting_step = self.step_count
-        shared_features = self._shared_memory_features(any_visible, seen_positions)
         observations = {
             ghost.id: {
-                "observation": self._compose_observation(ghost.view, shared_features),
+                "observation": self._compose_observation(
+                    ghost.view,
+                    self._shared_memory_features(
+                        any_visible, seen_positions, ghost.current_position
+                    ),
+                ),
                 "action_mask": self._build_action_mask(ghost),
             }
             for ghost in self.ghosts
@@ -344,8 +348,10 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         if any_visible:
             self.last_pacman_sighting_position = seen_positions[0]
             self.last_pacman_sighting_step = self.step_count
-        shared_features = self._shared_memory_features(any_visible, seen_positions)
         for ghost in self.ghosts:
+            shared_features = self._shared_memory_features(
+                any_visible, seen_positions, ghost.current_position
+            )
             observations[ghost.id] = {
                 "observation": self._compose_observation(ghost.view, shared_features),
                 "action_mask": self._build_action_mask(ghost),
@@ -696,6 +702,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self,
         any_visible: bool | None = None,
         seen_positions: list[tuple[int, int]] | None = None,
+        ghost_position: tuple[int, int] | None = None,
     ) -> np.ndarray:
         if not self.shared_memory_in_observation_enabled:
             return np.full((self.view_size,), -1.0, dtype=np.float32)
@@ -712,16 +719,28 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         features = np.full((self.view_size,), -1.0, dtype=np.float32)
         features[0] = 1.0 if any_visible else 0.0
         if target_position is not None:
-            features[1] = float(target_position[0]) / row_den
-            features[2] = float(target_position[1]) / col_den
+            # Relative bearing from this ghost to the (last-seen) Pacman, each
+            # component normalized to [-1, 1]. A directional signal the policy can
+            # act on directly -- including when Pacman is outside the local view,
+            # where an absolute coordinate is unusable without the ghost's own
+            # position. Falls back to the absolute position only when no ghost
+            # reference is supplied (legacy/global-state callers).
+            if ghost_position is not None:
+                features[1] = float(target_position[0] - ghost_position[0]) / row_den
+                features[2] = float(target_position[1] - ghost_position[1]) / col_den
+            else:
+                features[1] = float(target_position[0]) / row_den
+                features[2] = float(target_position[1]) / col_den
             if any_visible or self.last_pacman_sighting_step is None:
                 features[3] = 0.0
             else:
                 since_last_seen = max(0, self.step_count - int(self.last_pacman_sighting_step))
                 features[3] = min(float(since_last_seen) / float(max_steps), 1.0)
         else:
-            features[1] = -1.0
-            features[2] = -1.0
+            # No sighting yet: neutral bearing, max staleness. features[0]=0 and
+            # features[3]=1 flag "no fresh information" for the policy.
+            features[1] = 0.0
+            features[2] = 0.0
             features[3] = 1.0
         if self.view_size > 4:
             features[4] = min(float(self.step_count) / float(max_steps), 1.0)
@@ -762,7 +781,9 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     # Compute the composed observation for one ghost.
     def _get_observation(self, ghost: Ghost) -> dict[str, np.ndarray]:
         local_patch = self._get_local_patch(ghost)
-        shared_features = self._shared_memory_features()
+        shared_features = self._shared_memory_features(
+            ghost_position=ghost.current_position
+        )
         return {
             "observation": self._compose_observation(local_patch, shared_features),
             "action_mask": self._build_action_mask(ghost),
