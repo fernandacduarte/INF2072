@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import sys
+import warnings
 
 import torch
 
@@ -26,6 +27,19 @@ from benchmarl_setup.algorithm_utils import (
     training_exploration_schedule,
 )
 from benchmarl_setup.device_utils import resolve_device
+
+
+def _configure_warning_filters() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"^You are using `torch\.load` with `weights_only=False` "
+            r"\(the current default value\), which uses the default pickle "
+            r"module implicitly\."
+        ),
+        category=FutureWarning,
+        module=r"^benchmarl\.experiment\.experiment$",
+    )
 
 
 def _algorithm_config(name: str):
@@ -191,6 +205,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    _configure_warning_filters()
     args = parse_args()
     if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
         raise ValueError("--pacman-random-action-prob must be in [0,1].")
