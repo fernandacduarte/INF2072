@@ -41,3 +41,4 @@
 | 2026-06-15 17:04 UTC | QA Log | 000003 | Pallet system and reward update |  | [plan-000003-qa-pallet-system-reward-update.md](plans/plan-000003-qa-pallet-system-reward-update.md) |
 | 2026-06-13 19:03 UTC | RESERVED | 000002 | research: pallet system and reward design | RESERVED |  |
 | 2026-06-13 19:02 UTC | Research | 000001 | Pallet system and reward design | DONE | [research-000001-pallet-system-and-reward-design.md](research-logs/research-000001-pallet-system-and-reward-design.md) |
+| 2026-06-28 21:04 UTC | RESERVED | 000026 | research: branch capture_v0_pure_potential_shaping merge-prep inventory | RESERVED | |
