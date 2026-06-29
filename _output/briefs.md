@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-29 00:41 UTC | STARTED | 2026-06-29 00:33 UTC | communicate | para o professor da disciplina o estudo feito aqui nesta branch. ajustes no sistema de rewards e os nosso findings até agora relacionados a tentativa de tunar o sistema de rewards.
+
+STARTED | 2026-06-29 00:32 UTC | plan | Implement the evasive-Pacman benchmark protocol from research-000028: seed-pin fix, sweep wrapper, aggregator/plotter, scripted-pursuit ceiling, randomize-spawns on
+
 DONE | 2026-06-29 00:27 UTC | STARTED | 2026-06-29 00:11 UTC | research | bolar protocolo de teste / pipelines de benchmark para apresentação final: o quão evasivo o Pacman precisa ser para os fantasmas pararem de aprender a capturá-lo
 
 DONE | 2026-06-28 23:57 UTC | STARTED | 2026-06-28 23:54 UTC | research | what happened with the code that was at the main branch and was merged here
