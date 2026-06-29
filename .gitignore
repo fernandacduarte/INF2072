@@ -24,6 +24,16 @@ __pycache__/
 /benchmarl_setup/runs/*/live_progress.csvl
 /benchmarl_setup/runs/*/benchmark_summary.csv
 
+# Decisive reward A/B (plan-000031): keep the heavy per-run blobs ignored, but
+# track the small report-facing artifacts (manifest, comparison table, figures)
+# for C1 provenance. The directory must be un-ignored first (parent of /runs/* is
+# excluded) before specific files inside it can be re-included.
+!/benchmarl_setup/runs/ab/
+/benchmarl_setup/runs/ab/*
+!/benchmarl_setup/runs/ab/ab_manifest.csv
+!/benchmarl_setup/runs/ab/reward_ab.csv
+!/benchmarl_setup/runs/ab/*.png
+
 # Render screenshots
 /benchmarl_setup/runs/pacman_render*.png
 /benchmarl_setupruns*.png

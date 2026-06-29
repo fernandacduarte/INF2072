@@ -1,0 +1,179 @@
+From 96f164ab880ca50a9627a022db78b9014e930ba4 Mon Sep 17 00:00:00 2001
+From: arodrigues-puc-rio <arodrigues@puc-rio.br>
+Date: Sun, 28 Jun 2026 12:05:34 -0300
+Subject: [PATCH 4/5] fix(reward): use mean-of-all-ghosts distance for
+ coordination (PBRS)
+
+300k eval (gamma=1 reward + FR4 bearing) still showed no captures: ghosts
+froze in a standoff at ~safe_distance and 2 of 3 parked far away (distance 23).
+
+Root cause: the min-distance potential only responds to the single nearest
+ghost, so with a shared team reward the other ghosts get a reward they cannot
+influence -> no gradient -> they park. A lone pursuer can never breach a
+perfectly-evading Pacman's safe distance.
+
+Fix: potential over the MEAN distance of all ghosts, so every ghost is
+rewarded for closing in and the team coordinates a surround. Still gamma=1
+(farm-proof: an 80-step camp nets +0.7, bounded) and smooth. Added
+test_pure_pbrs_mean_rewards_coordination_over_solo_progress.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ custom_environment/env/rewards/current.py | 50 ++++++++++++++-----
+ test/test_reward_strategies.py            | 61 +++++++++++++++++++++++
+ 2 files changed, 98 insertions(+), 13 deletions(-)
+
+diff --git a/custom_environment/env/rewards/current.py b/custom_environment/env/rewards/current.py
+index fbd470e..b3062ab 100644
+--- a/custom_environment/env/rewards/current.py
++++ b/custom_environment/env/rewards/current.py
+@@ -786,26 +786,30 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+     episodic form ``F = Phi(s') - Phi(s)`` with ``Phi = -alpha * min_ghost_dist``,
+     the BFS distance of the *nearest* ghost to Pacman.
+ 
+-    Two deliberate choices avoid a reward-farming loophole observed empirically
+-    (research-000024 follow-up: ghosts oscillated in place, banking +17.5 shaping
+-    with zero captures):
++    Three deliberate choices, each fixing a failure mode observed empirically
++    (research-000024 follow-ups):
+ 
+     * **Exact telescoping (gamma = 1).** The cumulative shaping over an episode
+       then equals ``Phi(end) - Phi(start)`` regardless of path, so any in-place
+       oscillation nets exactly zero. A discounted ``gamma*Phi(s') - Phi(s)`` with
+       ``Phi <= 0`` instead pays ``(1-gamma)*(-Phi) > 0`` per back-and-forth cycle,
+-      which a greedy policy will farm rather than capture.
+-    * **Smooth ``min`` distance** over all ghosts (not "two nearest", which is
+-      discontinuous when the nearest-ghost identity swaps and produced large
+-      non-cancelling per-step swings).
++      which a greedy policy farmed rather than capturing.
++    * **Mean distance over ALL ghosts** (not ``min``, and not "two nearest"). With
++      a shared team reward, a ``min`` potential only responds to the single nearest
++      ghost, so the other ghosts receive a reward they cannot influence, get no
++      gradient, and park in corners -- leaving a lone pursuer that a perfectly
++      evading Pacman simply keeps at ``safe_distance`` forever. The mean rewards
++      *every* ghost for closing in, so the team converges and surrounds Pacman
++      (the coordination this project is about). It is also smooth, unlike the
++      discontinuous "two nearest" metric.
+ 
+     ``Phi`` reads Pacman's true position even when it is not visible to the ghosts.
+     This is a centralized, training-time reward signal (CTDE): the executing ghost
+     policies still observe only their partial local view and never see this distance.
+ 
+-    No movement, visibility, coordination, or ``reverse_action`` terms are emitted.
+-    ``Phi`` reaches 0 naturally at capture (BFS distance 0), emitting a final
+-    ``+alpha*dist`` pulse; timeout is left untouched (no Phi-zeroing).
++    No movement, visibility, or ``reverse_action`` terms are emitted. ``Phi``
++    shrinks toward 0 as the team closes in (0 only when every ghost sits on Pacman);
++    timeout is left untouched (no Phi-zeroing).
+     """
+ 
+     strategy_id = "capture_v0_pure_potential_shaping"
+@@ -828,9 +832,9 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+         if context.capture_happened:
+             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+ 
+-        min_distance = self._minimum_distance(context)
+-        if min_distance is not None:
+-            potential = -w.potential_shaping_alpha * float(min_distance)
++        mean_distance = self._mean_distance(context)
++        if mean_distance is not None:
++            potential = -w.potential_shaping_alpha * float(mean_distance)
+             if self._last_potential is not None:
+                 terms.append(
+                     RewardTerm("potential_shaping", potential - self._last_potential)
+@@ -843,3 +847,23 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+ 
+         return RewardResult(tuple(terms))
++
++    def _mean_distance(self, context: RewardContext) -> float | None:
++        """Mean BFS distance of all reachable ghosts to Pacman.
++
++        Rewards every ghost for closing in (so the team coordinates a surround),
++        unlike ``min`` which only the nearest ghost can influence.
++        """
++        distances = [
++            self._bfs_distance(
++                ghost.current_position,
++                context.pacman_position,
++                context.board_shape,
++                context.wall_positions,
++            )
++            for ghost in context.ghosts
++        ]
++        reachable = [distance for distance in distances if distance is not None]
++        if not reachable:
++            return None
++        return sum(reachable) / len(reachable)
+diff --git a/test/test_reward_strategies.py b/test/test_reward_strategies.py
+index 037096c..4ee048e 100644
+--- a/test/test_reward_strategies.py
++++ b/test/test_reward_strategies.py
+@@ -764,3 +764,64 @@ def test_pure_pbrs_emits_no_reverse_action_term():
+     for context in rollout:
+         breakdown = strategy.compute(context).breakdown
+         assert "reverse_action" not in breakdown
++
++
++def _pbrs_two_ghost_context(ghost_cols, pacman_col, *, step_count=1):
++    """Two ghosts on a 1xN corridor; BFS distance == |ghost_col - pacman_col|."""
++    ghosts = tuple(
++        GhostTransition(
++            ghost_id=f"ghost_{i}",
++            previous_position=(0, c),
++            current_position=(0, c),
++            action=0,
++            invalid_move=False,
++            local_observation=((1, 1, 1),),
++        )
++        for i, c in enumerate(ghost_cols)
++    )
++    return RewardContext(
++        step_count=step_count,
++        max_steps=200,
++        board_shape=(1, 16),
++        ghost_view_radius=1,
++        wall_positions=frozenset(),
++        ghosts=ghosts,
++        pacman_previous_position=(0, pacman_col),
++        pacman_position=(0, pacman_col),
++        pacman_visible=False,
++        visible_pacman_positions=(),
++        pellets_before=1,
++        pellets_remaining=1,
++        total_pellets=1,
++        capture_happened=False,
++        timeout_happened=False,
++        pacman_win_happened=False,
++    )
++
++
++def test_pure_pbrs_mean_rewards_coordination_over_solo_progress():
++    """Both ghosts closing in must out-reward only one closing in.
++
++    Regression for the min-distance failure mode (research-000024 follow-up:
++    non-nearest ghosts got no gradient and parked, leaving a lone pursuer that
++    could never breach an evading Pacman's safe distance).
++    """
++    pac = 10
++    # Solo: ghost_0 moves 0->1 (dist 10->9), ghost_1 stays at 2 (dist 8).
++    solo = CaptureV0PurePotentialShaping()
++    solo.reset(_pbrs_two_ghost_context((0, 2), pac))
++    solo.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
++    solo_term = solo.compute(
++        _pbrs_two_ghost_context((1, 2), pac, step_count=2)
++    ).breakdown["potential_shaping"]
++
++    # Coordinated: ghost_0 0->1 AND ghost_1 2->3 (both one step closer).
++    coord = CaptureV0PurePotentialShaping()
++    coord.reset(_pbrs_two_ghost_context((0, 2), pac))
++    coord.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
++    coord_term = coord.compute(
++        _pbrs_two_ghost_context((1, 3), pac, step_count=2)
++    ).breakdown["potential_shaping"]
++
++    assert solo_term > 0.0
++    assert coord_term > solo_term
+-- 
+2.47.1.windows.1
+

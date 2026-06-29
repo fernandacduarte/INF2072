@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communication 000030 Evaluators</title>
+  <style>
+body {
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+}
+h1, h2, h3 { margin-top: 1.4em; }
+code { background: #f4f4f4; padding: 0.15em 0.3em; border-radius: 3px; }
+pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ddd; padding: 0.5em 0.75em; text-align: left; }
+th { background: #f8f8f8; }
+blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #555; }
+a { color: #0366d6; }
+
+  </style>
+</head>
+<body>
+
+<h1 id="communication-000030-evl-2026-06-29-0000-utc-avaliador-professor-da-disciplina">Communication 000030 | EVL | 2026-06-29 00:00 UTC | Avaliador (Professor da disciplina)</h1>
+<h2 id="visao-geral-do-projeto">Visao geral do projeto</h2>
+<p>Este projeto investiga coordenacao multi-agente em um ambiente Pacman customizado, no qual fantasmas cooperativos (baseline IQL, mais VDN e QMIX) precisam aprender a capturar um Pacman evasivo. A implementacao usa BenchMARL sobre TorchRL e segue o paradigma CTDE (Centralized Training, Decentralized Execution): no treino ha informacao centralizada, mas na execucao cada fantasma observa apenas uma janela parcial local 11x11. O trabalho relatado aqui foi conduzido na branch <code>capture_v0_pure_potential_shaping</code> e tem como foco uma investigacao de <em>desenho de reward</em>: que sinal de recompensa de fato induz perseguicao coordenada.</p>
+<h2 id="o-problema">O problema</h2>
+<p>Os fantasmas nao estavam aprendendo a perseguir o Pacman. Na avaliacao, em vez de fechar a distancia, eles vagavam pelo labirinto, ficavam encurralados em cantos, ou paravam imoveis proximos uns dos outros. O comportamento de captura coordenada simplesmente nao emergia. Isso reposicionou a pergunta de pesquisa: o gargalo nao era a escolha de algoritmo (IQL vs VDN vs QMIX), mas o <em>sinal de recompensa</em> que esses algoritmos estavam recebendo. A questao virou: qual reward de fato produz perseguicao coordenada sob observabilidade parcial?</p>
+<h2 id="diagnostico">Diagnostico</h2>
+<p>A analise profunda do benchmark <code>pinklike3 / qmixglobal / seed 0</code> (research-000012, research-000024) mostrou que o reward esparso ativo praticamente nao oferecia sinal por passo apontando na direcao do Pacman:</p>
+<ul>
+<li>O termo terminal de captura (+100) disparava em apenas ~36% dos episodios.</li>
+<li>Os termos densos eram quase nulos ou contraproducentes. O termo <code>pacman_legal_moves_delta</code> tinha media de +0.0018 por passo e so disparava nos ~16% de passos em que o Pacman estava visivel. O termo <code>reverse_action</code> tinha media de -0.056 por passo, ou seja, era ANTI-perseguicao: penalizava exatamente as reversoes de juncao que uma caca em labirinto exige.</li>
+<li>O Pacman fica invisivel em ~84% dos passos, dado o campo de visao parcial 11x11. Sem nenhum gradiente de distancia, o QMIX estabilizava cedo: a curva de captura em treino ficava plana em ~26-36% ao longo de todos os 100k frames. Esse plato e a assinatura de um reward com sinal insuficiente (signal-starved), e nao de subtreinamento.</li>
+<li>Uma iteracao anterior do reward chegou a criar um otimo local literal de "ficar parado": uma penalidade de distancia baseada em avistamento desatualizado tornava o movimento aleatorio pior, em valor esperado, do que nao fazer nada. Os fantasmas, racionalmente, congelavam. O retorno medio degradava de -26 para -45 ao longo do treino.</li>
+</ul>
+<p>Em resumo: os agentes nao aprendiam a perseguir porque nada no reward por passo os ensinava onde o Pacman estava nem recompensava aproximar-se dele.</p>
+<h2 id="ajustes-no-sistema-de-rewards">Ajustes no sistema de rewards</h2>
+<p>A partir do diagnostico, foram feitos os seguintes ajustes de engenharia sobre a base esparsa <code>capture_v0</code>:</p>
+<ul>
+<li><strong>Reintroducao de Potential-Based Reward Shaping (PBRS) puro</strong>, criando a variante <code>capture_v0_pure_potential_shaping</code>. O potencial e <code>Phi = -alfa * (distancia dos fantasmas ao Pacman via BFS)</code>, com um termo de shaping telescopico somado a cada passo. Pela formulacao de Ng, Harada e Russell (1999), PBRS e <em>comprovadamente policy-invariant</em>: ele apenas reposiciona no tempo <em>onde</em> a recompensa chega, acelerando a atribuicao de credito sem alterar a politica otima. Esta e a principal alegacao metodologica do trabalho e e defensavel no relatorio.</li>
+<li><strong>Remocao da penalidade <code>reverse_action</code></strong>. Ela e baseada em acao/historico, quebra a invariancia de PBRS e pune perseguicao legitima em labirinto.</li>
+<li><strong>Enquadramento por informacao privilegiada (CTDE)</strong>. O potencial le a posicao verdadeira do Pacman no simulador, mas isso ocorre <em>somente no treino</em>. As politicas dos fantasmas continuam observando apenas a janela parcial local 11x11 na execucao e nao usam nenhuma informacao privilegiada. Esse ponto e declarado explicitamente para antecipar a critica de que "os fantasmas trapaceiam": sob CTDE, usar o estado verdadeiro no sinal de treino e legitimo, desde que a politica executavel nao dependa dele.</li>
+<li><strong>Randomizacao de spawn por episodio</strong> e uma <strong>correcao de casamento de observacao na avaliacao</strong>, para garantir avaliacao consistente com o treino.</li>
+<li><strong>Curriculum learning</strong>: a dificuldade do Pacman aumenta de facil para medio para dificil ao longo do treino.</li>
+<li><strong>Bearing relativo ao Pacman</strong> codificado na observacao de memoria compartilhada dos fantasmas.</li>
+<li>A selecao do checkpoint "best" passou a usar <strong>taxa de captura</strong> em vez de recompensa.</li>
+</ul>
+<h2 id="principal-achado-reward-farming-em-pbrs">Principal achado: reward farming em PBRS</h2>
+<p>O achado intelectualmente mais importante deste ciclo (research-000024, follow-up) e que a <em>primeira</em> versao de PBRS que entregamos, embora "gama-correta" no papel, continha uma brecha de reward farming que a politica aprendeu a explorar.</p>
+<p>A avaliacao headless mostrou o sintoma: nenhuma captura em 80 passos, mesmo com o Pacman visivel em 75% do tempo e parado a ~3 celulas de distancia. Todos os fantasmas colapsavam em uma oscilacao de 2 celulas, indo e voltando entre duas posicoes.</p>
+<p>O diagnostico expoe a sutileza. Com o shaping telescopico descontado <code>F = gama*Phi(s') - Phi(s)</code>, gama = 0.99, e <code>Phi = -alfa * dist &lt;= 0</code> (sempre negativo), um ciclo de ida e volta rende <code>(1 - gama) * (-Phi) &gt; 0</code>. Ou seja, o fator gama que adicionamos <em>para</em> preservar a invariancia de politica acabou criando um subsidio de acampamento por ciclo: +0.19 por ciclo, com acumulado de +17.5 ao longo de 80 passos e zero capturas. Pior: capturar ENCERRARIA esse fluxo lucrativo de shaping, entao a politica gulosa convergia para um otimo local de "cercar e acampar" (herd-and-camp).</p>
+<p>A licao e precisa e citavel: <strong>PBRS e policy-invariant em teoria, mas o desconto por gama combinado com um potencial estritamente negativo e com truncamento/timeout quebra essa invariancia na pratica</strong>. O telescopio precisa ser desenhado de modo que oscilacao no mesmo lugar renda exatamente zero.</p>
+<p><strong>Correcao entregue</strong>: telescopio com gama = 1 exato, <code>F = Phi(s') - Phi(s)</code>, sobre um <em>minimo suave</em> da distancia dos fantasmas (o minimo suave remove uma descontinuidade no ponto em que muda qual fantasma e o mais proximo). Alem disso, a penalidade de <code>timestep</code> foi reforcada para -0.05, de modo que acampar fique estritamente negativo. Verificacao: um acampamento de 80 passos que antes rendia +50.1 agora rende -3.30. Um teste de regressao (<code>test_pure_pbrs_in_place_oscillation_cannot_be_farmed</code>) protege essa propriedade contra reintroducao acidental.</p>
+<table>
+<thead>
+<tr>
+<th>Cenario (acampamento de 80 passos, sem captura)</th>
+<th>Retorno de shaping</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PBRS descontado (gama = 0.99, Phi negativo)</td>
+<td>+50.1</td>
+</tr>
+<tr>
+<td>PBRS gama = 1 + minimo suave + timestep -0.05</td>
+<td>-3.30</td>
+</tr>
+</tbody>
+</table>
+<h2 id="algoritmos-e-parametros-configuracao-de-rl">Algoritmos e parametros (configuracao de RL)</h2>
+<p>Esta secao documenta todos os algoritmos de RL e todos os parametros que afetam reward e aprendizado, incluindo os knobs parametrizados no Makefile. Os controles de maior impacto do ponto de vista de reinforcement learning estao destacados em negrito.</p>
+<h3 id="a-algoritmos">A. Algoritmos</h3>
+<p>Todos os algoritmos sao value-based, off-policy, da familia DQN, com exploracao epsilon-greedy. Diferem apenas em como (ou se) os valores Q individuais dos fantasmas sao combinados durante o treino.</p>
+<table>
+<thead>
+<tr>
+<th>Algoritmo</th>
+<th>Coordenacao</th>
+<th>Descricao</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>IQL</strong> (Independent Q-Learning)</td>
+<td>nenhuma (baseline)</td>
+<td>cada fantasma aprende seu proprio Q de forma independente</td>
+</tr>
+<tr>
+<td><strong>VDN</strong> (Value Decomposition Networks)</td>
+<td>critico fatorado</td>
+<td>Q conjunto = soma dos Q individuais</td>
+</tr>
+<tr>
+<td><strong>QMIX</strong></td>
+<td>mixing network monotonica</td>
+<td>mistura monotonica nao-linear dos Q individuais; duas variantes no codigo: <code>qmixlocal</code> (mixer so com estado local) e <code>qmixglobal</code> (mixer com estado global, e o algoritmo principal usado nos experimentos)</td>
+</tr>
+</tbody>
+</table>
+<p>Framework: BenchMARL sobre TorchRL. Paradigma <strong>CTDE</strong> (Centralized Training, Decentralized Execution): o critico/mixer ve estado privilegiado no treino, mas as politicas dos fantasmas executam apenas com a observacao local 11x11.</p>
+<h3 id="b-hiperparametros-de-rl-fixos-em-run_pacman_benchmarlpy">B. Hiperparametros de RL (fixos em run_pacman_benchmarl.py)</h3>
+<p>Estes sao os hiperparametros de maior impacto no aprendizado. Em especial, <strong>gamma</strong>, <strong>learning rate</strong>, <strong>replay buffer</strong>, <strong>warmup</strong> e o <strong>schedule de epsilon</strong> (secao C) sao os que mais influenciam a curva de aprendizado.</p>
+<table>
+<thead>
+<tr>
+<th>Parametro</th>
+<th>Valor</th>
+<th>Papel em RL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>gamma (fator de desconto)</strong></td>
+<td><strong>0.99</strong></td>
+<td>horizonte efetivo; critico para PBRS (ver achado: com gamma&lt;1 e potencial negativo surge o subsidio de camping; a versao final do shaping usa telescoping exato gamma=1)</td>
+</tr>
+<tr>
+<td><strong>learning rate</strong></td>
+<td><strong>1e-4</strong></td>
+<td>passo do otimizador (Adam, padrao BenchMARL)</td>
+</tr>
+<tr>
+<td><strong>replay buffer (memory_size)</strong></td>
+<td><strong>10000</strong> transicoes</td>
+<td>amostragem off-policy</td>
+</tr>
+<tr>
+<td>train_batch_size</td>
+<td>128</td>
+<td>tamanho do minibatch de atualizacao</td>
+</tr>
+<tr>
+<td>frames_per_batch</td>
+<td>200</td>
+<td>frames coletados por iteracao antes de treinar</td>
+</tr>
+<tr>
+<td>optimizer_steps</td>
+<td>10</td>
+<td>passos de gradiente por batch coletado</td>
+</tr>
+<tr>
+<td><strong>init_random_frames (warmup)</strong></td>
+<td><strong>5000</strong></td>
+<td>exploracao puramente aleatoria antes de comecar a aprender</td>
+</tr>
+<tr>
+<td>max_frames (orcamento default do script)</td>
+<td>60000 (Makefile usa 300000)</td>
+<td>orcamento de amostras</td>
+</tr>
+</tbody>
+</table>
+<h3 id="c-schedule-de-exploracao-epsilon-greedy">C. Schedule de exploracao (epsilon-greedy)</h3>
+<p>O schedule de exploracao e RL-critico. O epsilon decai linearmente de <strong>1.0 para 0.1</strong>. O parametro <code>EPSILON_ANNEAL_RATIO</code> define a fracao do treino sobre a qual o epsilon anela: o default upstream e 0.95, mas <strong>neste estudo usamos 0.5</strong> (via Makefile), para dar a politica gananciosa uma fase low-epsilon mais longa. Esse foi um ajuste deliberado do balanco exploracao/explotacao e teve efeito pratico de <strong>estabilizar a curva de capture rate</strong>.</p>
+<h3 id="d-parametros-do-ambiente-observacao">D. Parametros do ambiente / observacao</h3>
+<table>
+<thead>
+<tr>
+<th>Parametro</th>
+<th>Valor</th>
+<th>Nota</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>grid_size</td>
+<td>20x20</td>
+<td>tamanho do mapa</td>
+</tr>
+<tr>
+<td>ghost_view_size (observacao local)</td>
+<td>11x11</td>
+<td>parcial-observabilidade; Pacman invisivel ~84% dos passos</td>
+</tr>
+<tr>
+<td>maze</td>
+<td>pinklike3</td>
+<td>layout usado nos experimentos</td>
+</tr>
+<tr>
+<td>PACMAN_SAFE_DISTANCE</td>
+<td>3</td>
+<td>distancia em que o Pacman BFS foge (reduzida de 5)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="e-knobs-do-makefile-linha-de-comando-do-benchmark">E. Knobs do Makefile (linha de comando do benchmark)</h3>
+<p>Estes sao os controles operacionais do estudo, expostos na linha de comando do benchmark. Eles determinam qual reward, qual algoritmo, quanto orcamento e sob quais condicoes de ambiente cada rodada e executada.</p>
+<table>
+<thead>
+<tr>
+<th>Knob (Makefile)</th>
+<th>Default</th>
+<th>Efeito em aprendizado/reward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>REWARD_ID</td>
+<td>capture_v0_pure_potential_shaping</td>
+<td>seleciona a funcao de reward (a variante PBRS deste estudo)</td>
+</tr>
+<tr>
+<td>ALGOS</td>
+<td>qmixglobal</td>
+<td>algoritmo(s) treinados</td>
+</tr>
+<tr>
+<td><strong>SEEDS</strong></td>
+<td>0,1,2</td>
+<td><strong>ATENCAO: abaixo do minimo de 5 sementes exigido pela constituicao (Q3); a rodada decisiva precisa de &gt;=5</strong></td>
+</tr>
+<tr>
+<td>FRAMES</td>
+<td>300000</td>
+<td>orcamento de treino (frames)</td>
+</tr>
+<tr>
+<td>CHECKPOINT_INTERVAL</td>
+<td>10000</td>
+<td>frequencia de checkpoint; "best" e selecionado por <strong>capture rate</strong> (nao por reward)</td>
+</tr>
+<tr>
+<td>DEVICE</td>
+<td>cuda</td>
+<td>dispositivo de treino</td>
+</tr>
+<tr>
+<td>CURRICULUM</td>
+<td>easy-medium-hard</td>
+<td>curriculo de dificuldade do Pacman ao longo do treino</td>
+</tr>
+<tr>
+<td>CURRICULUM_MAX_FRAMES</td>
+<td>=FRAMES</td>
+<td>horizonte do curriculo</td>
+</tr>
+<tr>
+<td><strong>EPSILON_ANNEAL_RATIO</strong></td>
+<td>0.5</td>
+<td>fase de exploracao (ver secao C)</td>
+</tr>
+<tr>
+<td>PACMAN_DIFFICULTY</td>
+<td>hard</td>
+<td>forca do Pacman (so vale com CURRICULUM=off; eval sempre forca hard)</td>
+</tr>
+<tr>
+<td><strong>PACMAN_RANDOM_ACTION_PROB</strong></td>
+<td>0.0</td>
+<td>ruido estocastico do Pacman (so vale com CURRICULUM=off); este e o eixo do experimento dose-resposta planejado (p=1.0 aleatorio para p=0.0 deterministico)</td>
+</tr>
+<tr>
+<td>RANDOMIZE_SPAWNS</td>
+<td>1 (on)</td>
+<td>spawns aleatorios por episodio para forcar perseguicao reativa (impede memorizar rota fixa)</td>
+</tr>
+<tr>
+<td>RANDOMIZE_SPAWNS_MIN_DISTANCE</td>
+<td>4</td>
+<td>distancia minima inicial fantasma-Pacman</td>
+</tr>
+</tbody>
+</table>
+<h3 id="f-termos-da-funcao-de-reward-variante-capture_v0_pure_potential_shaping">F. Termos da funcao de reward (variante capture_v0_pure_potential_shaping)</h3>
+<table>
+<thead>
+<tr>
+<th>Termo</th>
+<th>Valor</th>
+<th>Tipo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>captura (terminal)</td>
+<td>+100</td>
+<td>esparso</td>
+</tr>
+<tr>
+<td>timeout / Pacman vence por pellets</td>
+<td>-100</td>
+<td>esparso</td>
+</tr>
+<tr>
+<td><strong>timestep</strong></td>
+<td><strong>-0.05</strong></td>
+<td>denso (fortalecido para tornar camping estritamente negativo)</td>
+</tr>
+<tr>
+<td><strong>PBRS shaping</strong></td>
+<td>F = Phi(s') - Phi(s), Phi = -alpha * dist_BFS_min(fantasma-&gt;Pacman), <strong>telescoping exato gamma=1</strong></td>
+<td>denso, policy-invariant</td>
+</tr>
+</tbody>
+</table>
+<p>Em sintese, os parametros mais decisivos para o aprendizado neste estudo foram gamma (e sua interacao com o PBRS), o schedule de epsilon (anneal ratio 0.5), o orcamento de frames e a escolha do reward shaping. O numero de sementes (3) permanece como a lacuna conhecida de validade, abaixo do minimo de 5 exigido pela constituicao.</p>
+<h2 id="limitacoes-e-validade">Limitacoes e validade</h2>
+<p>Sou direto sobre o que ainda nao esta provado:</p>
+<ul>
+<li>Mesmo a prova de farming, os fantasmas ainda tem dificuldade de perseguir um Pacman <em>altamente evasivo</em> (que usa evasao por BFS) a partir de observacao parcial. Um ator nao consegue perseguir um Pacman que nao ve usando apenas coordenadas absolutas. Curriculum e PBRS juntos ainda nao bastam no extremo dificil.</li>
+<li>O benchmark decisivo ainda nao foi rodado. O resultado <code>pinklike3</code> e de uma unica seed e nao sustenta nenhuma afirmacao causal. Conforme o principio Q3 da constituicao do projeto, sao necessarias no minimo 5 seeds, num desenho A/B (esparso vs esparso+PBRS), para uma comparacao estatisticamente valida.</li>
+<li>O enquadramento da hipotese tambem precisa ser correto. A afirmacao defensavel e de <strong>eficiencia amostral</strong> ("PBRS acelera a aquisicao de comportamento de perseguicao"), e NAO de maior taxa de captura assintotica, que a propria invariancia de politica proibe. Por isso o resultado deve ser reportado com uma metrica <em>especifica de perseguicao</em>, por exemplo a fracao de passos em que a distancia da equipe ao Pacman diminui, e nao apenas a taxa de captura.</li>
+<li>Reprodutibilidade segue os principios da constituicao: seeds sao explicitas via CLI (T4), nenhum seed e fixado no codigo de producao, e qualquer resultado citado no relatorio deve referenciar o hash de commit exato (C1). Os outputs vao para <code>benchmarl_setup/runs/</code> (T2).</li>
+</ul>
+<h2 id="proximo-passo">Proximo passo</h2>
+<p>O proximo experimento (research-000028) reenquadra a questao em aberto como um estudo limpo de <em>dose-resposta / limiar</em>, adequado para a apresentacao final: <strong>quao evasivo o Pacman precisa ser antes de os fantasmas deixarem de aprender a captura-lo?</strong></p>
+<p>O desenho usa um unico botao continuo, <code>--pacman-random-action-prob p</code>, entre dois extremos ancorados: em p = 1.0 (Pacman totalmente aleatorio) o aprendizado funciona; em p = 0.0 (evasor deterministico) o aprendizado falha. A saida e uma curva de taxa de captura versus evasividade, com uma faixa de limiar, medida para IQL, VDN e QMIX, com no minimo 5 seeds, dentro de um orcamento apertado de 1 a 2 dias de CPU. Esse desenho transforma um resultado negativo ("ainda nao perseguem bem o evasor dificil") em uma contribuicao positiva e mensuravel: a localizacao do limiar de evasividade em que a coordenacao emergente colapsa.</p>
+<h2 id="nota-de-encerramento">Nota de encerramento</h2>
+<p>Este relatorio prioriza honestidade sobre o que ainda nao foi demonstrado. A contribuicao metodologica solida ate aqui e o diagnostico do farming em PBRS descontado e a sua correcao verificada por teste; a contribuicao empirica decisiva depende do benchmark de &gt;=5 seeds ainda pendente. Gostaria de receber seu retorno sobre o desenho do experimento de limiar de evasividade: em particular, se a metrica de perseguicao proposta (fracao de passos em que a distancia da equipe diminui) e a faixa de p escolhida sao adequadas para sustentar a alegacao de eficiencia amostral na apresentacao final.</p>
+
+</body>
+</html>

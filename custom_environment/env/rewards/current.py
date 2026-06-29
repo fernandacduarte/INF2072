@@ -772,30 +772,44 @@ class CaptureV0PurePotentialShapingWeights:
     get_pacman: float = 100.0
     pacman_timeout_win: float = -100.0
     pacman_win_pellets: float = -100.0
-    timestep: float = -0.01
+    # Stronger than the bare -0.01 so that standing still always carries a real
+    # cost: with exact (gamma=1) telescoping an in-place oscillation nets zero
+    # shaping, leaving only this penalty, so camping near Pacman is unprofitable.
+    timestep: float = -0.05
     potential_shaping_alpha: float = 0.7
-    potential_second_ghost_weight: float = 0.5
-    gamma: float = 0.99
 
 
 class CaptureV0PurePotentialShaping(CaptureV0Reward):
     """Sparse capture base + pure potential-based reward shaping (PBRS).
 
-    Adds the Ng/Harada/Russell (1999) telescoping term ``F = gamma*Phi(s') - Phi(s)``
-    with ``Phi = -alpha*(d1 + 0.5*d2)``, where ``d1, d2`` are the BFS distances of the
-    two nearest ghosts to Pacman. This is the only shaping form that provably leaves
-    the optimal policy unchanged, so it stays defensible as "pure" PBRS.
+    Adds the Ng/Harada/Russell (1999) telescoping term, in its undiscounted
+    episodic form ``F = Phi(s') - Phi(s)`` with ``Phi = -alpha * min_ghost_dist``,
+    the BFS distance of the *nearest* ghost to Pacman.
+
+    Three deliberate choices, each fixing a failure mode observed empirically
+    (research-000024 follow-ups):
+
+    * **Exact telescoping (gamma = 1).** The cumulative shaping over an episode
+      then equals ``Phi(end) - Phi(start)`` regardless of path, so any in-place
+      oscillation nets exactly zero. A discounted ``gamma*Phi(s') - Phi(s)`` with
+      ``Phi <= 0`` instead pays ``(1-gamma)*(-Phi) > 0`` per back-and-forth cycle,
+      which a greedy policy farmed rather than capturing.
+    * **Mean distance over ALL ghosts** (not ``min``, and not "two nearest"). With
+      a shared team reward, a ``min`` potential only responds to the single nearest
+      ghost, so the other ghosts receive a reward they cannot influence, get no
+      gradient, and park in corners -- leaving a lone pursuer that a perfectly
+      evading Pacman simply keeps at ``safe_distance`` forever. The mean rewards
+      *every* ghost for closing in, so the team converges and surrounds Pacman
+      (the coordination this project is about). It is also smooth, unlike the
+      discontinuous "two nearest" metric.
 
     ``Phi`` reads Pacman's true position even when it is not visible to the ghosts.
     This is a centralized, training-time reward signal (CTDE): the executing ghost
     policies still observe only their partial local view and never see this distance.
 
-    No movement, visibility, coordination, or ``reverse_action`` terms are emitted —
-    those are non-potential and would break the invariance guarantee. PBRS already
-    discourages useless oscillation for free (an A->B->A cycle nets zero potential
-    change while still paying the timestep cost). Phi reaches 0 naturally at capture
-    (BFS distance 0), which emits a final ``+alpha*dist`` pulse; timeout is left
-    untouched (no Phi-zeroing), so the truncation step carries its real potential.
+    No movement, visibility, or ``reverse_action`` terms are emitted. ``Phi``
+    shrinks toward 0 as the team closes in (0 only when every ghost sits on Pacman);
+    timeout is left untouched (no Phi-zeroing).
     """
 
     strategy_id = "capture_v0_pure_potential_shaping"
@@ -818,15 +832,12 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
         if context.capture_happened:
             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
 
-        team_distance = self._team_distance(context)
-        if team_distance is not None:
-            potential = -w.potential_shaping_alpha * float(team_distance)
+        mean_distance = self._mean_distance(context)
+        if mean_distance is not None:
+            potential = -w.potential_shaping_alpha * float(mean_distance)
             if self._last_potential is not None:
                 terms.append(
-                    RewardTerm(
-                        "potential_shaping",
-                        w.gamma * potential - self._last_potential,
-                    )
+                    RewardTerm("potential_shaping", potential - self._last_potential)
                 )
             self._last_potential = potential
 
@@ -837,7 +848,12 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
 
         return RewardResult(tuple(terms))
 
-    def _team_distance(self, context: RewardContext) -> float | None:
+    def _mean_distance(self, context: RewardContext) -> float | None:
+        """Mean BFS distance of all reachable ghosts to Pacman.
+
+        Rewards every ghost for closing in (so the team coordinates a surround),
+        unlike ``min`` which only the nearest ghost can influence.
+        """
         distances = [
             self._bfs_distance(
                 ghost.current_position,
@@ -847,14 +863,10 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
             )
             for ghost in context.ghosts
         ]
-        reachable = sorted(distance for distance in distances if distance is not None)
+        reachable = [distance for distance in distances if distance is not None]
         if not reachable:
             return None
-        d1 = float(reachable[0])
-        if len(reachable) == 1:
-            return d1
-        d2 = float(reachable[1])
-        return d1 + self.weights.potential_second_ghost_weight * d2
+        return sum(reachable) / len(reachable)
 
 
 class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
@@ -876,7 +888,6 @@ class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
                 ),
             )
         )
-
 
 class CaptureV0PurePotentialShapingPelletsFastCaptureBonus(
     CaptureV0PurePotentialShapingPellets
@@ -908,3 +919,47 @@ class CaptureV0PurePotentialShapingPelletsFastCaptureBonus(
                 ),
             )
         )
+
+
+class CaptureV0SparseControl(CaptureV0PurePotentialShaping):
+    """Matched sparse control for the PBRS A/B (plan-000031).
+
+    Byte-identical to ``CaptureV0PurePotentialShaping`` except the
+    ``potential_shaping`` term is omitted: it emits only ``timestep`` plus the
+    sparse terminals (``GET_PACMAN`` / ``PACMAN_TIMEOUT_WIN`` /
+    ``PACMAN_WIN_PALLETS``). It deliberately **reuses
+    ``CaptureV0PurePotentialShapingWeights`` unchanged** so the terminal
+    magnitudes (+/-100) and the ``timestep`` cost (-0.05) cannot drift between
+    the two arms -- the only difference between control and PBRS is the shaping
+    term, which is the precondition for a causal sample-efficiency claim.
+    """
+
+    strategy_id = "capture_v0_sparse_control"
+
+    def __init__(
+        self,
+        weights: CaptureV0PurePotentialShapingWeights | None = None,
+    ) -> None:
+        # Same weights dataclass as the PBRS arm (no new dataclass) -> weight-locked.
+        self.weights = weights or CaptureV0PurePotentialShapingWeights()
+        self._last_potential: float | None = None
+
+    def reset(self, initial_context: RewardContext) -> None:
+        _ = initial_context
+        self._last_potential = None
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        # No potential_shaping term -- this is the sparse control arm.
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))

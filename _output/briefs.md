@@ -4,6 +4,18 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-29 01:47 UTC | STARTED | 2026-06-29 01:23 UTC | implement | 000031 — Decisive A/B benchmark: matched sparse control vs PBRS | PLAN | 000031
+
+DONE | 2026-06-29 01:21 UTC | STARTED | 2026-06-29 00:52 UTC | plan | Executar o benchmark decisivo do estudo de rewards: desenho A/B (esparso capture_v0 sem shaping vs capture_v0_pure_potential_shaping com PBRS), >=5 seeds conforme constituicao Q3, metrica de perseguicao, framing sample-efficiency. Fonte research-000024 (R5) / research-000028. | PLAN | 000031
+
+DONE | 2026-06-29 00:41 UTC | STARTED | 2026-06-29 00:33 UTC | communicate | para o professor da disciplina o estudo feito aqui nesta branch. ajustes no sistema de rewards e os nosso findings até agora relacionados a tentativa de tunar o sistema de rewards.
+
+STARTED | 2026-06-29 00:32 UTC | plan | Implement the evasive-Pacman benchmark protocol from research-000028: seed-pin fix, sweep wrapper, aggregator/plotter, scripted-pursuit ceiling, randomize-spawns on
+
+DONE | 2026-06-29 00:27 UTC | STARTED | 2026-06-29 00:11 UTC | research | bolar protocolo de teste / pipelines de benchmark para apresentação final: o quão evasivo o Pacman precisa ser para os fantasmas pararem de aprender a capturá-lo
+
+DONE | 2026-06-28 23:57 UTC | STARTED | 2026-06-28 23:54 UTC | research | what happened with the code that was at the main branch and was merged here
+
 DONE | 2026-06-27 22:06 UTC | STARTED | 2026-06-27 22:00 UTC | implement | plan-000025 | PLAN | 000025
 
 DONE | 2026-06-27 21:59 UTC | STARTED | 2026-06-27 21:57 UTC | plan | Reintroduce pure potential-based reward shaping (PBRS) as a new reward variant on the sparse capture_v0 base, per research-000024 | PLAN | 000025

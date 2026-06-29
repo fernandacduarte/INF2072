@@ -463,6 +463,55 @@ Notes:
 - If `--jobs-path` is omitted, the script auto-discovers and merges all `benchmark_jobs*.csv` under the selected runs root.
 - The printed aggregate is grouped by `algorithm + device`.
 
+### Decisive reward A/B (sparse control vs PBRS)
+
+This is the statistically-valid experiment that backs the PBRS claim (research-000024 R5;
+constitution Q3 requires >=5 seeds). It compares two reward arms that differ **only** in
+the potential-based shaping term:
+
+- `capture_v0_sparse_control` -- the matched control: sparse terminals (+/-100) + `timestep -0.05`, **no shaping**.
+- `capture_v0_pure_potential_shaping` -- the same arm **plus** the PBRS telescoping term.
+
+Both share one weights dataclass, so the terminals and step cost cannot drift between arms.
+Why a matched control and not the older `capture_v0`: `capture_v0` differs in terminals
+(+45/-40/-45), `timestep` (-0.015), **and** carries an extra dense `pacman_legal_moves_reduced`
+term -- comparing it to PBRS would confound shaping with three other differences.
+
+**Run it (two commands):**
+
+```bash
+# 1. Train both arms across p in {0.25, 0.50, 0.75}, 5 seeds each (preview with --dry-run):
+py -3.11 benchmarl_setup\run_reward_ab.py --devices cuda
+#    (defaults: --algorithms iql,vdn,qmixglobal --seeds 0,1,2,3,4 --max-frames 60000
+#     --eval-episodes 40 --maze pinklike3 --save-root benchmarl_setup\runs\ab)
+
+# 2. Aggregate + render the comparison table and figures:
+py -3.11 benchmarl_setup\plot_reward_ab.py --manifest benchmarl_setup\runs\ab\ab_manifest.csv
+```
+
+**The evasiveness regime.** With `--pacman-curriculum off`, `--pacman-difficulty hard` fixes the
+defense-first Pacman heuristic (`pure_random=False`, `safe_distance=PACMAN_SAFE_DISTANCE`) and the
+sole varying axis is `p = --pacman-random-action-prob`: the fraction of steps Pacman acts randomly
+instead of evasively. So evasiveness `e = 1 - p`; `p=0.25` is the most evasive point, `p=0.75` the
+least. The three interior points sit in the *learnable* regime (the fully-evasive `p=0` risks a
+floor effect where neither arm learns). `--randomize-spawns` is held on throughout so ghosts must
+pursue reactively rather than memorize a fixed route.
+
+**How to read the figures.** PBRS is policy-invariant by construction, so the hypothesis is **faster
+acquisition of pursuit (sample-efficiency), not a higher asymptotic capture_rate**. Read the headline
+sample-efficiency panel (AULC / frames-to-threshold) and the `pursuit_fraction` panel first; treat
+capture_rate as secondary. `pursuit_fraction` is the fraction of steps the ghost team's BFS distance
+to Pacman strictly decreased -- it uses Pacman's true position as a **training/eval-time metric only**
+(CTDE: the executing ghost policies never observe this distance), and it shows pursuit acquisition
+that `capture_rate` alone cannot.
+
+**Outputs and provenance (constitution T2/C1).** Per-point training writes under
+`benchmarl_setup/runs/ab/p_<p>/<maze>/` (keyed by the per-`p` save-folder, the only disambiguator
+since `run_benchmark.py` keys paths by maze/reward/device). The three **report artifacts** --
+`ab_manifest.csv` (records the git commit + a dirty-tree flag), `reward_ab.csv`, and the comparison
+PNGs -- are version-controlled (`.gitignore` negation rules), while the bulky checkpoint blobs and
+per-run CSVs under `p_<p>/` stay ignored.
+
 ### CPU vs GPU Benchmark Protocol
 
 Use this protocol for fair comparisons:
