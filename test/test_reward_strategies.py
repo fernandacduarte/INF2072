@@ -705,6 +705,99 @@ def test_capture_merge_disables_potential_shaping_term():
     assert "potential_shaping" not in second.breakdown
 
 
+def test_capture_merge_disables_reversal_terms():
+    strategy = CaptureMerge()
+
+    initial_ghost = GhostTransition(
+        ghost_id="ghost_1",
+        previous_position=(0, 1),
+        current_position=(0, 1),
+        action=0,
+        invalid_move=False,
+        local_observation=((1, 1, 1),),
+    )
+    initial_context = RewardContext(
+        step_count=0,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(initial_ghost,),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.reset(initial_context)
+
+    forward = RewardContext(
+        step_count=1,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 1),
+                current_position=(0, 2),
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.compute(forward)
+
+    backward = RewardContext(
+        step_count=2,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 2),
+                current_position=(0, 1),
+                action=1,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    result = strategy.compute(backward)
+
+    assert "repeated_direction_reversal" not in result.breakdown
+    assert "reverse_action" not in result.breakdown
+
+
 def test_fast_capture_bonus_scales_with_elapsed_steps():
     strategy = CaptureV0PurePotentialShapingPelletsFastCaptureBonus()
     strategy.reset(_pbrs_context(4, 5))

@@ -1155,18 +1155,20 @@ class CaptureMergePotentialShaping(CurrentGitTeamReward):
 
 
 class CaptureMerge(CaptureMergePotentialShaping):
-    """Capture-merge reward without PBRS term emission.
+    """Capture-merge reward without PBRS/reversal term emission.
 
     This keeps all capture_merge_potential_shaping logic/state transitions but
-    removes only the explicit ``potential_shaping`` reward term.
+    removes ``potential_shaping`` and reversal-related terms from the final
+    emitted reward terms.
     """
 
     strategy_id = "capture_merge"
 
     def compute(self, context: RewardContext) -> RewardResult:
         result = super().compute(context)
+        disabled_terms = {"potential_shaping", "repeated_direction_reversal", "reverse_action"}
         filtered_terms = tuple(
-            term for term in result.terms if term.name != "potential_shaping"
+            term for term in result.terms if term.name not in disabled_terms
         )
         if len(filtered_terms) == len(result.terms):
             return result

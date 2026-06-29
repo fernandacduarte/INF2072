@@ -890,8 +890,8 @@ Four-way comparison setup:
 
 - `custom_environment.env.rewards.current:CaptureMerge`
   (`strategy_id = capture_merge`): same as
-  `capture_merge_potential_shaping`, but with the `potential_shaping` reward
-  term disabled.
+  `capture_merge_potential_shaping`, but with the `potential_shaping` and
+  reversal-related reward terms disabled.
 
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
