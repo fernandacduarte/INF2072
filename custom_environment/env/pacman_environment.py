@@ -802,6 +802,11 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         for action in Action:
             if self._is_valid_ghost_action(ghost, action):
                 mask[action.value] = 1
+        # TorchRL masked categorical sampling on CUDA requires at least one
+        # valid action. In degenerate board states (for example temporary
+        # full enclosure), expose a fallback action to avoid all-zero masks.
+        if int(mask.sum()) == 0:
+            mask[Action.MOVE_RIGHT.value] = 1
         return mask
 
     # Compute the composed observation for one ghost.
