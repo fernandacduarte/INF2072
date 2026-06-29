@@ -192,6 +192,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 --pacman-random-action-prob 0.0
 --pacman-safe-distance 1
 --pacman-curriculum off|easy-medium-hard --pacman-curriculum-max-frames 60000
+--randomize-spawns|--no-randomize-spawns --randomize-spawns-min-distance 4
 ```
 
 Pacman training-difficulty control is now configurable:
@@ -200,6 +201,10 @@ Pacman training-difficulty control is now configurable:
 - `--pacman-difficulty easy` uses a weak random-valid Pacman baseline.
 - `--pacman-difficulty medium` uses the safety policy with exploration noise.
 - `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
+- `--randomize-spawns` is **disabled by default** (`--no-randomize-spawns` effective default).
+  Use `--randomize-spawns` to randomize Pacman/ghost spawn cells each episode,
+  and `--randomize-spawns-min-distance` to enforce minimum ghost->Pacman BFS clearance
+  for sampled starts.
 
 When `--pacman-curriculum easy-medium-hard` is enabled, exploration epsilon now
 uses stage-aligned bumps (for all algorithms) to help adaptation at each
@@ -224,7 +229,16 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike
 
 # Curriculum: easy -> medium -> hard over the full run
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum easy-medium-hard --pacman-curriculum-max-frames 60000
+
+# Enable randomized spawns during training
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --maze pinklike3 --randomize-spawns --randomize-spawns-min-distance 4
+
+# Explicitly keep deterministic map-authored spawns (same as default)
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --maze pinklike3 --no-randomize-spawns
 ```
+
+The benchmark runner (`benchmarl_setup/run_benchmark.py`) follows the same default
+(`--no-randomize-spawns`) and supports the same flags.
 
 Useful optional parameters for evaluation (`custom_environment\eval.py`):
 

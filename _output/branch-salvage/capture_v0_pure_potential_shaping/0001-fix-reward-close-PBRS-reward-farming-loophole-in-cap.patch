@@ -1,0 +1,220 @@
+From 256b7610d2f773b8b476d764fc44db31df736bd8 Mon Sep 17 00:00:00 2001
+From: arodrigues-puc-rio <arodrigues@puc-rio.br>
+Date: Sun, 28 Jun 2026 09:26:20 -0300
+Subject: [PATCH 1/5] fix(reward): close PBRS reward-farming loophole in
+ capture_v0_pure_potential_shaping
+
+Eval of the PBRS-trained policy showed all ghosts collapsing to 2-cell
+oscillations and ignoring a visible, stationary Pacman 3 cells away for 40+
+steps - banking +17.5 shaping (=+50 team) over 80 steps with zero captures.
+
+Root cause: discounted telescoping (gamma=0.99) with Phi<=0 pays
+(1-gamma)*(-Phi)>0 per back-and-forth cycle, and the 'two nearest ghosts'
+team distance is discontinuous (nearest-ghost identity swaps), producing
+large non-cancelling per-step swings. Together they made camping profitable.
+
+Fix: exact (gamma=1) telescoping F = Phi(s') - Phi(s) over the smooth MIN
+ghost distance, so cumulative shaping = Phi(end)-Phi(start) is path-independent
+and any in-place oscillation nets exactly 0; stronger timestep -0.05 so camping
+is strictly negative. Verified: an 80-step camp now nets -3.3 (was +50.1).
+Added regression test test_pure_pbrs_in_place_oscillation_cannot_be_farmed.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ custom_environment/env/rewards/current.py | 66 ++++++++++-------------
+ test/test_reward_strategies.py            | 37 ++++++++++---
+ 2 files changed, 57 insertions(+), 46 deletions(-)
+
+diff --git a/custom_environment/env/rewards/current.py b/custom_environment/env/rewards/current.py
+index 10fd15b..fbd470e 100644
+--- a/custom_environment/env/rewards/current.py
++++ b/custom_environment/env/rewards/current.py
+@@ -772,30 +772,40 @@ class CaptureV0PurePotentialShapingWeights:
+     get_pacman: float = 100.0
+     pacman_timeout_win: float = -100.0
+     pacman_win_pellets: float = -100.0
+-    timestep: float = -0.01
++    # Stronger than the bare -0.01 so that standing still always carries a real
++    # cost: with exact (gamma=1) telescoping an in-place oscillation nets zero
++    # shaping, leaving only this penalty, so camping near Pacman is unprofitable.
++    timestep: float = -0.05
+     potential_shaping_alpha: float = 0.7
+-    potential_second_ghost_weight: float = 0.5
+-    gamma: float = 0.99
+ 
+ 
+ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+     """Sparse capture base + pure potential-based reward shaping (PBRS).
+ 
+-    Adds the Ng/Harada/Russell (1999) telescoping term ``F = gamma*Phi(s') - Phi(s)``
+-    with ``Phi = -alpha*(d1 + 0.5*d2)``, where ``d1, d2`` are the BFS distances of the
+-    two nearest ghosts to Pacman. This is the only shaping form that provably leaves
+-    the optimal policy unchanged, so it stays defensible as "pure" PBRS.
++    Adds the Ng/Harada/Russell (1999) telescoping term, in its undiscounted
++    episodic form ``F = Phi(s') - Phi(s)`` with ``Phi = -alpha * min_ghost_dist``,
++    the BFS distance of the *nearest* ghost to Pacman.
++
++    Two deliberate choices avoid a reward-farming loophole observed empirically
++    (research-000024 follow-up: ghosts oscillated in place, banking +17.5 shaping
++    with zero captures):
++
++    * **Exact telescoping (gamma = 1).** The cumulative shaping over an episode
++      then equals ``Phi(end) - Phi(start)`` regardless of path, so any in-place
++      oscillation nets exactly zero. A discounted ``gamma*Phi(s') - Phi(s)`` with
++      ``Phi <= 0`` instead pays ``(1-gamma)*(-Phi) > 0`` per back-and-forth cycle,
++      which a greedy policy will farm rather than capture.
++    * **Smooth ``min`` distance** over all ghosts (not "two nearest", which is
++      discontinuous when the nearest-ghost identity swaps and produced large
++      non-cancelling per-step swings).
+ 
+     ``Phi`` reads Pacman's true position even when it is not visible to the ghosts.
+     This is a centralized, training-time reward signal (CTDE): the executing ghost
+     policies still observe only their partial local view and never see this distance.
+ 
+-    No movement, visibility, coordination, or ``reverse_action`` terms are emitted —
+-    those are non-potential and would break the invariance guarantee. PBRS already
+-    discourages useless oscillation for free (an A->B->A cycle nets zero potential
+-    change while still paying the timestep cost). Phi reaches 0 naturally at capture
+-    (BFS distance 0), which emits a final ``+alpha*dist`` pulse; timeout is left
+-    untouched (no Phi-zeroing), so the truncation step carries its real potential.
++    No movement, visibility, coordination, or ``reverse_action`` terms are emitted.
++    ``Phi`` reaches 0 naturally at capture (BFS distance 0), emitting a final
++    ``+alpha*dist`` pulse; timeout is left untouched (no Phi-zeroing).
+     """
+ 
+     strategy_id = "capture_v0_pure_potential_shaping"
+@@ -818,15 +828,12 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+         if context.capture_happened:
+             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+ 
+-        team_distance = self._team_distance(context)
+-        if team_distance is not None:
+-            potential = -w.potential_shaping_alpha * float(team_distance)
++        min_distance = self._minimum_distance(context)
++        if min_distance is not None:
++            potential = -w.potential_shaping_alpha * float(min_distance)
+             if self._last_potential is not None:
+                 terms.append(
+-                    RewardTerm(
+-                        "potential_shaping",
+-                        w.gamma * potential - self._last_potential,
+-                    )
++                    RewardTerm("potential_shaping", potential - self._last_potential)
+                 )
+             self._last_potential = potential
+ 
+@@ -836,22 +843,3 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
+             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+ 
+         return RewardResult(tuple(terms))
+-
+-    def _team_distance(self, context: RewardContext) -> float | None:
+-        distances = [
+-            self._bfs_distance(
+-                ghost.current_position,
+-                context.pacman_position,
+-                context.board_shape,
+-                context.wall_positions,
+-            )
+-            for ghost in context.ghosts
+-        ]
+-        reachable = sorted(distance for distance in distances if distance is not None)
+-        if not reachable:
+-            return None
+-        d1 = float(reachable[0])
+-        if len(reachable) == 1:
+-            return d1
+-        d2 = float(reachable[1])
+-        return d1 + self.weights.potential_second_ghost_weight * d2
+diff --git a/test/test_reward_strategies.py b/test/test_reward_strategies.py
+index 3c3dc7a..037096c 100644
+--- a/test/test_reward_strategies.py
++++ b/test/test_reward_strategies.py
+@@ -621,7 +621,6 @@ def test_current_git_variant_applies_overlap_penalty_for_adjacent_opposite_direc
+ # --- Pure potential-based reward shaping (capture_v0_pure_potential_shaping) ---
+ 
+ ALPHA = 0.7
+-GAMMA = 0.99
+ 
+ 
+ def _pbrs_context(
+@@ -669,8 +668,9 @@ def test_loader_resolves_pure_pbrs_id():
+     )
+     assert isinstance(strategy, CaptureV0PurePotentialShaping)
+     assert strategy.strategy_id == "capture_v0_pure_potential_shaping"
+-    assert strategy.weights.gamma == pytest.approx(0.99)
+     assert strategy.weights.potential_shaping_alpha == pytest.approx(0.7)
++    # Stronger-than-default timestep so camping carries a real cost.
++    assert strategy.weights.timestep == pytest.approx(-0.05)
+ 
+ 
+ def test_pure_pbrs_telescoping_term():
+@@ -681,9 +681,9 @@ def test_pure_pbrs_telescoping_term():
+     first = strategy.compute(_pbrs_context(0, 5, step_count=1))  # distance 5
+     assert "potential_shaping" not in first.breakdown
+ 
+-    # Move one tile closer (distance 4): F = gamma*Phi(s') - Phi(s).
++    # Move one tile closer (distance 4): exact telescoping F = Phi(s') - Phi(s).
+     second = strategy.compute(_pbrs_context(1, 5, step_count=2))  # distance 4
+-    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
++    expected = (-ALPHA * 4.0) - (-ALPHA * 5.0)
+     assert second.breakdown["potential_shaping"] == pytest.approx(expected)
+     assert expected > 0.0  # closing distance is rewarded
+ 
+@@ -698,7 +698,7 @@ def test_pure_pbrs_capture_pulse():
+     )
+ 
+     assert capture.breakdown["GET_PACMAN"] == pytest.approx(100.0)
+-    # Phi(capture) = 0; pulse = gamma*0 - (-alpha*dist_before) = +alpha*1.
++    # Phi(capture) = 0; pulse = 0 - (-alpha*dist_before) = +alpha*1.
+     assert capture.breakdown["potential_shaping"] == pytest.approx(ALPHA * 1.0)
+ 
+ 
+@@ -713,11 +713,34 @@ def test_pure_pbrs_timeout_does_not_zero_potential():
+ 
+     assert timeout.breakdown["PACMAN_TIMEOUT_WIN"] == pytest.approx(-100.0)
+     # Real telescoping using the actual distance, NOT a forced +alpha*dist_before pulse.
+-    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
++    expected = (-ALPHA * 4.0) - (-ALPHA * 5.0)
+     assert timeout.breakdown["potential_shaping"] == pytest.approx(expected)
+     assert timeout.breakdown["potential_shaping"] != pytest.approx(ALPHA * 5.0)
+ 
+ 
++def test_pure_pbrs_in_place_oscillation_cannot_be_farmed():
++    """Exact telescoping makes any A<->B<->A cycle net exactly zero shaping.
++
++    Regression for the reward-farming bug (research-000024 follow-up) where
++    discounted shaping let ghosts bank positive reward by oscillating in place
++    next to a visible Pacman instead of capturing it.
++    """
++    strategy = CaptureV0PurePotentialShaping()
++    strategy.reset(_pbrs_context(0, 5))
++    # Pacman fixed at col 5; ghost bounces between col 0 (dist 5) and col 1 (dist 4).
++    rollout = [0, 1, 0, 1, 0, 1, 0]
++    cumulative_shaping = 0.0
++    cumulative_total = 0.0
++    for step, ghost_col in enumerate(rollout, start=1):
++        result = strategy.compute(_pbrs_context(ghost_col, 5, step_count=step))
++        cumulative_shaping += result.breakdown.get("potential_shaping", 0.0)
++        cumulative_total += result.total
++    # Cumulative shaping returns to ~zero whenever the ghost returns to its start.
++    assert cumulative_shaping == pytest.approx(0.0, abs=1e-9)
++    # And the only net effect of camping is the (negative) timestep cost.
++    assert cumulative_total < 0.0
++
++
+ def test_pure_pbrs_magnitude_between_timestep_and_terminal():
+     strategy = CaptureV0PurePotentialShaping()
+     strategy.reset(_pbrs_context(0, 5))
+@@ -725,7 +748,7 @@ def test_pure_pbrs_magnitude_between_timestep_and_terminal():
+     result = strategy.compute(_pbrs_context(1, 5, step_count=2))
+ 
+     magnitude = abs(result.breakdown["potential_shaping"])
+-    assert magnitude > abs(strategy.weights.timestep)  # > 0.01
++    assert magnitude > abs(strategy.weights.timestep)  # > 0.05
+     assert magnitude < abs(strategy.weights.get_pacman)  # < 100
+ 
+ 
+-- 
+2.47.1.windows.1
+

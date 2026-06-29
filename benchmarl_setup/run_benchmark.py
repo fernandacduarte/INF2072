@@ -264,6 +264,31 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Objective evaluation CSV (default: <save-folder>/<maze>/reward_eval.csv).",
     )
+    parser.add_argument(
+        "--epsilon-anneal-ratio",
+        type=float,
+        default=0.95,
+        help=(
+            "Fraction of training over which exploration epsilon anneals from 1.0 "
+            "to 0.1 (default 0.95). Lower (e.g. 0.5) gives the greedy policy a "
+            "longer low-epsilon phase to converge and stabilizes the capture curve."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
     return parser.parse_args()
 
 
@@ -318,6 +343,15 @@ def _build_command(
         command.extend(["--pacman-safe-distance", str(args.pacman_safe_distance)])
     command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
     command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
+    command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
+
+    if args.randomize_spawns:
+        command.append("--randomize-spawns")
+    else:
+        command.append("--no-randomize-spawns")
+    command.extend(
+        ["--randomize-spawns-min-distance", str(args.randomize_spawns_min_distance)]
+    )
 
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
@@ -603,6 +637,7 @@ class ProgressReporter:
         pacman_curriculum_frame_offset: int,
         machine_id: str,
         epsilon_algorithm: str,
+        epsilon_anneal_ratio: float,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
@@ -625,6 +660,7 @@ class ProgressReporter:
             self.maze,
             self.max_frames,
             pacman_curriculum=self.pacman_curriculum,
+            anneal_ratio=float(epsilon_anneal_ratio),
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
         self.eval_seed_base = int(eval_seed_base)
@@ -1182,6 +1218,8 @@ def main() -> None:
         reward_specs.append((strategy.strategy_id, class_path))
     if not reward_specs:
         raise ValueError("At least one reward class must be provided.")
+    if not (0.0 < float(args.epsilon_anneal_ratio) <= 1.0):
+        raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
     if args.eval_episodes < 0:
         raise ValueError("--eval-episodes must be non-negative.")
     if args.live_capture_eval_episodes < 0:
@@ -1262,6 +1300,7 @@ def main() -> None:
             pacman_curriculum_frame_offset=0,
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
+            epsilon_anneal_ratio=args.epsilon_anneal_ratio,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,

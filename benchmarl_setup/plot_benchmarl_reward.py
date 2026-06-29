@@ -451,6 +451,14 @@ def _merge_progress_payloads(
     merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = {}
     merged_meta: dict[str, str] = {}
 
+    def _as_float(raw: str | None) -> float | None:
+        try:
+            if raw is None:
+                return None
+            return float(str(raw).strip())
+        except ValueError:
+            return None
+
     for file_path, core_data, term_data, meta in payloads:
         source_name = file_path.stem
         source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
@@ -464,7 +472,40 @@ def _merge_progress_payloads(
                 }
                 incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
                 merged_meta["reward_terms"] = "|".join(sorted(existing | incoming))
-            elif key not in merged_meta:
+                continue
+
+            if key == "pacman_curriculum":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "easy-medium-hard" and incoming_mode == "easy-medium-hard":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            if key in {
+                "pacman_curriculum_max_frames",
+                "pacman_curriculum_frame_offset",
+                "max_frames",
+            }:
+                incoming_num = _as_float(value)
+                existing_num = _as_float(merged_meta.get(key))
+                if key not in merged_meta:
+                    merged_meta[key] = value
+                elif incoming_num is not None and (existing_num is None or incoming_num > existing_num):
+                    merged_meta[key] = value
+                continue
+
+            if key == "epsilon_schedule_mode":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "curriculum_piecewise" and incoming_mode == "curriculum_piecewise":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            if key not in merged_meta:
                 merged_meta[key] = value
 
         for algorithm, by_device in core_data.items():

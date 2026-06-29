@@ -59,6 +59,7 @@ def _tune_shared_experiment(
     max_frames: int,
     maze: str,
     pacman_curriculum: str,
+    epsilon_anneal_ratio: float = 0.95,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
     schedule = training_exploration_schedule(
@@ -66,6 +67,7 @@ def _tune_shared_experiment(
         maze,
         max_frames,
         pacman_curriculum=pacman_curriculum,
+        anneal_ratio=float(epsilon_anneal_ratio),
     )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
@@ -173,6 +175,21 @@ def parse_args() -> argparse.Namespace:
         help="Global frame offset used for curriculum when run is part of a benchmark matrix.",
     )
     parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -206,6 +223,16 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Fall back to CPU when CUDA is requested but unavailable.",
+    )
+    parser.add_argument(
+        "--epsilon-anneal-ratio",
+        type=float,
+        default=0.95,
+        help=(
+            "Fraction of training over which exploration epsilon anneals from 1.0 "
+            "to 0.1 (default 0.95). Lower values give the greedy policy a longer "
+            "low-epsilon phase to converge."
+        ),
     )
     return parser.parse_args()
 
@@ -263,6 +290,8 @@ def main() -> None:
         "pacman_curriculum": args.pacman_curriculum,
         "pacman_curriculum_max_frames": int(args.pacman_curriculum_max_frames),
         "pacman_curriculum_frame_offset": int(args.pacman_curriculum_frame_offset),
+        "randomize_spawns": bool(args.randomize_spawns),
+        "randomize_spawns_min_distance": int(args.randomize_spawns_min_distance),
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)
@@ -312,6 +341,7 @@ def main() -> None:
         args.max_frames,
         args.maze,
         args.pacman_curriculum,
+        float(args.epsilon_anneal_ratio),
     )
 
     experiment = Experiment(
