@@ -34,6 +34,12 @@ __pycache__/
 !/benchmarl_setup/runs/ab/reward_ab.csv
 !/benchmarl_setup/runs/ab/*.png
 
+# R1 positive-control sanity battery (plan-000034): ignore bulky run outputs but
+# keep the manifest for C1 provenance (mirror of the ab/ pattern above).
+!/benchmarl_setup/runs/r1/
+/benchmarl_setup/runs/r1/*
+!/benchmarl_setup/runs/r1/r1_manifest.csv
+
 # Render screenshots
 /benchmarl_setup/runs/pacman_render*.png
 /benchmarl_setupruns*.png

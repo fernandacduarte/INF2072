@@ -3,7 +3,7 @@
 tags: reinforcement-learning, hyperparameter-tuning, experimental-design, benchmark, partial-observability
 
 source: research-000032
-spawned: research-000032, plan-000034
+spawned: plan-000034
 git_commit: 508cacd
 
 ## User brief

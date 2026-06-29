@@ -13,10 +13,10 @@ SEED   ?= 11
 MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
-ALGOS   ?= qmixglobal
-SEEDS   ?= 0,1,2
+ALGOS   ?= iql,vdn,qmixglobal
+SEEDS   ?= 0,1,2,4
 FRAMES  ?= 300000
-CHECKPOINT_INTERVAL ?= 10000
+CHECKPOINT_INTERVAL ?= 30000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_pure_potential_shaping
 LEARNER ?= qmixglobal
@@ -47,10 +47,19 @@ RANDOMIZE_SPAWNS_ARG := $(if $(filter-out 0 false no off,$(RANDOMIZE_SPAWNS)),--
 
 .DEFAULT_GOAL := help
 
-.PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark liveplot eval-best
+# R1 positive-control sanity battery knobs (plan-000034 / research-000032).
+# Decides whether the ~40% capture ceiling "against a random Pacman" is a
+# confound or a genuine learning limit BEFORE any hyperparameter sweep.
+R1_ALGOS         ?= iql,vdn,qmixglobal
+R1_SEEDS         ?= 0,1,2,3,4
+R1_FRAMES        ?= 60000
+R1_EVAL_EPISODES ?= 40
+R1_SAVE          ?= benchmarl_setup/runs/r1
+
+.PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark liveplot eval-best r1-positive-control
 
 help: ## Show this help
-	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE         (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARD_ID CURRICULUM EPSILON_ANNEAL_RATIO','            PACMAN_DIFFICULTY PACMAN_RANDOM_ACTION_PROB PACMAN_SAFE_DISTANCE','            RANDOMIZE_SPAWNS RANDOMIZE_SPAWNS_MIN_DISTANCE','            (dumber Pacman: make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy)','            (stabler curve: make benchmark EPSILON_ANNEAL_RATIO=0.5)','            (fixed spawns: make benchmark RANDOMIZE_SPAWNS=0)','Eval vars:  LEARNER DEVICE REWARD_ID']))"
+	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make r1-positive-control  R1 sanity battery: random opponent vs curriculum + verdict','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE         (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARD_ID CURRICULUM EPSILON_ANNEAL_RATIO','            PACMAN_DIFFICULTY PACMAN_RANDOM_ACTION_PROB PACMAN_SAFE_DISTANCE','            RANDOMIZE_SPAWNS RANDOMIZE_SPAWNS_MIN_DISTANCE','            (dumber Pacman: make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy)','            (stabler curve: make benchmark EPSILON_ANNEAL_RATIO=0.5)','            (fixed spawns: make benchmark RANDOMIZE_SPAWNS=0)','Eval vars:  LEARNER DEVICE REWARD_ID']))"
 
 demo: ## Live Pygame window: defense-first Pacman vs random ghosts
 	$(PYTHON) custom_environment/render_demo.py --render-mode human --delay $(DELAY) --maze $(MAZE) --seed $(SEED)
@@ -76,6 +85,10 @@ eval-latest: ## Watch trained ghosts (latest checkpoint) in a Pygame window
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-ids $(REWARD_ID) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE) --checkpoint-interval $(CHECKPOINT_INTERVAL) --pacman-curriculum $(CURRICULUM) --pacman-curriculum-max-frames $(CURRICULUM_MAX_FRAMES) --pacman-difficulty $(PACMAN_DIFFICULTY) --pacman-random-action-prob $(PACMAN_RANDOM_ACTION_PROB) $(PACMAN_SAFE_DISTANCE_ARG) --epsilon-anneal-ratio $(EPSILON_ANNEAL_RATIO) $(RANDOMIZE_SPAWNS_ARG) --randomize-spawns-min-distance $(RANDOMIZE_SPAWNS_MIN_DISTANCE)
 
+
+r1-positive-control: ## R1 sanity battery: random opponent (P) vs curriculum (C), then print the verdict
+	$(PYTHON) benchmarl_setup/run_r1_positive_control.py --algorithms $(R1_ALGOS) --seeds $(R1_SEEDS) --max-frames $(R1_FRAMES) --eval-episodes $(R1_EVAL_EPISODES) --maze $(MAZE) --devices $(DEVICE) --save-folder $(R1_SAVE)
+	$(PYTHON) benchmarl_setup/summarize_r1.py --p-folder $(R1_SAVE)/condition_P --c-folder $(R1_SAVE)/condition_C
 
 liveplot: ## Live mean+/-std reward monitor (run in a second terminal during a benchmark)
 	$(PYTHON) benchmarl_setup/liveplot.py --algorithms $(ALGOS) --maze $(MAZE) --device all
