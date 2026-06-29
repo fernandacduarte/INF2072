@@ -28,6 +28,7 @@ import argparse
 import csv
 import subprocess
 import sys
+import time
 from pathlib import Path
 from statistics import mean, stdev
 
@@ -36,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from custom_environment.env.domain.constant import Observation
 from custom_environment.env.domain.ghost_pursuit_policy import GhostPursuitPolicy
 from custom_environment.env.pacman_environment import PacManEnvironment
 from custom_environment.eval_report import (
@@ -45,6 +47,22 @@ from custom_environment.eval_report import (
 from custom_environment.utils import MAZES, build_maze
 
 _RUNS_ROOT = PROJECT_ROOT / "benchmarl_setup" / "runs"
+
+# ASCII glyphs for the terminal render (mirrors render_demo.py).
+_SYMBOLS = {
+    Observation.CAPUTRED.value: "X",
+    Observation.EMPTY.value: " ",
+    Observation.GHOST.value: "G",
+    Observation.PAC_MAN.value: "P",
+    Observation.WALL.value: "#",
+}
+_ACTION_NAME = {0: "RIGHT", 1: "LEFT", 2: "UP", 3: "DOWN"}
+
+
+def _render_ascii(grid) -> str:
+    return "\n".join(
+        "".join(_SYMBOLS.get(int(cell), "?") for cell in row) for row in grid
+    )
 
 
 def _git_commit() -> str:
@@ -119,17 +137,94 @@ def _run_episode(env: PacManEnvironment, policy: GhostPursuitPolicy, seed: int) 
     }
 
 
-def _build_env(args: argparse.Namespace) -> PacManEnvironment:
+def _build_env(
+    args: argparse.Namespace, render_mode: str | None = None
+) -> PacManEnvironment:
     spec = build_maze(args.maze, args.grid_size)
     return PacManEnvironment(
         spec,
-        render_mode=None,
+        render_mode=render_mode,
         ghost_view_size=args.ghost_view_size,
         pacman_difficulty=args.pacman_difficulty,
         pacman_random_action_prob=args.pacman_random_action_prob,
         pacman_safe_distance=args.pacman_safe_distance,
         capture_radius=args.capture_radius,
     )
+
+
+def _render_episode(args: argparse.Namespace, seed: int) -> int:
+    """Render a single scripted-pursuit episode (ascii terminal or Pygame window)."""
+    mode = args.render_mode
+    # ascii draws the grid itself, so the env renderer stays off; human/rgb use it.
+    env = _build_env(args, render_mode=None if mode == "ascii" else mode)
+    policy = GhostPursuitPolicy()
+    env.reset(seed=seed)
+
+    if mode == "ascii":
+        print(f"Scripted-pursuit ceiling demo | maze={args.maze} "
+              f"difficulty={args.pacman_difficulty} capture_radius={args.capture_radius} seed={seed}")
+        print(_render_ascii(env.global_view))
+        print("Legend: #=Wall, G=Ghost, P=Pacman, X=Captured, <space>=Empty")
+    else:
+        env.render(learner="scripted_pursuit", total_reward=0.0, done=False)
+
+    total_reward = 0.0
+    done = False
+    step = 0
+    last_actions: dict[str, str] = {}
+    last_rewards: dict[str, float] = {}
+    while env.agents and not done and step < env.max_steps:
+        step += 1
+        ghost_ids = [ghost.id for ghost in env.ghosts]
+        ghost_positions = [ghost.current_position for ghost in env.ghosts]
+        actions_list = policy.choose_actions(
+            env.global_view, ghost_positions, env.pacman.current_position
+        )
+        actions = {gid: action.value for gid, action in zip(ghost_ids, actions_list)}
+        _obs, rewards, terminations, _trunc, _infos = env.step(actions)
+        total_reward += float(sum(rewards.values()))
+        done = any(terminations.values()) or not env.agents
+        last_actions = {gid: _ACTION_NAME.get(a, str(a)) for gid, a in actions.items()}
+        last_rewards = rewards
+
+        if mode == "ascii":
+            print(f"\nStep {step} | actions={last_actions}")
+            print(_render_ascii(env.global_view))
+            print(f"rewards={rewards} done={done}")
+        else:
+            env.render(
+                learner="scripted_pursuit",
+                total_reward=total_reward,
+                done=done,
+                last_action_by_agent=last_actions,
+                last_reward_by_agent=last_rewards,
+            )
+        if args.delay > 0:
+            time.sleep(args.delay)
+
+    captured = bool(env._is_capture_state())
+    print(
+        f"\nEpisode finished | steps={step} | captured={captured} "
+        f"| total_reward={total_reward:.3f}"
+    )
+    if mode == "human":
+        env.wait_for_close(
+            learner="scripted_pursuit",
+            total_reward=total_reward,
+            done=True,
+            last_action_by_agent=last_actions,
+            last_reward_by_agent=last_rewards,
+            final_result={
+                "title": "Ghosts win" if captured else "Pacman escaped",
+                "reason": "Pacman captured by scripted pursuit." if captured
+                else "Pacman survived the horizon.",
+                "steps": step,
+                "max_steps": env.max_steps,
+                "total_reward": total_reward,
+            },
+        )
+    env.close()
+    return 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -161,6 +256,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="CSV output path (default: benchmarl_setup/runs/ceiling_<maze>_<difficulty>.csv).",
     )
+    parser.add_argument(
+        "--render-mode",
+        choices=["none", "ascii", "human"],
+        default="none",
+        help=(
+            "Watch the scripted-pursuit ghosts play ONE episode instead of running the "
+            "headless multi-seed sweep: 'ascii' prints the grid each step, 'human' opens "
+            "the Pygame window. 'none' (default) runs the metric sweep."
+        ),
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.1,
+        help="Seconds to pause between rendered steps (render modes only).",
+    )
     args = parser.parse_args(argv)
     if args.episodes < 1:
         parser.error("--episodes must be >= 1")
@@ -177,6 +288,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    # Render one episode and stop (the visual "eval" of the scripted ghosts).
+    if args.render_mode != "none":
+        return _render_episode(args, seed=args.seed_list[0])
+
     env = _build_env(args)
     policy = GhostPursuitPolicy()
     commit = _git_commit()
