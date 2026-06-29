@@ -246,7 +246,9 @@ def main(argv: list[str] | None = None) -> int:
                 "seeds": args.seeds,
                 "max_frames": args.max_frames,
                 "eval_episodes": args.eval_episodes,
-                "save_folder": str(save_folder),
+                # Stored relative to the manifest's own directory (the save-root) so
+                # the plotter resolves it portably regardless of absolute location.
+                "save_folder": save_folder.name,
                 "git_commit": commit,
                 "git_dirty": dirty,
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),

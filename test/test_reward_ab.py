@@ -329,7 +329,10 @@ def _make_ab_fixture(tmp_path: Path) -> Path:
             control_capture_curve=[(10000, 0.05), (30000, 0.08), (60000, 0.10)],
             pbrs_capture_curve=[(10000, 0.10), (30000, 0.35), (60000, 0.55)],
         )
-        rows.append({"p": p, "evasiveness": 1 - p, "save_folder": str(point_dir)})
+        # Store save_folder relative to the manifest's directory, exactly as
+        # run_reward_ab.py writes it (regression for the doubled-path bug where the
+        # plotter resolved a CWD-relative folder against the manifest dir).
+        rows.append({"p": p, "evasiveness": 1 - p, "save_folder": f"p_{p}"})
     with manifest.open("w", newline="", encoding="utf-8") as fh:
         writer = _csv.DictWriter(fh, fieldnames=["p", "evasiveness", "save_folder"])
         writer.writeheader()
