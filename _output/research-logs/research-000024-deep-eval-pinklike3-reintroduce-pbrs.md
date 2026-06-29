@@ -1,6 +1,6 @@
 # Research 000024 | fernanda-INF2072 | 2026-06-27 21:34 UTC | Deep eval of pinklike3 benchmark + reintroduce potential-based reward shaping
 tags: reward-shaping, pbrs, marl, eval-behavior, experimental-design
-spawned: plan-000025
+spawned: plan-000025, plan-000031
 
 ## User Brief
 

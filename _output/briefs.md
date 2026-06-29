@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-29 01:21 UTC | STARTED | 2026-06-29 00:52 UTC | plan | Executar o benchmark decisivo do estudo de rewards: desenho A/B (esparso capture_v0 sem shaping vs capture_v0_pure_potential_shaping com PBRS), >=5 seeds conforme constituicao Q3, metrica de perseguicao, framing sample-efficiency. Fonte research-000024 (R5) / research-000028. | PLAN | 000031
+
 DONE | 2026-06-29 00:41 UTC | STARTED | 2026-06-29 00:33 UTC | communicate | para o professor da disciplina o estudo feito aqui nesta branch. ajustes no sistema de rewards e os nosso findings até agora relacionados a tentativa de tunar o sistema de rewards.
 
 STARTED | 2026-06-29 00:32 UTC | plan | Implement the evasive-Pacman benchmark protocol from research-000028: seed-pin fix, sweep wrapper, aggregator/plotter, scripted-pursuit ceiling, randomize-spawns on
