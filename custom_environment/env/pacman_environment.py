@@ -70,6 +70,12 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         "render_modes": ["human", "rgb_array"],
     }
 
+    _MIXED_CURRICULUM_WEIGHTS_BY_PHASE: dict[str, tuple[float, float, float]] = {
+        "early": (0.80, 0.20, 0.00),
+        "middle": (0.30, 0.50, 0.20),
+        "late": (0.10, 0.30, 0.60),
+    }
+
     # Constructor receives the world grid and number of ghost agents.
     def __init__(
         self,  # The environment instance
@@ -158,10 +164,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
                 f"Unsupported pacman_difficulty={pacman_difficulty!r}. "
                 "Expected one of: easy, medium, hard."
             )
-        if self.pacman_curriculum not in {"off", "easy-medium-hard"}:
+        if self.pacman_curriculum not in {
+            "off",
+            "easy-medium-hard",
+            "mixed-easy-medium-hard",
+        }:
             raise ValueError(
                 f"Unsupported pacman_curriculum={pacman_curriculum!r}. "
-                "Expected one of: off, easy-medium-hard."
+                "Expected one of: off, easy-medium-hard, mixed-easy-medium-hard."
             )
         if not (0.0 <= self.pacman_random_action_prob <= 1.0):
             raise ValueError("pacman_random_action_prob must be in [0, 1].")
@@ -217,12 +227,36 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         return "hard"
 
     def _difficulty_params(self) -> tuple[bool, float, int | None]:
-        stage = self._curriculum_stage()
-        if stage == "easy":
+        difficulty = self._effective_pacman_difficulty()
+        if difficulty == "easy":
             return True, 0.0, 1
-        if stage == "medium":
+        if difficulty == "medium":
             return False, 0.30, 2
         return False, 0.0, None
+
+    def _curriculum_phase(self) -> str:
+        progress = self._curriculum_progress()
+        if progress < (1.0 / 3.0):
+            return "early"
+        if progress < (2.0 / 3.0):
+            return "middle"
+        return "late"
+
+    def _sample_curriculum_difficulty(self) -> str:
+        phase = self._curriculum_phase()
+        weights = self._MIXED_CURRICULUM_WEIGHTS_BY_PHASE.get(phase, (0.10, 0.30, 0.60))
+        sampled = self._pacman_rng.choice(
+            ["easy", "medium", "hard"],
+            p=np.asarray(weights, dtype=np.float64),
+        )
+        return str(sampled)
+
+    def _effective_pacman_difficulty(self) -> str:
+        if self.pacman_curriculum == "off":
+            return self.pacman_difficulty
+        if self.pacman_curriculum == "mixed-easy-medium-hard":
+            return self._sample_curriculum_difficulty()
+        return self._curriculum_stage()
 
     def _build_pacman_policy(self) -> PacmanPolicy:
         pure_random, default_noise, default_safe_distance = self._difficulty_params()

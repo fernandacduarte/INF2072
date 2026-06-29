@@ -1,6 +1,7 @@
 import argparse
 import colorsys
 import csv
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -78,6 +79,114 @@ def _aggregate_algorithm_runs(
     std_rewards = _moving_average(std_rewards, window)
 
     return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, captures_mat, n_runs
+
+
+def _canonical_run_dir_name(run_id: str) -> str:
+    # Merged multi-machine payloads prefix run ids as "machine:run".
+    return str(run_id).split(":", 1)[-1]
+
+
+def _checkpoint_frame_from_capture_csv(path: Path) -> int | None:
+    prefix = "evaluation_report_live_capture_checkpoint_"
+    stem = path.stem
+    if not stem.startswith(prefix):
+        return None
+    suffix = stem[len(prefix) :]
+    if not suffix:
+        return None
+    try:
+        return int(suffix)
+    except ValueError:
+        return None
+
+
+def _load_checkpoint_capture_by_frame(run_dir: Path) -> dict[int, float]:
+    capture_by_frame: dict[int, float] = {}
+    for csv_path in sorted(run_dir.glob("evaluation_report_live_capture_checkpoint_*.csv")):
+        checkpoint_frame = _checkpoint_frame_from_capture_csv(csv_path)
+        if checkpoint_frame is None:
+            continue
+
+        try:
+            with csv_path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                row = next(reader, None)
+        except OSError:
+            continue
+
+        if row is None:
+            continue
+
+        try:
+            capture_rate = float(row.get("capture_rate", "nan"))
+        except (TypeError, ValueError):
+            continue
+
+        if math.isnan(capture_rate):
+            continue
+
+        capture_by_frame[checkpoint_frame] = capture_rate * 100.0
+
+    return capture_by_frame
+
+
+def _closest_step_for_checkpoint(
+    step_map: dict[int, tuple[float, float, float]],
+    checkpoint_frame: int,
+) -> int | None:
+    best_step: int | None = None
+    best_distance = float("inf")
+    for step, values in step_map.items():
+        frame_value = values[0]
+        if math.isnan(frame_value):
+            continue
+        distance = abs(float(frame_value) - float(checkpoint_frame))
+        if distance < best_distance:
+            best_distance = distance
+            best_step = step
+    return best_step
+
+
+def _resolve_run_dir_for_progress_row(
+    maze_runs_root: Path,
+    device_label_key: str,
+    run_id: str,
+) -> Path | None:
+    reward_id, parsed_device = _split_reward_and_device(device_label_key)
+    canonical_run_id = _canonical_run_dir_name(run_id)
+    candidate_paths = [
+        maze_runs_root / (reward_id or "current") / parsed_device / canonical_run_id,
+        # Backward compatibility with older layouts without reward-id level.
+        maze_runs_root / parsed_device / canonical_run_id,
+        maze_runs_root / canonical_run_id,
+    ]
+    for candidate in candidate_paths:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return None
+
+
+def _overlay_checkpoint_capture_snapshots(
+    core_data: dict[str, dict[str, dict[str, dict[int, tuple[float, float, float]]]]],
+    maze_runs_root: Path,
+) -> None:
+    for _algorithm, by_device in core_data.items():
+        for device_label_key, by_run in by_device.items():
+            for run_id, step_map in by_run.items():
+                run_dir = _resolve_run_dir_for_progress_row(maze_runs_root, device_label_key, run_id)
+                if run_dir is None:
+                    continue
+
+                capture_by_frame = _load_checkpoint_capture_by_frame(run_dir)
+                if not capture_by_frame:
+                    continue
+
+                for checkpoint_frame, checkpoint_capture_pct in capture_by_frame.items():
+                    step = _closest_step_for_checkpoint(step_map, checkpoint_frame)
+                    if step is None:
+                        continue
+                    frame_value, _capture_pct, reward_value = step_map[step]
+                    step_map[step] = (frame_value, checkpoint_capture_pct, reward_value)
 
 
 def _epsilon_for_frames(
@@ -413,7 +522,7 @@ def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: l
 
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
     curriculum_mode = (meta.get("pacman_curriculum") or "").strip().lower()
-    if curriculum_mode != "easy-medium-hard":
+    if curriculum_mode not in {"easy-medium-hard", "mixed-easy-medium-hard"}:
         return []
 
     max_frames_raw = (meta.get("pacman_curriculum_max_frames") or "").strip()
@@ -433,6 +542,12 @@ def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[
         frame_offset = float(offset_raw)
     except ValueError:
         frame_offset = 0.0
+
+    if curriculum_mode == "mixed-easy-medium-hard":
+        return [
+            (frame_offset + (curriculum_max_frames / 3.0), "early->middle"),
+            (frame_offset + ((2.0 * curriculum_max_frames) / 3.0), "middle->late"),
+        ]
 
     return [
         (frame_offset + (curriculum_max_frames / 3.0), "easy->medium"),
@@ -493,9 +608,18 @@ def _merge_progress_payloads(
                 continue
 
             if key == "pacman_curriculum":
+                def _curriculum_rank(mode: str) -> int:
+                    if mode == "mixed-easy-medium-hard":
+                        return 3
+                    if mode == "easy-medium-hard":
+                        return 2
+                    if mode == "off":
+                        return 1
+                    return 0
+
                 existing_mode = (merged_meta.get(key) or "").strip().lower()
                 incoming_mode = str(value).strip().lower()
-                if existing_mode != "easy-medium-hard" and incoming_mode == "easy-medium-hard":
+                if _curriculum_rank(incoming_mode) > _curriculum_rank(existing_mode):
                     merged_meta[key] = value
                 elif key not in merged_meta:
                     merged_meta[key] = value
@@ -834,6 +958,7 @@ def main() -> None:
         for path in progress_files
     ]
     progress_data, progress_term_data, progress_meta = _merge_progress_payloads(payloads)
+    _overlay_checkpoint_capture_snapshots(progress_data, maze_runs_root)
 
     reward_runs_root = maze_runs_root / args.reward_id
     if reward_runs_root.exists():

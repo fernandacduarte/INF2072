@@ -62,6 +62,41 @@ def test_training_schedule_curriculum_piecewise_values():
             )
 
 
+def test_training_schedule_mixed_curriculum_piecewise_values():
+    max_frames = 60000
+    expected = {
+        "epsilon_schedule_mode": "curriculum_piecewise",
+        "epsilon_init": 1.0,
+        "epsilon_end": 0.08,
+        "epsilon_anneal_ratio": 1.0,
+        "epsilon_anneal_frames": max_frames,
+        "max_frames": max_frames,
+        "epsilon_stage_boundary_1": max_frames // 3,
+        "epsilon_stage_boundary_2": (2 * max_frames) // 3,
+        "epsilon_easy_init": 1.0,
+        "epsilon_easy_end": 0.25,
+        "epsilon_medium_init": 0.65,
+        "epsilon_medium_end": 0.20,
+        "epsilon_hard_init": 0.55,
+        "epsilon_hard_end": 0.08,
+    }
+
+    algorithms = ("iql", "vdn", "qmixlocal", "qmixglobal", "qmix")
+    mazes = ("default", "pinklike", "pinklike3")
+
+    for algorithm in algorithms:
+        for maze in mazes:
+            assert (
+                training_exploration_schedule(
+                    algorithm,
+                    maze,
+                    max_frames,
+                    pacman_curriculum="mixed-easy-medium-hard",
+                )
+                == expected
+            )
+
+
 def test_training_schedule_rejects_invalid_algorithm():
     try:
         training_exploration_schedule("invalid_algo", "default", 1000)
