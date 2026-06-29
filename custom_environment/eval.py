@@ -53,6 +53,16 @@ CHECKPOINT_BEST_METRICS = ("reward", "capture_rate")
 def _configure_warning_filters() -> None:
     warnings.filterwarnings(
         "ignore",
+        message=(
+            r"^You are using `torch\.load` with `weights_only=False` "
+            r"\(the current default value\), which uses the default pickle "
+            r"module implicitly\."
+        ),
+        category=FutureWarning,
+        module=r"^benchmarl\.experiment\.experiment$",
+    )
+    warnings.filterwarnings(
+        "ignore",
         message=r"^PettingZoo in TorchRL is tested using version == 1\.24\.3",
         category=UserWarning,
         module=r"^torchrl\.envs\.libs\.pettingzoo$",
