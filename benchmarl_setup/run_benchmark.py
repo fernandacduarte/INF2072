@@ -289,6 +289,16 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
     )
+    parser.add_argument(
+        "--capture-radius",
+        type=int,
+        default=0,
+        help=(
+            "Capture rule radius forwarded to each run. 0 (default) keeps "
+            "co-location-only capture; >0 enables adjacency capture. Changes the "
+            "task definition -- re-baseline and never mix capture rates across radii."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -352,6 +362,7 @@ def _build_command(
     command.extend(
         ["--randomize-spawns-min-distance", str(args.randomize_spawns_min_distance)]
     )
+    command.extend(["--capture-radius", str(args.capture_radius)])
 
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
