@@ -587,8 +587,7 @@ def _aggregate_algorithm_runs(
         step_axis = np.arange(1, max_step + 1, dtype=np.float64)
         mean_frames[invalid_frames] = step_axis[invalid_frames]
 
-    mean_captures = _moving_average(mean_captures, window)
-    std_captures = _moving_average(std_captures, window)
+    # Keep capture statistics exact (checkpoint snapshots): no smoothing.
     mean_rewards = _moving_average(mean_rewards, window)
     std_rewards = _moving_average(std_rewards, window)
     mean_frames = mean_frames[: len(mean_captures)]

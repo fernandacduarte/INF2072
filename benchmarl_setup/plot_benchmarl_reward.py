@@ -73,8 +73,7 @@ def _aggregate_algorithm_runs(
         step_axis = np.arange(1, max_step + 1, dtype=np.float64)
         mean_frames[invalid_frames] = step_axis[invalid_frames]
 
-    mean_captures = _moving_average(mean_captures, window)
-    std_captures = _moving_average(std_captures, window)
+    # Keep capture statistics exact (checkpoint snapshots): no smoothing.
     mean_rewards = _moving_average(mean_rewards, window)
     std_rewards = _moving_average(std_rewards, window)
 
@@ -332,6 +331,15 @@ def _device_matches_selector(label: str, selector: str) -> bool:
         return True
     _reward_id, parsed_device = _split_reward_and_device(label)
     return parsed_device == selector
+
+
+def _reward_matches_selector(label: str, selector: str | None) -> bool:
+    if selector is None:
+        return True
+    reward_id, _parsed_device = _split_reward_and_device(label)
+    # Legacy rows may not carry reward_id; treat them as current baseline.
+    effective_reward_id = reward_id if reward_id is not None else "current"
+    return effective_reward_id == selector
 
 
 def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
@@ -840,6 +848,7 @@ def main() -> None:
         )
 
     requested_device = args.device.strip().lower()
+    requested_reward_id = args.reward_id.strip().lower()
     if requested_device != "auto":
         selected_device_label = device_label(requested_device)
         device_root = discovery_root / selected_device_label
@@ -968,12 +977,17 @@ def main() -> None:
             continue
 
         if requested_device == "auto":
-            selected_devices = sorted(by_device.keys())
+            selected_devices = [
+                key
+                for key in sorted(by_device.keys())
+                if _reward_matches_selector(key, requested_reward_id)
+            ]
         else:
             selected_devices = [
                 key
                 for key in sorted(by_device.keys())
                 if _device_matches_selector(key, requested_device)
+                and _reward_matches_selector(key, requested_reward_id)
             ]
 
         if not selected_devices:
@@ -996,7 +1010,13 @@ def main() -> None:
 
         for device_key in selected_devices:
             for run_id, step_map in by_device.get(device_key, {}).items():
-                if selected_run_names is not None and run_id not in selected_run_names:
+                # Merged multi-machine progress prefixes run ids as "machine:run".
+                canonical_run_id = run_id.split(":", 1)[-1]
+                if (
+                    selected_run_names is not None
+                    and run_id not in selected_run_names
+                    and canonical_run_id not in selected_run_names
+                ):
                     continue
 
                 run_key = f"{device_key}:{run_id}"
