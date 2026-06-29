@@ -171,3 +171,73 @@ def test_seed_pinned_pacman_rng_differs_across_seeds():
     a = _pacman_positions_for_seed(7)
     b = _pacman_positions_for_seed(123)
     assert a != b
+
+
+# --------------------------------------------------------------------------- #
+# Step 4 -- pursuit_fraction eval metric
+# --------------------------------------------------------------------------- #
+
+from custom_environment.eval_report import (  # noqa: E402
+    REPORT_FIELDS,
+    VARIANT_FIELDS,
+    _aggregate_episodes,
+    _build_variant_summary,
+    _pursuit_fraction_from_distances,
+)
+
+
+def test_pursuit_fraction_monotonic_approach_is_one():
+    assert _pursuit_fraction_from_distances([5.0, 4.0, 3.0, 2.0, 1.0]) == 1.0
+
+
+def test_pursuit_fraction_monotonic_retreat_is_zero():
+    assert _pursuit_fraction_from_distances([1.0, 2.0, 3.0, 4.0, 5.0]) == 0.0
+
+
+def test_pursuit_fraction_skips_undefined_steps():
+    # None steps are skipped, not compared across the gap: 4->3 closing, 3->2 closing.
+    assert _pursuit_fraction_from_distances([4.0, None, 3.0, 2.0]) == 1.0
+    # No comparable pair -> NaN.
+    result = _pursuit_fraction_from_distances([None, 5.0])
+    assert result != result  # NaN
+
+
+def _episode(pursuit_fraction: float, *, captured: bool = False, steps: int = 10):
+    return {
+        "captured": captured,
+        "timeout": not captured,
+        "pellet_win": False,
+        "evaluation_cutoff": False,
+        "steps": steps,
+        "team_return": 1.0,
+        "reward_breakdown": {},
+        "category_totals": {"shaping": 0.0, "terminal": 0.0},
+        "visible_steps": 5,
+        "newly_spotted_count": 0,
+        "pursuit_fraction": pursuit_fraction,
+    }
+
+
+def test_aggregate_emits_pursuit_columns_in_report_fields():
+    agg = _aggregate_episodes([_episode(1.0), _episode(0.0)])
+    assert agg["pursuit_fraction_mean"] == pytest.approx(0.5)
+    assert "pursuit_fraction_mean" in REPORT_FIELDS
+    assert "pursuit_fraction_std" in REPORT_FIELDS
+
+
+def test_variant_summary_emits_pursuit_columns():
+    # Two per-seed rows for one variant; each row carries its pursuit_fraction_mean.
+    rows = [
+        {"reward_id": "capture_v0_sparse_control", "learner": "iql", "reward_class": "x",
+         "capture_rate": 0.4, "mean_steps_to_capture": 50.0, "pursuit_fraction_mean": 0.6},
+        {"reward_id": "capture_v0_sparse_control", "learner": "iql", "reward_class": "x",
+         "capture_rate": 0.5, "mean_steps_to_capture": 60.0, "pursuit_fraction_mean": 0.8},
+    ]
+    pooled = {
+        ("capture_v0_sparse_control", "iql"): [_episode(0.6, captured=True), _episode(0.8)],
+    }
+    summary = _build_variant_summary(rows, pooled)
+    assert len(summary) == 1
+    assert summary[0]["pursuit_fraction_mean"] == pytest.approx(0.7)
+    assert "pursuit_fraction_mean" in VARIANT_FIELDS
+    assert "pursuit_fraction_std" in VARIANT_FIELDS

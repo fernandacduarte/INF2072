@@ -43,10 +43,59 @@ from custom_environment.eval import (
     _set_global_ghost_view_size,
     _unwrap_pacman_env,
 )
+from custom_environment.env.rewards.current import CaptureV0PurePotentialShaping
+
+# Reuse the exact BFS the PBRS potential uses, so the pursuit_fraction metric
+# measures the same team->Pacman distance the shaping reward optimizes.
+_bfs_distance = CaptureV0PurePotentialShaping._bfs_distance
 
 
 ReportValue = float | int | str
 EpisodeResult = dict[str, Any]
+
+
+def _team_mean_distance(context: Any) -> float | None:
+    """Mean BFS distance of all reachable ghosts to Pacman's true position.
+
+    Mirrors ``CaptureV0PurePotentialShaping._mean_distance``. Uses the true
+    Pacman position from the reward context -- a training/eval-time metric only;
+    the executing ghost policies never observe this distance (CTDE).
+    """
+    distances = [
+        _bfs_distance(
+            ghost.current_position,
+            context.pacman_position,
+            context.board_shape,
+            context.wall_positions,
+        )
+        for ghost in context.ghosts
+    ]
+    reachable = [distance for distance in distances if distance is not None]
+    if not reachable:
+        return None
+    return sum(reachable) / len(reachable)
+
+
+def _pursuit_fraction_from_distances(distances: list[float | None]) -> float:
+    """Fraction of comparable steps where the team distance strictly decreased.
+
+    A step is comparable when both it and the previous defined step have a team
+    distance; steps with an undefined distance (Pacman unreachable) are skipped
+    rather than compared across the gap. Returns NaN when no comparable pair
+    exists (e.g. a one-step or fully-unreachable episode).
+    """
+    prev: float | None = None
+    closing = 0
+    comparable = 0
+    for distance in distances:
+        if distance is None:
+            continue
+        if prev is not None:
+            comparable += 1
+            if distance < prev:
+                closing += 1
+        prev = distance
+    return closing / comparable if comparable else float("nan")
 
 
 def _configure_warning_filters() -> None:
@@ -266,6 +315,10 @@ def _run_episode(
     newly_spotted_count = 0
     timeout = False
     pellet_win = False
+    # Pursuit metric: per-step team BFS distance to Pacman; reduced at the end into
+    # the fraction of steps the team closed in (research-000024 R5 -- capture_rate
+    # alone cannot show pursuit).
+    team_distances: list[float | None] = []
 
     while not done and steps < max_steps:
         steps += 1
@@ -288,6 +341,7 @@ def _run_episode(
             visible_steps += int(context.pacman_visible)
             timeout = timeout or bool(context.timeout_happened)
             pellet_win = pellet_win or bool(context.pacman_win_happened)
+            team_distances.append(_team_mean_distance(context))
         if raw_env.last_team_reward_breakdown.get("newly_spotted", 0.0) != 0.0:
             newly_spotted_count += 1
 
@@ -303,6 +357,7 @@ def _run_episode(
     # A simultaneous final-step pellet clear is classified as a pellet win, not a timeout.
     timeout = timeout and not pellet_win
     evaluation_cutoff = not done and not captured and not timeout and not pellet_win
+    pursuit_fraction = _pursuit_fraction_from_distances(team_distances)
     return {
         "captured": captured,
         "timeout": timeout,
@@ -314,6 +369,7 @@ def _run_episode(
         "category_totals": dict(category_totals),
         "visible_steps": visible_steps,
         "newly_spotted_count": newly_spotted_count,
+        "pursuit_fraction": pursuit_fraction,
     }
 
 
@@ -336,6 +392,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
 
     visible_fractions: list[float] = []
     newly_spotted_counts: list[float] = []
+    pursuit_fractions: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
     reward_breakdown_per_step_values: dict[str, list[float]] = defaultdict(list)
@@ -343,6 +400,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         steps = max(int(episode["steps"]), 1)
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
         newly_spotted_counts.append(float(episode["newly_spotted_count"]))
+        pursuit_fractions.append(float(episode.get("pursuit_fraction", float("nan"))))
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
@@ -398,6 +456,10 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         "frac_steps_visible": _safe_mean(visible_fractions),
         # Newly-spotted count measures average reacquisitions of Pacman's location.
         "mean_newly_spotted_count": _safe_mean(newly_spotted_counts),
+        # Pursuit fraction is the mean fraction of steps the team closed BFS
+        # distance to Pacman -- the pursuit-acquisition signal capture_rate hides.
+        "pursuit_fraction_mean": _safe_mean(pursuit_fractions),
+        "pursuit_fraction_std": _safe_std(pursuit_fractions),
         # Shaping return is the mean non-terminal reward contribution per episode.
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
@@ -522,6 +584,7 @@ def _build_variant_summary(
         variant_rows = rows_by_variant[(reward_id, learner)]
         capture_rates = [float(row["capture_rate"]) for row in variant_rows]
         capture_times = [float(row["mean_steps_to_capture"]) for row in variant_rows]
+        pursuit_fracs = [float(row["pursuit_fraction_mean"]) for row in variant_rows]
         pooled_stats = _aggregate_episodes(pooled[(reward_id, learner)])
         result.append(
             {
@@ -554,6 +617,10 @@ def _build_variant_summary(
                 "mean_newly_spotted_count": float(
                     pooled_stats["mean_newly_spotted_count"]
                 ),
+                # Pursuit-fraction mean/std average the per-seed closing-step
+                # fraction across training seeds (mirrors capture_rate_mean).
+                "pursuit_fraction_mean": _safe_mean(pursuit_fracs),
+                "pursuit_fraction_std": _safe_std(pursuit_fracs),
                 # Mean return is diagnostic because reward scales can differ by strategy.
                 "mean_episode_return": float(pooled_stats["mean_episode_return"]),
                 # Shaping return is the pooled mean non-terminal reward contribution.
@@ -587,6 +654,8 @@ REPORT_FIELDS = [
     "median_steps_to_capture",
     "frac_steps_visible",
     "mean_newly_spotted_count",
+    "pursuit_fraction_mean",
+    "pursuit_fraction_std",
     "mean_shaping_return",
     "mean_terminal_return",
     "reward_breakdown_per_step_mean_json",
@@ -608,6 +677,8 @@ VARIANT_FIELDS = [
     "evaluation_cutoff_rate",
     "frac_steps_visible",
     "mean_newly_spotted_count",
+    "pursuit_fraction_mean",
+    "pursuit_fraction_std",
     "mean_episode_return",
     "mean_shaping_return",
     "mean_terminal_return",
