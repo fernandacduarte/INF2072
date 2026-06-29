@@ -241,6 +241,13 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # are reproducible per training seed, then let it advance across episodes.
         if seed is not None and not self._spawn_seeded:
             self._spawn_rng = np.random.default_rng(int(seed))
+            # Seed the Pacman policy RNG together with the spawn RNG on the first
+            # seeded reset (intentional coupling) so interior-p Pacman stochasticity
+            # is reproducible per training seed (plan-000031 / plan-000029, T4).
+            # Seeded once per run then advanced across episodes -- NOT reseeded per
+            # episode. _build_pacman_policy (this reset below, and each step) reads
+            # this same generator each call, so the reseed propagates.
+            self._pacman_rng = np.random.default_rng(int(seed))
             self._spawn_seeded = True
         # Copy agent list for PettingZoo's active agent tracking
         self.agents = copy(self.possible_agents)

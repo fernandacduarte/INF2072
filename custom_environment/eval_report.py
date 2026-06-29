@@ -240,6 +240,11 @@ def _seed_episode(raw_env: Any, episode_seed: int) -> None:
         raw_env._rng = random.Random(episode_seed)
     else:
         raw_env._rng.seed(episode_seed)
+    # Make interior-p Pacman stochasticity reproducible at eval time too (T4):
+    # _run_episode calls env.reset() without a seed, so the env's first-seeded
+    # branch never fires here -- reseed the policy RNG directly per episode.
+    if hasattr(raw_env, "_pacman_rng"):
+        raw_env._pacman_rng = np.random.default_rng(episode_seed)
 
 
 def _run_episode(

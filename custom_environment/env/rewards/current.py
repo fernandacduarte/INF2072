@@ -867,3 +867,47 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
         if not reachable:
             return None
         return sum(reachable) / len(reachable)
+
+
+class CaptureV0SparseControl(CaptureV0PurePotentialShaping):
+    """Matched sparse control for the PBRS A/B (plan-000031).
+
+    Byte-identical to ``CaptureV0PurePotentialShaping`` except the
+    ``potential_shaping`` term is omitted: it emits only ``timestep`` plus the
+    sparse terminals (``GET_PACMAN`` / ``PACMAN_TIMEOUT_WIN`` /
+    ``PACMAN_WIN_PALLETS``). It deliberately **reuses
+    ``CaptureV0PurePotentialShapingWeights`` unchanged** so the terminal
+    magnitudes (+/-100) and the ``timestep`` cost (-0.05) cannot drift between
+    the two arms -- the only difference between control and PBRS is the shaping
+    term, which is the precondition for a causal sample-efficiency claim.
+    """
+
+    strategy_id = "capture_v0_sparse_control"
+
+    def __init__(
+        self,
+        weights: CaptureV0PurePotentialShapingWeights | None = None,
+    ) -> None:
+        # Same weights dataclass as the PBRS arm (no new dataclass) -> weight-locked.
+        self.weights = weights or CaptureV0PurePotentialShapingWeights()
+        self._last_potential: float | None = None
+
+    def reset(self, initial_context: RewardContext) -> None:
+        _ = initial_context
+        self._last_potential = None
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        # No potential_shaping term -- this is the sparse control arm.
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))
