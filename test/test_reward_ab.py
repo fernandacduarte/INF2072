@@ -241,3 +241,41 @@ def test_variant_summary_emits_pursuit_columns():
     assert summary[0]["pursuit_fraction_mean"] == pytest.approx(0.7)
     assert "pursuit_fraction_mean" in VARIANT_FIELDS
     assert "pursuit_fraction_std" in VARIANT_FIELDS
+
+
+# --------------------------------------------------------------------------- #
+# Step 5 -- A/B sweep runner
+# --------------------------------------------------------------------------- #
+
+from benchmarl_setup import run_reward_ab  # noqa: E402
+
+
+def test_ab_build_command_carries_both_arms_and_constant_knobs(tmp_path):
+    args = run_reward_ab.parse_args(["--save-root", str(tmp_path)])
+    joined = " ".join(run_reward_ab.build_command(0.25, args))
+    assert "capture_v0_sparse_control,capture_v0_pure_potential_shaping" in joined
+    assert "--pacman-curriculum off" in joined
+    assert "--pacman-difficulty hard" in joined
+    assert "--pacman-random-action-prob 0.25" in joined
+    assert "--randomize-spawns" in joined
+    assert "--checkpoint-at-end" in joined
+    assert "p_0.25" in joined
+
+
+def test_ab_dry_run_lists_three_points(tmp_path, capsys):
+    rc = run_reward_ab.main(["--dry-run", "--save-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    for folder in ("p_0.25", "p_0.5", "p_0.75"):
+        assert folder in out
+    # Each of the three points trains both arms in one command.
+    assert out.count("capture_v0_sparse_control,capture_v0_pure_potential_shaping") >= 3
+    # Dry-run launches no training and writes no manifest.
+    assert not (tmp_path / "ab_manifest.csv").exists()
+
+
+def test_ab_rejects_point_out_of_range():
+    with pytest.raises(ValueError):
+        run_reward_ab._parse_points("1.5")
+    with pytest.raises(ValueError):
+        run_reward_ab._parse_points("")
