@@ -171,6 +171,17 @@ def parse_args() -> argparse.Namespace:
         help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
     )
     parser.add_argument(
+        "--capture-radius",
+        type=int,
+        default=0,
+        help=(
+            "Capture rule radius. 0 (default) keeps co-location-only capture; >0 "
+            "registers a capture when a ghost is within this BFS distance of Pacman "
+            "(adjacency capture). Changes the task definition -- re-baseline and never "
+            "mix capture rates gathered under different radii."
+        ),
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -272,6 +283,7 @@ def main() -> None:
         "pacman_curriculum_frame_offset": int(args.pacman_curriculum_frame_offset),
         "randomize_spawns": bool(args.randomize_spawns),
         "randomize_spawns_min_distance": int(args.randomize_spawns_min_distance),
+        "capture_radius": int(args.capture_radius),
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)

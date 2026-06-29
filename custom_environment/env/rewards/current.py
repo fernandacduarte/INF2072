@@ -869,6 +869,107 @@ class CaptureV0PurePotentialShaping(CaptureV0Reward):
         return sum(reachable) / len(reachable)
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureV0ClosingRewardWeights:
+    get_pacman: float = 100.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    timestep: float = -0.05
+    # Reward per cell of team min-BFS distance closed this step. Unlike PBRS this
+    # is NOT telescoping, so it does not cancel over an episode against an evader
+    # who holds distance constant -- it persistently pays the team for pursuing.
+    closing_weight: float = 1.0
+    # Bound the per-step closing reward so a ghost cannot farm it by oscillating
+    # at the edge of the safe-distance cordon (RC4 orbit hazard, research-000022).
+    closing_clip: float = 2.0
+    # Containment bonus: reward shrinking Pacman's legal-move count when visible
+    # (herding it toward corners/dead-ends -- the coordination this project wants).
+    pacman_legal_moves_reduced: float = 0.5
+
+
+class CaptureV0ClosingReward(CaptureV0Reward):
+    """Sparse capture base + a PERSISTENT (non-telescoping) closing reward.
+
+    research-000035 (L2) diagnosed that the exact-telescoping PBRS in
+    ``CaptureV0PurePotentialShaping`` sums to ``Phi(end) - Phi(start)`` and thus
+    nets to ~zero against a hard evader who keeps the team distance roughly
+    constant -- so pursuit earns nothing cumulatively and the policy goes passive.
+
+    This strategy instead emits a *direct* per-step reward for **reducing** the
+    team's min-BFS distance to Pacman: ``closing_weight * clip(prev - cur,
+    -closing_clip, +closing_clip)``. It is deliberately NOT potential-based, so it
+    does not telescope away -- the team is paid every step it closes in and
+    charged every step it backs off, with in-place oscillation netting ~0
+    (positive and negative cells cancel). We trade PBRS's policy-invariance for an
+    explicit pursuit bias, which is the whole point: invariance preserved the very
+    passivity we are fixing.
+
+    A small ``pacman_legal_moves_reduced`` containment term (reused from
+    ``CaptureV0Reward``) rewards herding Pacman into cells with fewer exits, which
+    is what converts pursuit into capture against an evader.
+
+    Distances read Pacman's true position (centralized, training-time CTDE signal);
+    the executing ghost policies never observe it.
+    """
+
+    strategy_id = "capture_v0_closing"
+
+    def __init__(
+        self,
+        weights: CaptureV0ClosingRewardWeights | None = None,
+    ) -> None:
+        self.weights = weights or CaptureV0ClosingRewardWeights()
+        self._prev_min_distance: int | None = None
+
+    def reset(self, initial_context: RewardContext) -> None:
+        _ = initial_context
+        self._prev_min_distance = None
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        # Persistent (non-telescoping) closing reward on team min-BFS distance.
+        min_distance = self._minimum_distance(context)
+        if min_distance is not None:
+            if self._prev_min_distance is not None:
+                delta = float(self._prev_min_distance - min_distance)
+                clipped = max(-w.closing_clip, min(w.closing_clip, delta))
+                if clipped != 0.0:
+                    terms.append(RewardTerm("closing", w.closing_weight * clipped))
+            self._prev_min_distance = min_distance
+
+        # Containment: reward reducing Pacman's legal-move count while visible.
+        if context.pacman_visible:
+            previous_legal_moves = self._count_pacman_legal_moves(
+                context.pacman_previous_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            current_legal_moves = self._count_pacman_legal_moves(
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            if current_legal_moves < previous_legal_moves:
+                terms.append(
+                    RewardTerm(
+                        "pacman_legal_moves_reduced",
+                        w.pacman_legal_moves_reduced,
+                    )
+                )
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))
+
+
 class CaptureV0SparseControl(CaptureV0PurePotentialShaping):
     """Matched sparse control for the PBRS A/B (plan-000031).
 

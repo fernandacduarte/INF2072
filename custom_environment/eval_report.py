@@ -315,6 +315,9 @@ def _run_episode(
     newly_spotted_count = 0
     timeout = False
     pellet_win = False
+    # Step index (1-based) at which the team first sees Pacman; None until then.
+    # Reduced into the normalized time-to-first-contact pursuit-acquisition metric.
+    first_contact_step: int | None = None
     # Pursuit metric: per-step team BFS distance to Pacman; reduced at the end into
     # the fraction of steps the team closed in (research-000024 R5 -- capture_rate
     # alone cannot show pursuit).
@@ -339,6 +342,8 @@ def _run_episode(
         context = raw_env.last_reward_context
         if context is not None:
             visible_steps += int(context.pacman_visible)
+            if first_contact_step is None and bool(context.pacman_visible):
+                first_contact_step = steps
             timeout = timeout or bool(context.timeout_happened)
             pellet_win = pellet_win or bool(context.pacman_win_happened)
             team_distances.append(_team_mean_distance(context))
@@ -358,6 +363,14 @@ def _run_episode(
     timeout = timeout and not pellet_win
     evaluation_cutoff = not done and not captured and not timeout and not pellet_win
     pursuit_fraction = _pursuit_fraction_from_distances(team_distances)
+    # Normalize first-contact to [0, 1] by the step budget; never seeing Pacman
+    # is the worst case (1.0) so lower is better, like a latency.
+    denom = max(int(max_steps), 1)
+    time_to_first_contact = (
+        float(first_contact_step) / float(denom)
+        if first_contact_step is not None
+        else 1.0
+    )
     return {
         "captured": captured,
         "timeout": timeout,
@@ -370,6 +383,7 @@ def _run_episode(
         "visible_steps": visible_steps,
         "newly_spotted_count": newly_spotted_count,
         "pursuit_fraction": pursuit_fraction,
+        "time_to_first_contact": time_to_first_contact,
     }
 
 
@@ -393,6 +407,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
     visible_fractions: list[float] = []
     newly_spotted_counts: list[float] = []
     pursuit_fractions: list[float] = []
+    time_to_first_contacts: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
     reward_breakdown_per_step_values: dict[str, list[float]] = defaultdict(list)
@@ -401,6 +416,9 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
         newly_spotted_counts.append(float(episode["newly_spotted_count"]))
         pursuit_fractions.append(float(episode.get("pursuit_fraction", float("nan"))))
+        time_to_first_contacts.append(
+            float(episode.get("time_to_first_contact", float("nan")))
+        )
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
@@ -460,6 +478,11 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         # distance to Pacman -- the pursuit-acquisition signal capture_rate hides.
         "pursuit_fraction_mean": _safe_mean(pursuit_fractions),
         "pursuit_fraction_std": _safe_std(pursuit_fractions),
+        # Time-to-first-contact is the mean normalized step index at which the
+        # team first sights Pacman (1.0 = never seen); the acquisition-latency
+        # companion to pursuit_fraction. Lower is better.
+        "time_to_first_contact_mean": _safe_mean(time_to_first_contacts),
+        "time_to_first_contact_std": _safe_std(time_to_first_contacts),
         # Shaping return is the mean non-terminal reward contribution per episode.
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
@@ -623,6 +646,10 @@ def _build_variant_summary(
                 # fraction across training seeds (mirrors capture_rate_mean).
                 "pursuit_fraction_mean": _safe_mean(pursuit_fracs),
                 "pursuit_fraction_std": _safe_std(pursuit_fracs),
+                # Pooled acquisition latency: mean normalized first-sight step.
+                "time_to_first_contact_mean": float(
+                    pooled_stats["time_to_first_contact_mean"]
+                ),
                 # Mean return is diagnostic because reward scales can differ by strategy.
                 "mean_episode_return": float(pooled_stats["mean_episode_return"]),
                 # Shaping return is the pooled mean non-terminal reward contribution.
@@ -658,6 +685,8 @@ REPORT_FIELDS = [
     "mean_newly_spotted_count",
     "pursuit_fraction_mean",
     "pursuit_fraction_std",
+    "time_to_first_contact_mean",
+    "time_to_first_contact_std",
     "mean_shaping_return",
     "mean_terminal_return",
     "reward_breakdown_per_step_mean_json",
@@ -681,6 +710,7 @@ VARIANT_FIELDS = [
     "mean_newly_spotted_count",
     "pursuit_fraction_mean",
     "pursuit_fraction_std",
+    "time_to_first_contact_mean",
     "mean_episode_return",
     "mean_shaping_return",
     "mean_terminal_return",

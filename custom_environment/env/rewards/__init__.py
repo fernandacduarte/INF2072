@@ -8,6 +8,7 @@ from custom_environment.env.rewards.base import (
     RewardTerm,
 )
 from custom_environment.env.rewards.current import (
+    CaptureV0ClosingReward,
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
     CaptureV0PurePotentialShaping,
     CaptureV0Reward,
@@ -24,6 +25,7 @@ from custom_environment.env.rewards.loader import (
 
 __all__ = [
     "DEFAULT_REWARD_CLASS",
+    "CaptureV0ClosingReward",
     "CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction",
     "CaptureV0PurePotentialShaping",
     "CaptureV0Reward",

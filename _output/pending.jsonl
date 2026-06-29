@@ -24,3 +24,4 @@
 {"closed_at": "2026-06-29T15:28:47Z", "id": "pa-000015", "status": "done"}
 {"created_at": "2026-06-29T15:30:15Z", "description": "Review product-design/project/product-design-as-coded.md against the real implementation of plan-000034", "id": "pa-000016", "last_reminded_at": null, "snooze_until": null, "source": "plan-000034", "status": "pending", "type": "verify-as-coded"}
 {"created_at": "2026-06-29T21:27:01Z", "description": "Execute plan-000036 Hard-Pacman pursuit: diagnostic + persistent closing reward + adjacency capture", "id": "pa-000017", "last_reminded_at": null, "snooze_until": null, "source": "plan-000036", "status": "pending", "type": "implement"}
+{"closed_at": "2026-06-29T21:39:22Z", "id": "pa-000017", "status": "done"}

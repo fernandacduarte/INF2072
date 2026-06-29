@@ -5,7 +5,7 @@
 
 | Date | Type | ID | Title | Status | File |
 |------|------|----|-------|--------|------|
-| 2026-06-29 20:38 UTC | Plan | 000036 | Hard-Pacman pursuit: diagnostic + persistent closing reward + adjacency capture | OPEN | [plan-000036.md](plans/plan-000036.md) |
+| 2026-06-29 20:38 UTC | Plan | 000036 | Hard-Pacman pursuit: diagnostic + persistent closing reward + adjacency capture | DONE | [plan-000036.md](plans/plan-000036.md) |
 | 2026-06-29 18:00 UTC | Research | 000035 | Hard-Pacman: improve learning and make ghosts follow Pacman | DONE | [research-000035-hard-pacman-improve-learning-ghosts-follow.md](research-logs/research-000035-hard-pacman-improve-learning-ghosts-follow.md) |
 | 2026-06-29 15:11 UTC | Plan | 000034 | R1 positive-control sanity battery | DONE | [plan-000034.md](plans/plan-000034.md) |
 | 2026-06-29 15:04 UTC | Research | 000032 | Hyperparameter tuning frontier vs reward-shaping 40% ceiling | DONE | [research-000032-hyperparameter-tuning-frontier-vs-reward-ceiling.md](research-logs/research-000032-hyperparameter-tuning-frontier-vs-reward-ceiling.md) |
