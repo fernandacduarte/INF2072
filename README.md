@@ -197,12 +197,27 @@ Pacman training-difficulty control is now configurable:
 - `--pacman-difficulty hard` keeps the current deterministic safety-first controller.
 - `--pacman-difficulty easy` uses a weak random-valid Pacman baseline.
 - `--pacman-difficulty medium` uses the safety policy with exploration noise.
-- `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
-- `--pacman-curriculum mixed-easy-medium-hard` keeps the same thirds (`early`, `middle`, `late`) but samples difficulty each step: early `80% easy / 20% medium`, middle `30% easy / 50% medium / 20% hard`, late `10% easy / 30% medium / 60% hard`.
+- `--pacman-curriculum easy-medium-hard` keeps curriculum-learning by thirds and applies a shared stage profile to both Pacman type sampling and spawn-mode sampling:
+  - easy third: `70% easy / 30% medium / 0% hard`
+  - medium third: `40% easy / 40% medium / 20% hard`
+  - hard third: `20% easy / 40% medium / 40% hard`
+- `--pacman-curriculum mixed-easy-medium-hard` is supported as a compatibility alias and follows the same stage-coupled behavior.
 - `--randomize-spawns` is **disabled by default** (`--no-randomize-spawns` effective default).
   Use `--randomize-spawns` to randomize Pacman/ghost spawn cells each episode,
   and `--randomize-spawns-min-distance` to enforce minimum ghost->Pacman BFS clearance
   for sampled starts.
+
+Curriculum spawn modes per stage map to:
+
+- `near`: ghosts spawn `4-8` BFS steps from Pacman
+- `medium`: ghosts spawn `8-14` BFS steps from Pacman
+- `normal`: map-authored default spawns
+
+Spawn sampling enforces:
+
+- minimum ghost-ghost BFS distance `>= 2`
+- no ghost spawns directly on Pacman
+- ghosts cannot all start in one corridor line (all same row or all same column)
 
 When `--pacman-curriculum easy-medium-hard` or `--pacman-curriculum mixed-easy-medium-hard` is enabled, exploration epsilon now
 uses stage-aligned bumps (for all algorithms) to help adaptation at each
@@ -228,7 +243,7 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike
 # Curriculum: easy -> medium -> hard over the full run
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum easy-medium-hard --pacman-curriculum-max-frames 60000
 
-# Mixed curriculum by thirds (early/middle/late) with per-step sampling
+# Compatibility alias for the same stage-coupled curriculum behavior
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum mixed-easy-medium-hard --pacman-curriculum-max-frames 60000
 
 # Enable randomized spawns during training
