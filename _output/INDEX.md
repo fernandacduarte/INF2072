@@ -6,7 +6,7 @@
 | Date | Type | ID | Title | Status | File |
 |------|------|----|-------|--------|------|
 | 2026-06-29 01:22 UTC | QA Log |  | plan-000031 | Decisive A/B benchmark: matched sparse control vs PBRS |  | [plan-000031-qa-decisive-ab-benchmark.md](plans/plan-000031-qa-decisive-ab-benchmark.md) |
-| 2026-06-29 00:52 UTC | Plan | 000031 | Decisive A/B benchmark: matched sparse control vs PBRS | OPEN | [plan-000031.md](plans/plan-000031.md) |
+| 2026-06-29 00:52 UTC | Plan | 000031 | Decisive A/B benchmark: matched sparse control vs PBRS | DONE | [plan-000031.md](plans/plan-000031.md) |
 | 2026-06-29 00:34 UTC | RESERVED | 000030 | communication: evaluators | RESERVED |  |
 | 2026-06-29 00:32 UTC | Plan | 000029 | Evasive-Pacman benchmark sweep pipeline | OPEN | [plan-000029.md](plans/plan-000029.md) |
 | 2026-06-29 00:11 UTC | Research | 000028 | Evasive-Pacman benchmark protocol | DONE | [research-000028-evasive-pacman-benchmark-protocol.md](research-logs/research-000028-evasive-pacman-benchmark-protocol.md) |
