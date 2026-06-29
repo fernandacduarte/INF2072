@@ -193,11 +193,21 @@ def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: l
     phase = 0.5 if count <= 1 else idx / float(count - 1)
     h, l, s = colorsys.rgb_to_hls(*rgb)
 
-    # Stronger separation for multiple reward IDs of the same algorithm.
-    hue_shift = -0.42 + 0.84 * phase
+    # Keep variants in the same algorithm color family.
+    hue_shift = -0.045 + 0.09 * phase
     var_h = (h + hue_shift) % 1.0
-    sat_targets = (0.98, 0.42, 0.90, 0.50)
-    light_targets = (0.30, 0.72, 0.42, 0.62)
+    sat_targets = (
+        max(0.25, min(0.98, s * 1.06)),
+        max(0.25, min(0.98, s * 0.88)),
+        max(0.25, min(0.98, s * 0.98)),
+        max(0.25, min(0.98, s * 0.78)),
+    )
+    light_targets = (
+        max(0.18, min(0.82, l * 0.86)),
+        max(0.18, min(0.82, l * 1.16)),
+        max(0.18, min(0.82, l * 0.98)),
+        max(0.18, min(0.82, l * 1.26)),
+    )
     var_s = sat_targets[idx % len(sat_targets)]
     var_l = light_targets[idx % len(light_targets)]
 
