@@ -818,6 +818,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         for action in Action:
             if self._is_valid_ghost_action(ghost, action):
                 mask[action.value] = 1
+        # A fully boxed-in ghost (every neighbor a wall or another ghost) would
+        # yield an all-zero mask, which makes masked epsilon-greedy sampling draw
+        # from an all-zero distribution and crash (`multinomial`/CUDA device-side
+        # assert `input[0] != 0`). Fall back to all-ones: the policy may pick any
+        # action, and _execute_action already turns an illegal move into a no-op
+        # (sets invalid_move, the ghost stays put) -- same outcome, no crash.
+        if not mask.any():
+            mask[:] = 1
         return mask
 
     # Compute the composed observation for one ghost.
