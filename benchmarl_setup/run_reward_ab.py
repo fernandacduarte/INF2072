@@ -80,6 +80,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated reward ids for the two A/B arms (control first, PBRS second).",
     )
     parser.add_argument("--max-frames", type=int, default=60000)
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=10000,
+        help="Periodic checkpoint frames; also drives live-capture snapshots for the sample-efficiency curve.",
+    )
     parser.add_argument("--eval-episodes", type=int, default=40)
     parser.add_argument(
         "--save-root",
@@ -158,6 +164,8 @@ def build_command(p: float, args: argparse.Namespace) -> list[str]:
         "--pacman-random-action-prob",
         str(p),
         "--randomize-spawns",
+        "--checkpoint-interval",
+        str(args.checkpoint_interval),
         "--eval-episodes",
         str(args.eval_episodes),
         "--checkpoint-at-end",

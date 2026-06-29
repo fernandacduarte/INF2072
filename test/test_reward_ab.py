@@ -279,3 +279,94 @@ def test_ab_rejects_point_out_of_range():
         run_reward_ab._parse_points("1.5")
     with pytest.raises(ValueError):
         run_reward_ab._parse_points("")
+
+
+# --------------------------------------------------------------------------- #
+# Step 6 -- aggregator + comparison plotter
+# --------------------------------------------------------------------------- #
+
+import csv as _csv  # noqa: E402
+
+from benchmarl_setup import plot_reward_ab  # noqa: E402
+
+_CONTROL = "capture_v0_sparse_control"
+_PBRS = "capture_v0_pure_potential_shaping"
+_VARIANT_HEADER = [
+    "reward_id", "learner", "capture_rate_mean", "capture_rate_std",
+    "time_to_capture_mean", "pursuit_fraction_mean", "pursuit_fraction_std",
+]
+
+
+def _write_point(point_dir: Path, *, control_capture_curve, pbrs_capture_curve):
+    """Create a point's by-variant CSV + live_progress.csvl under a maze subdir."""
+    maze_dir = point_dir / "pinklike3"
+    maze_dir.mkdir(parents=True, exist_ok=True)
+    with (maze_dir / "reward_eval_host_by_variant.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=_VARIANT_HEADER)
+        writer.writeheader()
+        writer.writerow({"reward_id": _CONTROL, "learner": "iql", "capture_rate_mean": 0.10,
+                         "capture_rate_std": 0.03, "time_to_capture_mean": 80.0,
+                         "pursuit_fraction_mean": 0.30, "pursuit_fraction_std": 0.05})
+        writer.writerow({"reward_id": _PBRS, "learner": "iql", "capture_rate_mean": 0.12,
+                         "capture_rate_std": 0.04, "time_to_capture_mean": 70.0,
+                         "pursuit_fraction_mean": 0.60, "pursuit_fraction_std": 0.06})
+    lines = ["#meta,note=fixture"]
+    for reward_id, curve in ((_CONTROL, control_capture_curve), (_PBRS, pbrs_capture_curve)):
+        for step, (frame, capture) in enumerate(curve, start=1):
+            lines.append(f"iql@{reward_id}@cpu,0,{step},{frame},{capture},0.0")
+    (maze_dir / "live_progress_host.csvl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _make_ab_fixture(tmp_path: Path) -> Path:
+    manifest = tmp_path / "ab_manifest.csv"
+    rows = []
+    for p in (0.25, 0.5):
+        point_dir = tmp_path / f"p_{p}"
+        # Control capture stays low (never reaches threshold 0.3 -> NaN ftt);
+        # PBRS climbs past 0.3 (defined ftt).
+        _write_point(
+            point_dir,
+            control_capture_curve=[(10000, 0.05), (30000, 0.08), (60000, 0.10)],
+            pbrs_capture_curve=[(10000, 0.10), (30000, 0.35), (60000, 0.55)],
+        )
+        rows.append({"p": p, "evasiveness": 1 - p, "save_folder": str(point_dir)})
+    with manifest.open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=["p", "evasiveness", "save_folder"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return manifest
+
+
+def test_plot_reward_ab_builds_table_and_figures(tmp_path):
+    manifest = _make_ab_fixture(tmp_path)
+    out_prefix = tmp_path / "reward_ab"
+    rc = plot_reward_ab.main(["--manifest", str(manifest), "--out-prefix", str(out_prefix)])
+    assert rc == 0
+
+    table_csv = tmp_path / "reward_ab.csv"
+    assert table_csv.exists()
+    with table_csv.open(newline="", encoding="utf-8") as fh:
+        rows = list(_csv.DictReader(fh))
+    assert rows  # non-empty
+    for column in ("capture_rate_mean", "pursuit_fraction_mean", "aulc", "frames_to_threshold"):
+        assert column in rows[0]
+
+    # At least the capture_rate and pursuit panels exist (>=2 PNGs).
+    pngs = list(tmp_path.glob("reward_ab_*.png"))
+    assert len(pngs) >= 2
+
+
+def test_plot_reward_ab_never_reaching_threshold_is_nan(tmp_path):
+    manifest = _make_ab_fixture(tmp_path)
+    out_prefix = tmp_path / "reward_ab"
+    plot_reward_ab.main(["--manifest", str(manifest), "--out-prefix", str(out_prefix)])
+    with (tmp_path / "reward_ab.csv").open(newline="", encoding="utf-8") as fh:
+        rows = list(_csv.DictReader(fh))
+    control_rows = [r for r in rows if r["reward_id"] == _CONTROL]
+    assert control_rows
+    for row in control_rows:
+        value = float(row["frames_to_threshold"])
+        assert value != value  # NaN, not inf or a number
+    # PBRS reaches the threshold -> defined frames_to_threshold.
+    pbrs_rows = [r for r in rows if r["reward_id"] == _PBRS]
+    assert any(float(r["frames_to_threshold"]) == float(r["frames_to_threshold"]) for r in pbrs_rows)
