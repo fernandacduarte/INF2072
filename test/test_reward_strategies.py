@@ -13,6 +13,7 @@ from custom_environment.env.rewards import (
     load_reward_strategy,
 )
 from custom_environment.env.rewards.current import (
+    CaptureMerge,
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
     CaptureV0PurePotentialShaping,
     CaptureV0PurePotentialShapingPelletsFastCaptureBonus,
@@ -686,6 +687,22 @@ def test_loader_resolves_fast_capture_bonus_id():
         strategy.strategy_id
         == "capture_v0_pure_potential_shaping_pellets_fast_capture_bonus"
     )
+
+
+def test_loader_resolves_capture_merge_id():
+    strategy = load_reward_strategy(reward_class_from_id("capture_merge"))
+    assert isinstance(strategy, CaptureMerge)
+    assert strategy.strategy_id == "capture_merge"
+
+
+def test_capture_merge_disables_potential_shaping_term():
+    strategy = CaptureMerge()
+    strategy.reset(_pbrs_context(0, 5))
+
+    strategy.compute(_pbrs_context(0, 5, step_count=1))
+    second = strategy.compute(_pbrs_context(1, 5, step_count=2))
+
+    assert "potential_shaping" not in second.breakdown
 
 
 def test_fast_capture_bonus_scales_with_elapsed_steps():

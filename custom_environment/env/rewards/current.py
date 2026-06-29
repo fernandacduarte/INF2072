@@ -1152,3 +1152,22 @@ class CaptureMergePotentialShaping(CurrentGitTeamReward):
         if not reachable:
             return None
         return sum(reachable) / len(reachable)
+
+
+class CaptureMerge(CaptureMergePotentialShaping):
+    """Capture-merge reward without PBRS term emission.
+
+    This keeps all capture_merge_potential_shaping logic/state transitions but
+    removes only the explicit ``potential_shaping`` reward term.
+    """
+
+    strategy_id = "capture_merge"
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        filtered_terms = tuple(
+            term for term in result.terms if term.name != "potential_shaping"
+        )
+        if len(filtered_terms) == len(result.terms):
+            return result
+        return RewardResult(filtered_terms)

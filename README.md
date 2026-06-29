@@ -888,6 +888,11 @@ Four-way comparison setup:
   plus pellet penalty and fast capture bonus. Excludes `valid_move` and
   `overlap_or_same_corridor`.
 
+- `custom_environment.env.rewards.current:CaptureMerge`
+  (`strategy_id = capture_merge`): same as
+  `capture_merge_potential_shaping`, but with the `potential_shaping` reward
+  term disabled.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -990,6 +995,7 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id cap
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge_potential_shaping
 ```
 
@@ -1022,6 +1028,9 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_merge
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_merge_potential_shaping
