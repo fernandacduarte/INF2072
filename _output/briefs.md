@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-29 15:13 UTC | STARTED | 2026-06-29 15:10 UTC | plan | source: research-000032 — R1 positive-control sanity battery: isolate the truly-random condition (curriculum off, random-prob 1.0, full obs, artifacts neutralized) + greedy ε=0 capture-rate eval to decide confound vs genuine HP limit before any sweep | PLAN | 000034
+
 DONE | 2026-06-29 15:06 UTC | STARTED | 2026-06-29 14:56 UTC | research | seens like we are stuck on reward shaping. liveplot shows a 40% ceiling on win rate for a totally random pacman on curriculum learning. for a random pacman the capture rate should be 100%
 
 DONE | 2026-06-29 01:47 UTC | STARTED | 2026-06-29 01:23 UTC | implement | 000031 — Decisive A/B benchmark: matched sparse control vs PBRS | PLAN | 000031
