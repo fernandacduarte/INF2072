@@ -217,6 +217,53 @@ def _capture_snapshot_for_run(run_dir: Path) -> dict[str, object] | None:
     return None
 
 
+def _capture_rates_for_run_checkpoint(
+    run_dir: Path,
+    expected_checkpoint: Path | None,
+) -> list[float]:
+    report_path = run_dir / "evaluation_report_live_capture.csv"
+    if not report_path.exists():
+        return []
+
+    rates: list[float] = []
+    try:
+        with report_path.open("r", newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                raw_capture = (row.get("capture_rate") or "").strip()
+                if not raw_capture:
+                    continue
+                capture_rate = float(raw_capture)
+                if capture_rate != capture_rate:
+                    continue
+
+                if expected_checkpoint is not None:
+                    raw_checkpoint = (row.get("checkpoint_path") or "").strip()
+                    if not raw_checkpoint:
+                        continue
+                    snapshot_checkpoint = Path(raw_checkpoint)
+                    matches_checkpoint, _match_mode = _checkpoint_matches_expected(
+                        snapshot_checkpoint,
+                        expected_checkpoint,
+                    )
+                    if not matches_checkpoint:
+                        continue
+
+                rates.append(capture_rate)
+    except (OSError, ValueError, csv.Error):
+        return []
+    return rates
+
+
+def _capture_rate_mean_for_run_checkpoint(
+    run_dir: Path,
+    expected_checkpoint: Path | None,
+) -> float | None:
+    rates = _capture_rates_for_run_checkpoint(run_dir, expected_checkpoint)
+    if not rates:
+        return None
+    return float(sum(rates) / float(len(rates)))
+
+
 def _capture_rate_for_run_checkpoint(
     run_dir: Path,
     expected_checkpoint: Path | None,
@@ -271,7 +318,15 @@ def _format_optional_float(value: float | None, digits: int = 4) -> str:
     return f"{value:.{digits}f}"
 
 
-def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> None:
+def _print_selected_seed_stats(
+    checkpoint_path: Path,
+    tail_window: int = 20,
+    *,
+    learner: str | None = None,
+    runs_root_for_device: Path | None = None,
+    checkpoint_select: str = "latest",
+    checkpoint_best_metric: str = "capture_rate",
+) -> None:
     run_dir = checkpoint_path.parent.parent
     seed = _extract_seed_from_run_dir(run_dir)
 
@@ -290,6 +345,8 @@ def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> 
                 best_reward = max(rewards)
 
     capture_pct: float | None = None
+    capture_mean_pct: float | None = None
+    capture_mean_rows = 0
     checkpoint_match = False
     checkpoint_match_mode = "none"
     snapshot = _capture_snapshot_for_run(run_dir)
@@ -300,6 +357,14 @@ def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> 
         )
         if checkpoint_match:
             capture_pct = 100.0 * float(snapshot["capture_rate"])
+
+    capture_rates = _capture_rates_for_run_checkpoint(
+        run_dir,
+        expected_checkpoint=checkpoint_path,
+    )
+    capture_mean_rows = len(capture_rates)
+    if capture_rates:
+        capture_mean_pct = 100.0 * (sum(capture_rates) / float(len(capture_rates)))
 
     print("Selected seed stats (human mode):")
     print(
@@ -317,6 +382,70 @@ def _print_selected_seed_stats(checkpoint_path: Path, tail_window: int = 20) -> 
         f"match_mode={checkpoint_match_mode} "
         f"capture_pct={_format_optional_float(capture_pct, digits=2)}"
     )
+    print(
+        "  capture_mean_selected_seed="
+        f"capture_pct_mean={_format_optional_float(capture_mean_pct, digits=2)} "
+        f"rows={capture_mean_rows}"
+    )
+
+    if learner is None or runs_root_for_device is None:
+        return
+
+    leaderboard: list[tuple[float, str, int | None, str]] = []
+    for candidate_run in _candidate_run_dirs(learner, runs_root_for_device):
+        candidate_checkpoint = _latest_checkpoint_in_run(candidate_run)
+        if candidate_checkpoint is None:
+            continue
+        mean_capture = _capture_rate_mean_for_run_checkpoint(
+            candidate_run,
+            expected_checkpoint=candidate_checkpoint,
+        )
+        if mean_capture is None:
+            continue
+        leaderboard.append(
+            (
+                mean_capture,
+                candidate_run.name,
+                _extract_seed_from_run_dir(candidate_run),
+                candidate_checkpoint.name,
+            )
+        )
+
+    if not leaderboard:
+        print("  capture_mean_all_seeds=no checkpoint-coupled capture rows available")
+        return
+
+    leaderboard.sort(key=lambda item: item[0], reverse=True)
+    selected_rank: int | None = None
+    selected_is_highest = False
+    for idx, (_mean_rate, run_name, _seed, _checkpoint_name) in enumerate(leaderboard, start=1):
+        if run_name == run_dir.name:
+            selected_rank = idx
+            selected_is_highest = (idx == 1)
+            break
+
+    print("  capture_mean_all_seeds (checkpoint-coupled, highest first):")
+    for idx, (mean_rate, run_name, seed_value, checkpoint_name) in enumerate(leaderboard, start=1):
+        print(
+            f"    {idx}. run={run_name} "
+            f"seed={seed_value if seed_value is not None else 'n/a'} "
+            f"capture_pct_mean={100.0 * mean_rate:.2f} "
+            f"checkpoint={checkpoint_name}"
+        )
+
+    if selected_rank is None:
+        print("  selected_capture_mean_rank=n/a (selected run has no checkpoint-coupled capture mean)")
+    else:
+        print(
+            "  selected_capture_mean_rank="
+            f"{selected_rank}/{len(leaderboard)} "
+            f"selected_is_highest={selected_is_highest}"
+        )
+        if checkpoint_select == "best" and checkpoint_best_metric == "capture_rate" and not selected_is_highest:
+            print(
+                "  warning=selected checkpoint is not top-1 by capture mean across seeds "
+                "(check live-capture snapshots freshness)."
+            )
 
 
 def _candidate_run_dirs(learner: str, runs_root: Path) -> list[Path]:
@@ -827,8 +956,14 @@ def run_episode(
         f"cuda_available={torch.cuda.is_available()} | reason={resolution_reason}"
     )
     print(f"Runs root for checkpoint discovery: {runs_root_for_device}")
-    if render_mode == "human":
-        _print_selected_seed_stats(checkpoint_path)
+    if render_mode in {"human", "ascii"}:
+        _print_selected_seed_stats(
+            checkpoint_path,
+            learner=learner,
+            runs_root_for_device=runs_root_for_device,
+            checkpoint_select=checkpoint_select,
+            checkpoint_best_metric=checkpoint_best_metric,
+        )
 
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:

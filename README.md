@@ -97,9 +97,6 @@ The Pygame renderer highlights each ghost's current local observation (11x11 by 
 a translucent ghost-colored overlay. When the episode ends, the window shows the
 final result (`Ghosts win`, `Pacman wins`, or `Run stopped`) with steps, team
 reward, and elapsed time; in `human` mode it stays open until you close it.
-Before replay starts, `eval.py` also prints selected-seed statistics for the
-chosen checkpoint (run id, seed, reward final/tail/best, and checkpoint-coupled
-capture snapshot percentage when available).
 
 You can test the renderer before training any checkpoint with a random-policy
 episode:
