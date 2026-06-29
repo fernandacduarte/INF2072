@@ -849,7 +849,11 @@ def run_episode(
 
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
-    raw_env.shared_memory_in_observation_enabled = False
+    # Keep the SAME observation encoding the checkpoint was trained with. Forcing
+    # this off here zeroed out the shared-memory bearing channel (the directional
+    # signal the policy uses to pursue Pacman outside its local view), producing an
+    # out-of-distribution observation that made trained ghosts wander instead of
+    # chase. Training always runs with this enabled (True), so eval must match.
     raw_env.render_mode = None if render_mode == "ascii" else render_mode
     raw_env.tile_size = tile_size
     raw_env.fps = fps

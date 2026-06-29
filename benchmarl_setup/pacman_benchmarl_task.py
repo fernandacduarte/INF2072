@@ -41,6 +41,8 @@ class PacmanTaskClass(TaskClass):
         pacman_curriculum = str(config.get("pacman_curriculum", "off"))
         pacman_curriculum_max_frames = int(config.get("pacman_curriculum_max_frames", 0))
         pacman_curriculum_frame_offset = int(config.get("pacman_curriculum_frame_offset", 0))
+        randomize_spawns = bool(config.get("randomize_spawns", False))
+        randomize_spawns_min_distance = int(config.get("randomize_spawns_min_distance", 4))
 
         def _env_fun() -> EnvBase:
             env = PacManEnvironment(
@@ -54,6 +56,8 @@ class PacmanTaskClass(TaskClass):
                 pacman_curriculum=pacman_curriculum,
                 pacman_curriculum_max_frames=pacman_curriculum_max_frames,
                 pacman_curriculum_frame_offset=pacman_curriculum_frame_offset,
+                randomize_spawns=randomize_spawns,
+                randomize_spawns_min_distance=randomize_spawns_min_distance,
             )
             return PettingZooWrapper(
                 env=env,
