@@ -584,7 +584,9 @@ def _build_variant_summary(
         variant_rows = rows_by_variant[(reward_id, learner)]
         capture_rates = [float(row["capture_rate"]) for row in variant_rows]
         capture_times = [float(row["mean_steps_to_capture"]) for row in variant_rows]
-        pursuit_fracs = [float(row["pursuit_fraction_mean"]) for row in variant_rows]
+        pursuit_fracs = [
+            float(row.get("pursuit_fraction_mean", float("nan"))) for row in variant_rows
+        ]
         pooled_stats = _aggregate_episodes(pooled[(reward_id, learner)])
         result.append(
             {
