@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-29 21:27 UTC | STARTED | 2026-06-29 20:38 UTC | plan | source: research-000035 — Make ghosts visibly pursue/follow hard Pacman in three phased levers (L1 diagnostic gate, L2 persistent closing reward, L3 adjacency capture) | PLAN | 000036
+
 DONE | 2026-06-29 18:04 UTC | STARTED | 2026-06-29 18:00 UTC | research | assuming hard pacman, how can we improve the learning and make the ghosts follow the pacman? we did not see this yet
 
 DONE | 2026-06-29 15:25 UTC | STARTED | 2026-06-29 15:20 UTC | implement | 000034 | PLAN | 000034

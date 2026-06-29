@@ -3,7 +3,7 @@
 tags: reinforcement-learning, reward-shaping, pursuit-evasion, experimental-validity, partial-observability
 
 source: research-000035
-spawned: research-000035
+spawned: research-000035, plan-000036
 
 ## User brief
 
