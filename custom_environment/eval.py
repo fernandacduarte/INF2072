@@ -727,35 +727,42 @@ def _effective_pacman_stage(raw_env) -> str:
     return str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
 
 
-def _force_hard_pacman_for_eval(raw_env, checkpoint_path: Path) -> None:
-    pacman_difficulty = str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
-    pacman_curriculum = str(getattr(raw_env, "pacman_curriculum", "off")).strip().lower()
-    pacman_random_action_prob = float(getattr(raw_env, "pacman_random_action_prob", 0.0))
-    pacman_safe_distance = getattr(raw_env, "pacman_safe_distance", None)
+def _set_pacman_evasiveness_for_eval(
+    raw_env, evasiveness: float, checkpoint_path: Path
+) -> None:
+    """Pin the eval Pacman to a fixed evasiveness in [0, 1].
+
+    ``evasiveness`` is the fraction of moves the defense-first policy plays
+    optimally: ``1.0`` = deterministic hard evader (the old forced-hard mode),
+    ``0.0`` = fully random. It maps to ``pacman_random_action_prob = 1 -
+    evasiveness`` on the hard policy with the curriculum off, so the opponent is
+    a single, stable difficulty for the whole eval (no mid-episode ramp).
+    """
+    evasiveness = max(0.0, min(1.0, float(evasiveness)))
+    random_action_prob = 1.0 - evasiveness
+    previous_difficulty = str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
+    previous_random = float(getattr(raw_env, "pacman_random_action_prob", 0.0))
     previous_stage = _effective_pacman_stage(raw_env)
 
     raw_env.pacman_difficulty = "hard"
     raw_env.pacman_curriculum = "off"
-    raw_env.pacman_random_action_prob = 0.0
+    raw_env.pacman_random_action_prob = random_action_prob
     raw_env.pacman_safe_distance = None
     if hasattr(raw_env, "_build_pacman_policy") and callable(raw_env._build_pacman_policy):
         raw_env._pacman_policy = raw_env._build_pacman_policy()
 
-    effective_stage = _effective_pacman_stage(raw_env)
-    if effective_stage != "hard":
-        raise ValueError(
-            "Failed to force hard Pacman for evaluation. "
-            f"checkpoint={checkpoint_path} effective_stage={effective_stage!r}."
-        )
-
     print(
-        "Pacman eval mode: forced hard stage from checkpoint config "
-        f"(checkpoint={checkpoint_path}, previous_difficulty={pacman_difficulty!r}, "
-        f"previous_curriculum={pacman_curriculum!r}, "
-        f"previous_random_action_prob={pacman_random_action_prob}, "
-        f"previous_safe_distance={pacman_safe_distance!r}, "
+        "Pacman eval mode: fixed evasiveness "
+        f"({evasiveness:.0%} -> random_action_prob={random_action_prob:.3f}) "
+        f"(checkpoint={checkpoint_path}, previous_difficulty={previous_difficulty!r}, "
+        f"previous_random_action_prob={previous_random}, "
         f"previous_effective_stage={previous_stage!r})."
     )
+
+
+def _force_hard_pacman_for_eval(raw_env, checkpoint_path: Path) -> None:
+    # Backwards-compatible alias: hard == 100% evasive.
+    _set_pacman_evasiveness_for_eval(raw_env, 1.0, checkpoint_path)
 
 
 def _assert_effective_hard_pacman(raw_env, checkpoint_path: Path) -> None:
@@ -789,6 +796,7 @@ def run_episode(
     allow_cpu_fallback: bool,
     ascii_step_json: bool,
     allow_non_hard_checkpoint: bool,
+    pacman_evasiveness: float = 0.8,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -851,10 +859,10 @@ def run_episode(
     if allow_non_hard_checkpoint:
         print(
             "Pacman eval mode: keeping checkpoint-defined difficulty/curriculum "
-            "(--allow-non-hard-checkpoint)."
+            "(--allow-non-hard-checkpoint); --pacman-evasiveness ignored."
         )
     else:
-        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
+        _set_pacman_evasiveness_for_eval(raw_env, pacman_evasiveness, checkpoint_path)
     agent_ids = list(getattr(raw_env, "possible_agents", []))
 
     total_reward = 0.0
@@ -1156,11 +1164,24 @@ def main() -> None:
         "--allow-non-hard-checkpoint",
         action="store_true",
         help=(
-            "Disable default hard-forcing in eval replay and keep the checkpoint's "
-            "original Pacman difficulty/curriculum behavior."
+            "Disable default evasiveness-forcing in eval replay and keep the "
+            "checkpoint's original Pacman difficulty/curriculum behavior."
+        ),
+    )
+    parser.add_argument(
+        "--pacman-evasiveness",
+        type=float,
+        default=0.8,
+        help=(
+            "Pacman evasiveness in [0,1] for eval (default 0.8 = 80%% evasive). "
+            "1.0 = deterministic hard evader; 0.0 = fully random. Maps to "
+            "pacman_random_action_prob = 1 - evasiveness. Ignored when "
+            "--allow-non-hard-checkpoint is set."
         ),
     )
     args = parser.parse_args()
+    if not (0.0 <= args.pacman_evasiveness <= 1.0):
+        parser.error("--pacman-evasiveness must be in [0, 1]")
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
         raise ValueError(
@@ -1190,6 +1211,7 @@ def main() -> None:
         allow_cpu_fallback=args.allow_cpu_fallback,
         ascii_step_json=args.ascii_step_json,
         allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
+        pacman_evasiveness=args.pacman_evasiveness,
     )
 
 
