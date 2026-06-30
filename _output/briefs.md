@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-30 22:13 UTC | STARTED | 2026-06-30 22:11 UTC | research | how PACMAN_RANDOM_ACTION_PROB and EVASIVENESS are being used and how affect make pipeline
+
+STARTED | 2026-06-30 22:01 UTC | reflect | what is implemented and how can i test ?
+
 DONE | 2026-06-30 21:49 UTC | STARTED | 2026-06-30 21:44 UTC | implement | 43 | PLAN | 000043
 
 DONE | 2026-06-30 21:39 UTC | STARTED | 2026-06-30 21:23 UTC | research | tunning hyperparameters of iql
