@@ -58,3 +58,6 @@ _output/tmp/*
 /custom_environment/env/rewards/*.un~
 /futebol2d
 /eval_ascii_debug.txt
+
+# Research paper (public: arXiv:2006.07869) — fetch instead of versioning the 20MB binary
+Papoudakis_2021.pdf
