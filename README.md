@@ -197,12 +197,27 @@ Pacman training-difficulty control is now configurable:
 - `--pacman-difficulty hard` keeps the current deterministic safety-first controller.
 - `--pacman-difficulty easy` uses a weak random-valid Pacman baseline.
 - `--pacman-difficulty medium` uses the safety policy with exploration noise.
-- `--pacman-curriculum easy-medium-hard` enables automatic progression from easy to hard over `--pacman-curriculum-max-frames`.
-- `--pacman-curriculum mixed-easy-medium-hard` keeps the same thirds (`early`, `middle`, `late`) but samples difficulty each step: early `80% easy / 20% medium`, middle `30% easy / 50% medium / 20% hard`, late `10% easy / 30% medium / 60% hard`.
+- `--pacman-curriculum easy-medium-hard` keeps curriculum-learning by thirds and applies a shared stage profile to both Pacman type sampling and spawn-mode sampling:
+  - easy third: `70% easy / 30% medium / 0% hard`
+  - medium third: `40% easy / 40% medium / 20% hard`
+  - hard third: `20% easy / 40% medium / 40% hard`
+- `--pacman-curriculum mixed-easy-medium-hard` is supported as a compatibility alias and follows the same stage-coupled behavior.
 - `--randomize-spawns` is **disabled by default** (`--no-randomize-spawns` effective default).
   Use `--randomize-spawns` to randomize Pacman/ghost spawn cells each episode,
   and `--randomize-spawns-min-distance` to enforce minimum ghost->Pacman BFS clearance
   for sampled starts.
+
+Curriculum spawn modes per stage map to:
+
+- `near`: ghosts spawn `4-8` BFS steps from Pacman
+- `medium`: ghosts spawn `8-14` BFS steps from Pacman
+- `normal`: map-authored default spawns
+
+Spawn sampling enforces:
+
+- minimum ghost-ghost BFS distance `>= 2`
+- no ghost spawns directly on Pacman
+- ghosts cannot all start in one corridor line (all same row or all same column)
 
 When `--pacman-curriculum easy-medium-hard` or `--pacman-curriculum mixed-easy-medium-hard` is enabled, exploration epsilon now
 uses stage-aligned bumps (for all algorithms) to help adaptation at each
@@ -228,7 +243,7 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm vdn --maze pinklike
 # Curriculum: easy -> medium -> hard over the full run
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum easy-medium-hard --pacman-curriculum-max-frames 60000
 
-# Mixed curriculum by thirds (early/middle/late) with per-step sampling
+# Compatibility alias for the same stage-coupled curriculum behavior
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm qmixglobal --maze pinklike3 --max-frames 60000 --pacman-curriculum mixed-easy-medium-hard --pacman-curriculum-max-frames 60000
 
 # Enable randomized spawns during training
@@ -658,8 +673,16 @@ py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike3 --algorithms iql,vdn --reward-ids capture_v0_pure_potential_shaping_pellets,capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms all
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms timestep,potential_shaping
+py -3.11 benchmarl_setup\liveplot.py --algorithm-labels "iql=IQL Agent,vdn=VDN Team" --reward-id-labels "current=Baseline,capture_merge4=CM4" --plot-title "Pinklike3 live comparison"
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
+
+Live/offline legend formatting note: when every selected series is on CUDA,
+the plot legends omit the redundant `@cuda` suffix.
+When `--reward-ids` is provided, reward-id entries in legends follow exactly
+the same order as passed on CLI.
+In live plot, if all visible curves belong to a single algorithm, reward-id
+curves use distinct colors (not hue/lightness variants of one base color).
 
 ### Plot Benchmark Capture % in One Figure (IQL, VDN, QMIX Local, QMIX Global)
 
@@ -694,9 +717,12 @@ Useful options:
 
 ```bash
 --reward-id current --device auto|cpu|cuda|cuda:0
+--reward-ids capture_merge3,capture_merge4
 --progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
 --epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
 --individual-reward-plotting --reward-terms all|timestep,potential_shaping
+--algorithm-labels "iql=IQL Agent,vdn=VDN Team" --reward-id-labels "current=Baseline,capture_merge4=CM4"
+--plot-title "Benchmark True Capture Rate (Pinklike3)"
 --maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
@@ -893,6 +919,21 @@ Four-way comparison setup:
   `capture_merge_potential_shaping`, but with the `potential_shaping` and
   reversal-related reward terms disabled.
 
+- `custom_environment.env.rewards.current:CaptureMerge2`
+  (`strategy_id = capture_merge2`): tuned anti-oscillation variant. Keeps
+  `potential_shaping` enabled, strengthens `two_step_cycle` and
+  `repeated_direction_reversal` penalties, and adds
+  `no_progress_visible` after a short grace window when Pacman is visible
+  but pursuit does not improve.
+
+- `custom_environment.env.rewards.current:CaptureMerge3`
+  (`strategy_id = capture_merge3`): sparse capture objective with only
+  `timestep=-0.005`, `GET_PACMAN=+100`,
+  `fast_get_pacman_bonus=20*(1-step_count/max_steps)`,
+  `PACMAN_TIMEOUT_WIN=-100`, `PACMAN_WIN_PELLETS=-100`,
+  `pacman_eats_pellet=-0.5*pellets_eaten`, and
+  `invalid_move=-0.05*invalid_moves`.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -996,6 +1037,8 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id cap
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge2
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge3
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge_potential_shaping
 ```
 
@@ -1031,6 +1074,12 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_merge
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_merge2
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_merge3
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_merge_potential_shaping

@@ -70,11 +70,16 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         "render_modes": ["human", "rgb_array"],
     }
 
-    _MIXED_CURRICULUM_WEIGHTS_BY_PHASE: dict[str, tuple[float, float, float]] = {
-        "early": (0.80, 0.20, 0.00),
-        "middle": (0.30, 0.50, 0.20),
-        "late": (0.10, 0.30, 0.60),
+    _CURRICULUM_WEIGHTS_BY_STAGE: dict[str, tuple[float, float, float]] = {
+        # Shared stage profiles for both:
+        # - Pacman type sampling over easy/medium/hard
+        # - Spawn mode sampling over near/medium/normal
+        "easy": (0.70, 0.30, 0.00),
+        "medium": (0.40, 0.40, 0.20),
+        "hard": (0.20, 0.40, 0.40),
     }
+    _SPAWN_MODE_NEAR_RANGE: tuple[int, int] = (4, 8)
+    _SPAWN_MODE_MEDIUM_RANGE: tuple[int, int] = (8, 14)
 
     # Constructor receives the world grid and number of ghost agents.
     def __init__(
@@ -186,6 +191,8 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         self.randomize_spawns_min_distance = max(0, int(randomize_spawns_min_distance))
         self._spawn_rng = np.random.default_rng()
         self._spawn_seeded = False
+        self._episode_pacman_difficulty: str | None = None
+        self._episode_spawn_mode: str | None = None
 
         rows, cols = self.global_view.shape
         # +8 trailing scalars: 4 pacman-memory + team_min_dist + step + remaining + pallets_remaining
@@ -234,29 +241,34 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             return False, 0.30, 2
         return False, 0.0, None
 
-    def _curriculum_phase(self) -> str:
-        progress = self._curriculum_progress()
-        if progress < (1.0 / 3.0):
-            return "early"
-        if progress < (2.0 / 3.0):
-            return "middle"
-        return "late"
+    def _curriculum_weights(self, stage: str) -> tuple[float, float, float]:
+        return self._CURRICULUM_WEIGHTS_BY_STAGE.get(stage, (0.20, 0.40, 0.40))
 
-    def _sample_curriculum_difficulty(self) -> str:
-        phase = self._curriculum_phase()
-        weights = self._MIXED_CURRICULUM_WEIGHTS_BY_PHASE.get(phase, (0.10, 0.30, 0.60))
+    def _sample_curriculum_difficulty(self, stage: str) -> str:
+        weights = self._curriculum_weights(stage)
         sampled = self._pacman_rng.choice(
             ["easy", "medium", "hard"],
             p=np.asarray(weights, dtype=np.float64),
         )
         return str(sampled)
 
+    def _sample_curriculum_spawn_mode(self, stage: str) -> str:
+        weights = self._curriculum_weights(stage)
+        sampled = self._spawn_rng.choice(
+            ["near", "medium", "normal"],
+            p=np.asarray(weights, dtype=np.float64),
+        )
+        return str(sampled)
+
+    def _curriculum_enabled(self) -> bool:
+        return self.pacman_curriculum in {"easy-medium-hard", "mixed-easy-medium-hard"}
+
     def _effective_pacman_difficulty(self) -> str:
         if self.pacman_curriculum == "off":
             return self.pacman_difficulty
-        if self.pacman_curriculum == "mixed-easy-medium-hard":
-            return self._sample_curriculum_difficulty()
-        return self._curriculum_stage()
+        if self._episode_pacman_difficulty is not None:
+            return self._episode_pacman_difficulty
+        return self._sample_curriculum_difficulty(self._curriculum_stage())
 
     def _build_pacman_policy(self) -> PacmanPolicy:
         pure_random, default_noise, default_safe_distance = self._difficulty_params()
@@ -288,13 +300,22 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         # Restore clean grid state to avoid carrying over mutated cells across episodes.
         self.global_view = np.array(self._base_grid, copy=True)
 
-        # Choose this episode's spawn cells: map-authored by default, or random
-        # (with a minimum ghost->Pacman BFS clearance) when randomization is on.
-        # Sampled here, while global_view holds walls-only, so the BFS clearance
-        # check sees the true maze before any agent is painted onto the grid.
-        if self.randomize_spawns:
+        # Choose this episode's curriculum-conditioned controls before any spawn
+        # painting, while global_view still holds walls-only geometry.
+        stage = self._curriculum_stage()
+        if self._curriculum_enabled():
+            self._episode_pacman_difficulty = self._sample_curriculum_difficulty(stage)
+            self._episode_spawn_mode = self._sample_curriculum_spawn_mode(stage)
+            episode_pacman_spawn, episode_ghost_spawns = self._sample_curriculum_spawns(
+                self._episode_spawn_mode
+            )
+        elif self.randomize_spawns:
+            self._episode_pacman_difficulty = None
+            self._episode_spawn_mode = None
             episode_pacman_spawn, episode_ghost_spawns = self._sample_random_spawns()
         else:
+            self._episode_pacman_difficulty = None
+            self._episode_spawn_mode = None
             episode_pacman_spawn, episode_ghost_spawns = self.pacman_spawn, self.ghost_spawns
 
         # Reset shared episode memory.
@@ -971,6 +992,133 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
 
         # No valid draw within budget (e.g. a tiny/cramped maze): keep the map's.
         return self.pacman_spawn, list(self.ghost_spawns)
+
+    def _sample_curriculum_spawns(
+        self,
+        spawn_mode: str,
+    ) -> tuple[tuple[int, int], list[tuple[int, int]]]:
+        mode = str(spawn_mode).strip().lower()
+        if mode == "normal":
+            pacman_pos = tuple(self.pacman_spawn)
+            ghost_positions = [tuple(pos) for pos in self.ghost_spawns]
+            if self._spawn_constraints_ok(pacman_pos, ghost_positions):
+                return pacman_pos, ghost_positions
+            fallback = self._sample_constrained_random_spawns(min_dist=0)
+            if fallback is not None:
+                return fallback
+            return self.pacman_spawn, list(self.ghost_spawns)
+
+        if mode == "near":
+            min_dist, max_dist = self._SPAWN_MODE_NEAR_RANGE
+        elif mode == "medium":
+            min_dist, max_dist = self._SPAWN_MODE_MEDIUM_RANGE
+        else:
+            return self._sample_random_spawns()
+
+        sampled = self._sample_spawns_for_distance_range(min_dist=min_dist, max_dist=max_dist)
+        if sampled is not None:
+            return sampled
+
+        fallback = self._sample_constrained_random_spawns(min_dist=0)
+        if fallback is not None:
+            return fallback
+        return self.pacman_spawn, list(self.ghost_spawns)
+
+    def _sample_spawns_for_distance_range(
+        self,
+        min_dist: int,
+        max_dist: int,
+    ) -> tuple[tuple[int, int], list[tuple[int, int]]] | None:
+        free_cells = [
+            (int(r), int(c))
+            for r, c in np.argwhere(self._base_grid != Observation.WALL.value)
+        ]
+        num_ghosts = len(self.ghost_spawns)
+        if len(free_cells) < num_ghosts + 1:
+            return None
+
+        for _ in range(300):
+            pacman_idx = int(self._spawn_rng.integers(len(free_cells)))
+            pacman_pos = free_cells[pacman_idx]
+
+            candidates = []
+            for cell in free_cells:
+                if cell == pacman_pos:
+                    continue
+                distance = self._bfs_distance(cell, pacman_pos)
+                if distance is None:
+                    continue
+                if min_dist <= distance <= max_dist:
+                    candidates.append(cell)
+
+            if len(candidates) < num_ghosts:
+                continue
+
+            picks = self._spawn_rng.choice(
+                len(candidates),
+                size=num_ghosts,
+                replace=False,
+            )
+            ghost_positions = [candidates[int(idx)] for idx in picks]
+            if self._spawn_constraints_ok(pacman_pos, ghost_positions):
+                return pacman_pos, ghost_positions
+
+        return None
+
+    def _sample_constrained_random_spawns(
+        self,
+        min_dist: int = 0,
+    ) -> tuple[tuple[int, int], list[tuple[int, int]]] | None:
+        free_cells = [
+            (int(r), int(c))
+            for r, c in np.argwhere(self._base_grid != Observation.WALL.value)
+        ]
+        num_ghosts = len(self.ghost_spawns)
+        if len(free_cells) < num_ghosts + 1:
+            return None
+
+        for _ in range(300):
+            picks = self._spawn_rng.choice(
+                len(free_cells),
+                size=num_ghosts + 1,
+                replace=False,
+            )
+            chosen = [free_cells[int(i)] for i in picks]
+            pacman_pos, ghost_positions = chosen[0], chosen[1:]
+            if min_dist > 0 and any(
+                (d := self._bfs_distance(ghost_pos, pacman_pos)) is None or d < min_dist
+                for ghost_pos in ghost_positions
+            ):
+                continue
+            if self._spawn_constraints_ok(pacman_pos, ghost_positions):
+                return pacman_pos, ghost_positions
+        return None
+
+    def _all_ghosts_same_corridor(self, ghost_positions: list[tuple[int, int]]) -> bool:
+        if len(ghost_positions) <= 1:
+            return False
+        same_row = len({row for row, _col in ghost_positions}) == 1
+        same_col = len({col for _row, col in ghost_positions}) == 1
+        return same_row or same_col
+
+    def _spawn_constraints_ok(
+        self,
+        pacman_pos: tuple[int, int],
+        ghost_positions: list[tuple[int, int]],
+    ) -> bool:
+        if any(ghost_pos == pacman_pos for ghost_pos in ghost_positions):
+            return False
+        if len(set(ghost_positions)) != len(ghost_positions):
+            return False
+        if self._all_ghosts_same_corridor(ghost_positions):
+            return False
+
+        for idx, ghost_pos in enumerate(ghost_positions):
+            for other_pos in ghost_positions[idx + 1 :]:
+                distance = self._bfs_distance(ghost_pos, other_pos)
+                if distance is None or distance < 2:
+                    return False
+        return True
 
     def _bfs_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int | None:
         if start == goal:

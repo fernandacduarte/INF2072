@@ -133,7 +133,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="off",
         choices=["off", "easy-medium-hard", "mixed-easy-medium-hard"],
-        help="Pacman curriculum schedule applied over frames.",
+        help=(
+            "Curriculum schedule applied over frames. In curriculum modes, each "
+            "stage also samples ghost spawn modes with the same stage profile "
+            "(easy 70/30/0, medium 40/40/20, hard 20/40/40)."
+        ),
     )
     parser.add_argument(
         "--pacman-curriculum-max-frames",
@@ -280,7 +284,9 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help=(
             "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
-            "memorize a fixed route to a fixed start cell and must pursue reactively."
+            "memorize a fixed route to a fixed start cell and must pursue reactively. "
+            "When curriculum is enabled, spawn mode sampling is curriculum-driven "
+            "regardless of this toggle."
         ),
     )
     parser.add_argument(

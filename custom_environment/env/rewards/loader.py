@@ -33,6 +33,15 @@ _REWARD_CLASS_BY_ID = {
     "capture_merge": (
         "custom_environment.env.rewards.current:CaptureMerge"
     ),
+    "capture_merge3": (
+        "custom_environment.env.rewards.current:CaptureMerge3"
+    ),
+    "capture_merge4": (
+        "custom_environment.env.rewards.current:CaptureMerge4"
+    ),
+    "capture_merge2": (
+        "custom_environment.env.rewards.current:CaptureMerge2"
+    ),
     "capture_v0_pure_potential_shaping_pellets": (
         "custom_environment.env.rewards.current:CaptureV0PurePotentialShapingPellets"
     ),
