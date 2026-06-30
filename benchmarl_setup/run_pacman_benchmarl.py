@@ -45,10 +45,11 @@ def _tune_shared_experiment(
     max_frames: int,
     maze: str,
     epsilon_anneal_ratio: float = 0.95,
+    epsilon_end: float = 0.10,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
     schedule = training_exploration_schedule(
-        algorithm, maze, max_frames, epsilon_anneal_ratio
+        algorithm, maze, max_frames, epsilon_anneal_ratio, epsilon_end
     )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
@@ -222,8 +223,18 @@ def parse_args() -> argparse.Namespace:
         default=0.95,
         help=(
             "Fraction of training over which exploration epsilon anneals from 1.0 "
-            "to 0.1 (default 0.95). Lower values give the greedy policy a longer "
-            "low-epsilon phase to converge."
+            "to --epsilon-end (default 0.95). Lower values give the greedy policy a "
+            "longer low-epsilon phase to converge."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=0.10,
+        help=(
+            "Exploration epsilon floor reached at the end of the anneal (default "
+            "0.10). Lower (e.g. 0.05) leaves less residual exploration so the "
+            "greedy policy converges tighter; eval is always greedy regardless."
         ),
     )
     return parser.parse_args()
@@ -333,6 +344,7 @@ def main() -> None:
         args.max_frames,
         args.maze,
         float(args.epsilon_anneal_ratio),
+        float(args.epsilon_end),
     )
 
     experiment = Experiment(

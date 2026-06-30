@@ -120,3 +120,24 @@ Papoudakis et al. compare 9 MARL algorithms (IQL, IA2C, IPPO, MADDPG, COMA, MAA2
 11. **[MEDIUM] Adopt `rliable`-style robust reporting** (IQM + stratified-bootstrap CIs) given the 5-seed budget — cite Agarwal et al. 2021 — rather than increasing seed count to 30–50.
 12. **[LOW] Fix terminology in reports/plots:** distinguish max-return, all-evals average-return (Papoudakis), and last-10% tail-mean (smoothing); do not conflate.
 13. **[LOW] Choose the final frame budget by plateau**, not a fixed 60k; document it.
+
+---
+
+### Follow-up Q3 (user): second source — tabular Q-Learning Pacman project (Experimental Setup §4.1)
+
+**Q3 (user):** "vamos adicionar também" — incorporate an excerpt from a tabular Q-Learning Pacman project report (α=0.5, ε=0.3→0.1, γ=0.9, 2000–3000 episodes; reward: +10/dot, −1/step, −500 caught, +500 board-clear; Table 2: tiny 6×6 → 75% win, medium 10×6 → 0% win at the same episode budget).
+
+**A3 (agent):** Recorded as a secondary, corroborating source. It is *tabular* single-learner Q-Learning (no function approximation), so it is not methodologically comparable to this project's deep MARL (IQL/VDN/QMIX with neural nets + parameter sharing) — but two lessons transfer directly:
+
+1. **ε exploitation (corroborates rec #10).** They dropped ε from 0.3→0.1 because "the high exploration factor resulted in excessive random actions even after the agent had acquired substantial knowledge of optimal policies." This is exactly the rationale for our `EPSILON_END=0.05` + faster `EPSILON_ANNEAL_RATIO=0.4`: once the policy is learned, cut residual exploration so the greedy policy exploits and converges tighter. Independent empirical support for the epsilon change.
+
+2. **Budget must scale with state-space size (resolves the open FRAMES question, rec #13).** Tiny 6×6 reached 75% win, but the *same* episode budget on a medium 10×6 grid collapsed to 0% — the curse of dimensionality. Lesson for us: **a frame budget validated on one maze is not transferable to a larger maze.** Our default maze (`pinklike3`) is substantially larger than 6×6, so `FRAMES` should be **set per maze and confirmed against the liveplot plateau**, not fixed once. Caveat: deep function approximation generalises across states, so we will not see the same hard 0% cliff a tabular agent does — but the monotone "bigger grid → more frames to converge" relationship still holds and should govern how we pick `FRAMES`.
+
+**On the FRAMES default specifically:** rather than blindly bump 100000, the principled action is (a) keep `FRAMES` an explicit per-maze knob, and (b) confirm the capture-rate curve has plateaued for `pinklike3` at the chosen budget before reporting. The runs directory is gitignored, so no curve was available in-session to pick a number empirically — this needs a liveplot/curve check.
+
+**Reward-shaping note (informational, out of scope):** the cited reward (+10/dot, −1/step, ±500 terminal) is a dense, hand-tuned scheme. This project deliberately studies sparse `capture_v0` + PBRS (D-003 / research-000024/000035); the cited scheme is not a target to adopt, only context.
+
+## Recommendations summary (follow-up Q3)
+
+14. **[MEDIUM] Treat `FRAMES` as a per-maze, plateau-validated budget** (not a fixed constant): confirm the `pinklike3` capture-rate curve plateaus before reporting; scale up for larger mazes. Corroborated by the tabular-Q-Learning state-space/budget result.
+15. **[LOW] Cite the second source as independent empirical support** for the epsilon-exploitation change (ε reduced once the policy is learned).

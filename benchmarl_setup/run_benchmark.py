@@ -270,8 +270,18 @@ def parse_args() -> argparse.Namespace:
         default=0.95,
         help=(
             "Fraction of training over which exploration epsilon anneals from 1.0 "
-            "to 0.1 (default 0.95). Lower (e.g. 0.5) gives the greedy policy a "
-            "longer low-epsilon phase to converge and stabilizes the capture curve."
+            "to --epsilon-end (default 0.95). Lower (e.g. 0.5) gives the greedy "
+            "policy a longer low-epsilon phase to converge and stabilizes the curve."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=0.10,
+        help=(
+            "Exploration epsilon floor reached at the end of the anneal (default "
+            "0.10). Lower (e.g. 0.05) leaves less residual exploration so the "
+            "greedy policy converges tighter; eval is always greedy regardless."
         ),
     )
     parser.add_argument(
@@ -354,6 +364,7 @@ def _build_command(
     command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
     command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
     command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
+    command.extend(["--epsilon-end", str(args.epsilon_end)])
 
     if args.randomize_spawns:
         command.append("--randomize-spawns")
@@ -649,6 +660,7 @@ class ProgressReporter:
         machine_id: str,
         epsilon_algorithm: str,
         epsilon_anneal_ratio: float,
+        epsilon_end: float,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
@@ -671,6 +683,7 @@ class ProgressReporter:
             self.maze,
             self.max_frames,
             float(epsilon_anneal_ratio),
+            float(epsilon_end),
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
         self.eval_seed_base = int(eval_seed_base)
@@ -1214,6 +1227,8 @@ def main() -> None:
         raise ValueError("At least one reward class must be provided.")
     if not (0.0 < float(args.epsilon_anneal_ratio) <= 1.0):
         raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
+    if not (0.0 <= float(args.epsilon_end) < 1.0):
+        raise ValueError("--epsilon-end must be in [0, 1).")
     if args.eval_episodes < 0:
         raise ValueError("--eval-episodes must be non-negative.")
     if args.live_capture_eval_episodes < 0:
@@ -1295,6 +1310,7 @@ def main() -> None:
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
             epsilon_anneal_ratio=args.epsilon_anneal_ratio,
+            epsilon_end=args.epsilon_end,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,

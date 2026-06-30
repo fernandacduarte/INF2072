@@ -14,7 +14,9 @@ MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
 ALGOS   ?= iql,vdn,qmixglobal
-SEEDS   ?= 0,1,2,4
+# 5 seeds per algorithm — constitution Q3 minimum and the Papoudakis-2021
+# benchmarking standard (D-003). Do not drop below 5 for reported results.
+SEEDS   ?= 0,1,2,3,4
 FRAMES  ?= 100000
 CHECKPOINT_INTERVAL ?= 10000
 DEVICE  ?= cuda
@@ -25,10 +27,14 @@ CURRICULUM_MAX_FRAMES ?= $(FRAMES)
 # Eval-time Pacman evasiveness in [0,1] (1.0 = deterministic hard evader, 0.0 =
 # fully random). Default 0.8 = 80% evasive. Used by `make eval-latest`.
 EVASIVENESS ?= 0.8
-# Fraction of training over which exploration epsilon anneals 1.0 -> 0.1.
-# Lower (e.g. 0.5) gives the greedy policy a longer low-epsilon phase to
-# converge and stabilizes the capture-rate curve. Upstream default is 0.95.
-EPSILON_ANNEAL_RATIO ?= 0.5
+# Fraction of training over which exploration epsilon anneals 1.0 -> EPSILON_END.
+# Lower (e.g. 0.4) gives the greedy policy a longer low-epsilon phase to
+# converge and stabilizes the capture-rate curve. Code default is 0.95.
+EPSILON_ANNEAL_RATIO ?= 0.4
+# Exploration epsilon floor reached at the end of the anneal. Lower (0.05)
+# leaves less residual exploration so the greedy policy converges tighter; eval
+# is always greedy regardless. Code default (algorithm_utils.py) stays 0.10.
+EPSILON_END ?= 0.05
 
 # Pacman difficulty knobs (make the prey dumber to bootstrap ghost pursuit).
 # NOTE: PACMAN_DIFFICULTY and PACMAN_RANDOM_ACTION_PROB only take effect when
@@ -79,7 +85,7 @@ R1_SAVE          ?= benchmarl_setup/runs/r1
 .PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark liveplot eval-best r1-positive-control ceiling ceiling-eval
 
 help: ## Show this help
-	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make ceiling          Scripted-pursuit capture-ceiling diagnostic (no training)','  make ceiling-eval     Watch the scripted-pursuit ghosts play one episode','  make r1-positive-control  R1 sanity battery: random opponent vs curriculum + verdict','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE         (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARD_ID CURRICULUM EPSILON_ANNEAL_RATIO','            PACMAN_DIFFICULTY PACMAN_RANDOM_ACTION_PROB PACMAN_SAFE_DISTANCE','            RANDOMIZE_SPAWNS RANDOMIZE_SPAWNS_MIN_DISTANCE','            (dumber Pacman: make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy)','            (stabler curve: make benchmark EPSILON_ANNEAL_RATIO=0.5)','            (fixed spawns: make benchmark RANDOMIZE_SPAWNS=0)','            (adjacency capture: make benchmark CAPTURE_RADIUS=1)','Ceiling vars: MAZE CEILING_DIFFICULTY CEILING_EPISODES CEILING_SEEDS CAPTURE_RADIUS','Eval vars:  LEARNER DEVICE REWARD_ID EVASIVENESS  (e.g. make eval-latest LEARNER=iql EVASIVENESS=0.8)']))"
+	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make ceiling          Scripted-pursuit capture-ceiling diagnostic (no training)','  make ceiling-eval     Watch the scripted-pursuit ghosts play one episode','  make r1-positive-control  R1 sanity battery: random opponent vs curriculum + verdict','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE         (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARD_ID CURRICULUM EPSILON_ANNEAL_RATIO EPSILON_END','            PACMAN_DIFFICULTY PACMAN_RANDOM_ACTION_PROB PACMAN_SAFE_DISTANCE','            RANDOMIZE_SPAWNS RANDOMIZE_SPAWNS_MIN_DISTANCE','            (dumber Pacman: make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy)','            (stabler curve: make benchmark EPSILON_ANNEAL_RATIO=0.4 EPSILON_END=0.05)','            (fixed spawns: make benchmark RANDOMIZE_SPAWNS=0)','            (adjacency capture: make benchmark CAPTURE_RADIUS=1)','Ceiling vars: MAZE CEILING_DIFFICULTY CEILING_EPISODES CEILING_SEEDS CAPTURE_RADIUS','Eval vars:  LEARNER DEVICE REWARD_ID EVASIVENESS  (e.g. make eval-latest LEARNER=iql EVASIVENESS=0.8)']))"
 
 demo: ## Live Pygame window: defense-first Pacman vs random ghosts
 	$(PYTHON) custom_environment/render_demo.py --render-mode human --delay $(DELAY) --maze $(MAZE) --seed $(SEED)
@@ -103,7 +109,7 @@ eval-latest: ## Watch trained ghosts (best checkpoint) in a Pygame window (EVASI
 	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select best --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID) --pacman-evasiveness $(EVASIVENESS)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
-	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-ids $(REWARD_ID) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE) --checkpoint-interval $(CHECKPOINT_INTERVAL) --pacman-curriculum $(CURRICULUM) --pacman-curriculum-max-frames $(CURRICULUM_MAX_FRAMES) --pacman-difficulty $(PACMAN_DIFFICULTY) --pacman-random-action-prob $(PACMAN_RANDOM_ACTION_PROB) $(PACMAN_SAFE_DISTANCE_ARG) --epsilon-anneal-ratio $(EPSILON_ANNEAL_RATIO) $(RANDOMIZE_SPAWNS_ARG) --randomize-spawns-min-distance $(RANDOMIZE_SPAWNS_MIN_DISTANCE) --capture-radius $(CAPTURE_RADIUS)
+	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-ids $(REWARD_ID) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE) --checkpoint-interval $(CHECKPOINT_INTERVAL) --pacman-curriculum $(CURRICULUM) --pacman-curriculum-max-frames $(CURRICULUM_MAX_FRAMES) --pacman-difficulty $(PACMAN_DIFFICULTY) --pacman-random-action-prob $(PACMAN_RANDOM_ACTION_PROB) $(PACMAN_SAFE_DISTANCE_ARG) --epsilon-anneal-ratio $(EPSILON_ANNEAL_RATIO) --epsilon-end $(EPSILON_END) $(RANDOMIZE_SPAWNS_ARG) --randomize-spawns-min-distance $(RANDOMIZE_SPAWNS_MIN_DISTANCE) --capture-radius $(CAPTURE_RADIUS)
 
 ceiling: ## Scripted-pursuit capture-ceiling diagnostic vs the configured Pacman
 	$(PYTHON) custom_environment/ceiling_eval.py --maze $(MAZE) --pacman-difficulty $(CEILING_DIFFICULTY) --episodes $(CEILING_EPISODES) --seeds $(CEILING_SEEDS) --capture-radius $(CAPTURE_RADIUS)
