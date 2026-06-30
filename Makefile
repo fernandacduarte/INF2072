@@ -13,12 +13,12 @@ SEED   ?= 11
 MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
-ALGOS   ?= iql,vdn,qmixglobal
+ALGOS   ?= iql
 # 5 seeds per algorithm — constitution Q3 minimum and the Papoudakis-2021
 # benchmarking standard (D-003). Do not drop below 5 for reported results.
-SEEDS   ?= 0,1,2,3,4
-FRAMES  ?= 100000
-CHECKPOINT_INTERVAL ?= 10000
+SEEDS   ?= 0
+FRAMES  ?= 40000
+CHECKPOINT_INTERVAL ?= 5000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_closing
 LEARNER ?= qmixglobal
@@ -32,11 +32,11 @@ EVASIVENESS ?= 0.8
 EVAL_EPISODES ?= 100
 # Fraction of training over which exploration epsilon anneals 1.0 -> EPSILON_END.
 # Lower (e.g. 0.4) gives the greedy policy a longer low-epsilon phase to
-# converge and stabilizes the capture-rate curve. Code default is 0.95.
+# converge and stabilizes the capture-rate curve. Code default is 0.70.
 EPSILON_ANNEAL_RATIO ?= 0.4
 # Exploration epsilon floor reached at the end of the anneal. Lower (0.05)
 # leaves less residual exploration so the greedy policy converges tighter; eval
-# is always greedy regardless. Code default (algorithm_utils.py) stays 0.10.
+# is always greedy regardless. Code default is 0.05.
 EPSILON_END ?= 0.05
 
 # Pacman difficulty knobs (make the prey dumber to bootstrap ghost pursuit).

@@ -91,8 +91,8 @@ def training_exploration_schedule(
     algorithm: str,
     maze: str,
     max_frames: int,
-    anneal_ratio: float = 0.95,
-    eps_end: float = 0.10,
+    anneal_ratio: float = 0.70,
+    eps_end: float = 0.05,
 ) -> dict[str, float | int]:
     normalized_algorithm = normalize_algorithm(algorithm)
     if normalized_algorithm not in SUPPORTED_ALGORITHMS:

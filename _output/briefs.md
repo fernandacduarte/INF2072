@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-30 21:39 UTC | STARTED | 2026-06-30 21:23 UTC | research | tunning hyperparameters of iql
+
 DONE | 2026-06-30 21:22 UTC | STARTED | 2026-06-30 21:17 UTC | research | is there any way to give a iql net a memory ?
 
 STARTED | 2026-06-30 20:58 UTC | research | como implementar um sistema de reward que a política seja que os ghosts aprendam a perseguir?

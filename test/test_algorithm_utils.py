@@ -12,9 +12,9 @@ def test_training_schedule_is_shared_across_algorithms_and_mazes():
     max_frames = 60000
     expected = {
         "epsilon_init": 1.0,
-        "epsilon_end": 0.1,
-        "epsilon_anneal_ratio": 0.95,
-        "epsilon_anneal_frames": int(max_frames * 0.95),
+        "epsilon_end": 0.05,
+        "epsilon_anneal_ratio": 0.70,
+        "epsilon_anneal_frames": int(max_frames * 0.70),
         "max_frames": max_frames,
     }
 

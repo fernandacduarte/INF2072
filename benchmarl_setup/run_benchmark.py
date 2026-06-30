@@ -98,10 +98,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-frames", type=int, default=60000)
     parser.add_argument("--frames-per-batch", type=int, default=200)
-    parser.add_argument("--optimizer-steps", type=int, default=10)
+    parser.add_argument("--optimizer-steps", type=int, default=4)
     parser.add_argument("--train-batch-size", type=int, default=128)
-    parser.add_argument("--memory-size", type=int, default=10000)
-    parser.add_argument("--init-random-frames", type=int, default=5000)
+    parser.add_argument("--memory-size", type=int, default=25000)
+    parser.add_argument("--init-random-frames", type=int, default=25000)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
@@ -267,20 +267,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--epsilon-anneal-ratio",
         type=float,
-        default=0.95,
+        default=0.70,
         help=(
             "Fraction of training over which exploration epsilon anneals from 1.0 "
-            "to --epsilon-end (default 0.95). Lower (e.g. 0.5) gives the greedy "
+            "to --epsilon-end (default 0.70). Lower values give the greedy "
             "policy a longer low-epsilon phase to converge and stabilizes the curve."
         ),
     )
     parser.add_argument(
         "--epsilon-end",
         type=float,
-        default=0.10,
+        default=0.05,
         help=(
             "Exploration epsilon floor reached at the end of the anneal (default "
-            "0.10). Lower (e.g. 0.05) leaves less residual exploration so the "
+            "0.05). Lower values leave less residual exploration so the "
             "greedy policy converges tighter; eval is always greedy regardless."
         ),
     )
