@@ -6,7 +6,7 @@
 | Date | Skill | Brief | Status | Plan | Head SHA | Generated |
 |------|-------|-------|--------|------|----------|-----------|
 | 2026-06-30 22:11 UTC | research | how PACMAN_RANDOM_ACTION_PROB and EVASIVENESS are being used and how affect mak… | DONE |  |  |  |
-| 2026-06-30 22:01 UTC | reflect | what is implemented and how can i test ? | STARTED |  |  |  |
+| 2026-06-30 22:01 UTC | reflect | what is implemented and how can i test ? | DONE |  |  |  |
 | 2026-06-30 21:44 UTC | implement | 43 | DONE | 000043 |  |  |
 | 2026-06-30 21:23 UTC | research | tunning hyperparameters of iql | DONE |  |  |  |
 | 2026-06-30 21:17 UTC | research | is there any way to give a iql net a memory ? | DONE |  |  |  |
