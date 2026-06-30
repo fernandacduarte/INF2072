@@ -21,7 +21,7 @@ FRAMES  ?= 40000
 CHECKPOINT_INTERVAL ?= 5000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_closing
-LEARNER ?= qmixglobal
+LEARNER ?= iql
 CURRICULUM ?= off
 CURRICULUM_MAX_FRAMES ?= $(FRAMES)
 # Eval-time Pacman evasiveness in [0,1] (1.0 = deterministic hard evader, 0.0 =

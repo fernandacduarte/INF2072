@@ -1,4 +1,5 @@
 # Plan 000043 | CHORE-X | 2026-06-30 21:30 UTC | IQL hyperparameter defaults | Review: light
+# DONE | 2026-06-30 21:47 UTC |
 plan_format_version: 1
 source: research-000042 -- apply HIGH-priority hyperparameter default changes
 
@@ -108,3 +109,22 @@ source: research-000042 -- apply HIGH-priority hyperparameter default changes
 ## Smoke
 
 false
+
+## Implementation Summary
+
+**Steps completed**: 4/4 | **Iterations**: 1 (pre-implemented in commit `3e6c7d4`) | **Tests**: 124 passed
+
+### Changes applied
+
+| File | Change |
+|------|--------|
+| `benchmarl_setup/algorithm_utils.py` | `training_exploration_schedule` signature defaults updated: `anneal_ratio=0.70`, `eps_end=0.05` |
+| `benchmarl_setup/run_pacman_benchmarl.py` | argparse defaults: `--optimizer-steps=4`, `--memory-size=25000`, `--init-random-frames=25000`, `--epsilon-anneal-ratio=0.70`, `--epsilon-end=0.05` |
+| `benchmarl_setup/run_benchmark.py` | same five argparse defaults as above |
+| `test/test_algorithm_utils.py` | expected dict updated: `epsilon_end=0.05`, `epsilon_anneal_ratio=0.70`, `epsilon_anneal_frames=42000` |
+
+### Quality gate
+
+- `/check validate`: N/A (no validation scripts for argparse defaults)
+- `/check review`: Review log embedded in plan (all perspectives Adopted or N/A)
+- Tests: **124 passed**, 0 failed
