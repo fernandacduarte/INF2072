@@ -159,7 +159,7 @@ def parse_args() -> argparse.Namespace:
         "--pacman-curriculum",
         type=str,
         default="off",
-        choices=["off", "easy-medium-hard"],
+        choices=["off", "easy-medium-hard", "mixed-easy-medium-hard"],
         help="Pacman curriculum schedule applied over frames.",
     )
     parser.add_argument(

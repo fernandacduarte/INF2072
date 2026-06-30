@@ -104,13 +104,13 @@ def training_exploration_schedule(
         raise ValueError("max_frames must be >= 1")
 
     curriculum_mode = str(pacman_curriculum).strip().lower()
-    if curriculum_mode not in {"off", "easy-medium-hard"}:
+    if curriculum_mode not in {"off", "easy-medium-hard", "mixed-easy-medium-hard"}:
         raise ValueError(
             f"Unsupported pacman_curriculum: {pacman_curriculum}. "
-            "Expected 'off' or 'easy-medium-hard'."
+            "Expected 'off', 'easy-medium-hard', or 'mixed-easy-medium-hard'."
         )
 
-    if curriculum_mode == "easy-medium-hard":
+    if curriculum_mode in {"easy-medium-hard", "mixed-easy-medium-hard"}:
         b1 = resolved_max_frames // 3
         b2 = (2 * resolved_max_frames) // 3
         return {
