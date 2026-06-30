@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-30 00:49 UTC | STARTED | 2026-06-30 00:43 UTC | research | boas práticas de benchmarking com o paper Papoudakis_2021.pdf
+
 DONE | 2026-06-29 21:39 UTC | STARTED | 2026-06-29 21:30 UTC | implement | 000036 | PLAN | 000036
 
 DONE | 2026-06-29 21:27 UTC | STARTED | 2026-06-29 20:38 UTC | plan | source: research-000035 — Make ghosts visibly pursue/follow hard Pacman in three phased levers (L1 diagnostic gate, L2 persistent closing reward, L3 adjacency capture) | PLAN | 000036
