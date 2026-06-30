@@ -37,10 +37,10 @@ from custom_environment.eval import (
     CHECKPOINT_BEST_METRICS,
     _capture_rate_for_run_checkpoint,
     _best_checkpoint_for_learner,
-    _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
     _resolve_checkpoint_view_size,
     _set_global_ghost_view_size,
+    _set_pacman_evasiveness_for_eval,
     _unwrap_pacman_env,
 )
 from custom_environment.env.rewards.current import CaptureV0PurePotentialShaping
@@ -507,6 +507,7 @@ def _evaluate_checkpoint(
     expected_reward_id: str | None,
     allow_non_hard_checkpoint: bool,
     curriculum_frame_offset: int,
+    pacman_evasiveness: float = 0.8,
 ) -> tuple[dict[str, ReportValue], list[EpisodeResult]]:
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -525,7 +526,13 @@ def _evaluate_checkpoint(
     )
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
-    raw_env.shared_memory_in_observation_enabled = False
+    # Keep the SAME observation encoding the checkpoint trained with. Forcing this
+    # off zeroes the shared-memory bearing channel (the directional signal the
+    # policy uses to pursue Pacman outside its local view), producing an
+    # out-of-distribution observation that makes trained ghosts wander instead of
+    # chase -- systematically suppressing the reported capture rate. Training runs
+    # with this enabled (True), so the report must match (mirrors eval.py).
+    raw_env.shared_memory_in_observation_enabled = True
     raw_env.render_mode = None
     if curriculum_frame_offset > 0:
         raw_env.pacman_curriculum_frame_offset = int(curriculum_frame_offset)
@@ -536,11 +543,11 @@ def _evaluate_checkpoint(
     if allow_non_hard_checkpoint:
         print(
             "Pacman eval_report mode: keeping checkpoint-defined difficulty/curriculum "
-            "(--allow-non-hard-checkpoint). "
+            "(--allow-non-hard-checkpoint); --pacman-evasiveness ignored. "
             f"curriculum_frame_offset={curriculum_frame_offset}"
         )
     else:
-        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
+        _set_pacman_evasiveness_for_eval(raw_env, pacman_evasiveness, checkpoint_path)
     actual_reward_id = str(getattr(raw_env, "reward_strategy_id", "current"))
     actual_reward_class = str(getattr(raw_env, "reward_strategy_class", ""))
 
@@ -814,6 +821,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                 expected_reward_id=args.reward_id,
                 allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
                 curriculum_frame_offset=args.curriculum_frame_offset,
+                pacman_evasiveness=args.pacman_evasiveness,
             )
             row["train_seed"] = "" if train_seed is None else train_seed
             row["run_dir"] = run_dir.name
@@ -895,6 +903,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             expected_reward_id=reward_id,
             allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
             curriculum_frame_offset=args.curriculum_frame_offset,
+            pacman_evasiveness=args.pacman_evasiveness,
         )
         row["train_seed"] = train_seed
         row["run_dir"] = run_dir_name
@@ -1041,7 +1050,21 @@ def parse_args() -> argparse.Namespace:
             "Use checkpoint frame to reconstruct checkpoint-stage curriculum in checkpoint-native eval."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--pacman-evasiveness",
+        type=float,
+        default=0.8,
+        help=(
+            "Pacman evasiveness in [0,1] for the report (default 0.8 = 80%% evasive). "
+            "1.0 = deterministic hard evader; 0.0 = fully random. Maps to "
+            "pacman_random_action_prob = 1 - evasiveness. Ignored with "
+            "--allow-non-hard-checkpoint."
+        ),
+    )
+    args = parser.parse_args()
+    if not (0.0 <= args.pacman_evasiveness <= 1.0):
+        parser.error("--pacman-evasiveness must be in [0, 1]")
+    return args
 
 
 def _resolve_algorithms(args: argparse.Namespace) -> list[str]:
