@@ -875,10 +875,13 @@ class CaptureV0ClosingRewardWeights:
     pacman_timeout_win: float = -100.0
     pacman_win_pellets: float = -100.0
     timestep: float = -0.05
-    # Reward per cell of team min-BFS distance closed this step. Unlike PBRS this
+    # Reward per cell of team MEAN-BFS distance closed this step. Unlike PBRS this
     # is NOT telescoping, so it does not cancel over an episode against an evader
     # who holds distance constant -- it persistently pays the team for pursuing.
-    closing_weight: float = 1.0
+    # Mean (not min) gives every ghost a gradient toward Pacman, so the second ghost
+    # does not park in a corner. closing_weight=2.0 keeps signal strength comparable
+    # to the old min-based reward (mean decrease ≈ 0.5 per ghost step vs 1.0 for min).
+    closing_weight: float = 2.0
     # Bound the per-step closing reward so a ghost cannot farm it by oscillating
     # at the edge of the safe-distance cordon (RC4 orbit hazard, research-000022).
     closing_clip: float = 2.0
@@ -896,13 +899,19 @@ class CaptureV0ClosingReward(CaptureV0Reward):
     constant -- so pursuit earns nothing cumulatively and the policy goes passive.
 
     This strategy instead emits a *direct* per-step reward for **reducing** the
-    team's min-BFS distance to Pacman: ``closing_weight * clip(prev - cur,
+    team's MEAN-BFS distance to Pacman: ``closing_weight * clip(prev - cur,
     -closing_clip, +closing_clip)``. It is deliberately NOT potential-based, so it
     does not telescope away -- the team is paid every step it closes in and
     charged every step it backs off, with in-place oscillation netting ~0
     (positive and negative cells cancel). We trade PBRS's policy-invariance for an
     explicit pursuit bias, which is the whole point: invariance preserved the very
     passivity we are fixing.
+
+    Mean (not min) distance gives every ghost a gradient toward Pacman: with min,
+    only the nearest ghost can decrease the tracked distance -- the second ghost has
+    no incentive and parks in a corner. With mean, closing by one cell decreases the
+    tracked distance by 1/N for each of N ghosts, so all are rewarded equally for
+    pursuing. closing_weight=2.0 compensates for the halved scale (2 ghosts).
 
     A small ``pacman_legal_moves_reduced`` containment term (reused from
     ``CaptureV0Reward``) rewards herding Pacman into cells with fewer exits, which
@@ -919,11 +928,26 @@ class CaptureV0ClosingReward(CaptureV0Reward):
         weights: CaptureV0ClosingRewardWeights | None = None,
     ) -> None:
         self.weights = weights or CaptureV0ClosingRewardWeights()
-        self._prev_min_distance: int | None = None
+        self._prev_distance: float | None = None
 
     def reset(self, initial_context: RewardContext) -> None:
         _ = initial_context
-        self._prev_min_distance = None
+        self._prev_distance = None
+
+    def _mean_distance(self, context: RewardContext) -> float | None:
+        distances = [
+            self._bfs_distance(
+                ghost.current_position,
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            for ghost in context.ghosts
+        ]
+        reachable = [d for d in distances if d is not None]
+        if not reachable:
+            return None
+        return sum(reachable) / len(reachable)
 
     def compute(self, context: RewardContext) -> RewardResult:
         w = self.weights
@@ -932,15 +956,15 @@ class CaptureV0ClosingReward(CaptureV0Reward):
         if context.capture_happened:
             terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
 
-        # Persistent (non-telescoping) closing reward on team min-BFS distance.
-        min_distance = self._minimum_distance(context)
-        if min_distance is not None:
-            if self._prev_min_distance is not None:
-                delta = float(self._prev_min_distance - min_distance)
+        # Persistent (non-telescoping) closing reward on team MEAN-BFS distance.
+        mean_distance = self._mean_distance(context)
+        if mean_distance is not None:
+            if self._prev_distance is not None:
+                delta = self._prev_distance - mean_distance
                 clipped = max(-w.closing_clip, min(w.closing_clip, delta))
                 if clipped != 0.0:
                     terms.append(RewardTerm("closing", w.closing_weight * clipped))
-            self._prev_min_distance = min_distance
+            self._prev_distance = mean_distance
 
         # Containment: reward reducing Pacman's legal-move count while visible.
         if context.pacman_visible:
