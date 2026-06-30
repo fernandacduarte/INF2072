@@ -1186,6 +1186,73 @@ def _run_algorithm_serial_seeds(
     return failures, job_records
 
 
+def _git_commit_info() -> str:
+    """Short git SHA plus a clean/dirty flag, or 'unknown' outside a repo."""
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(PROJECT_ROOT),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        dirty = subprocess.call(
+            ["git", "diff", "--quiet", "--ignore-submodules"],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return f"{sha} ({'dirty' if dirty else 'clean'})"
+    except Exception:
+        return "unknown"
+
+
+def _print_run_banner(
+    args: argparse.Namespace,
+    algorithms: list[str],
+    reward_specs: list[tuple[str, str]],
+    seeds: list[int],
+    device_configs: list[dict],
+    machine_id: str,
+) -> None:
+    """Print every resolved run parameter at benchmark start for reproducibility.
+
+    Dumps the full vars(args) so defaults not passed on the command line are
+    captured too, alongside git commit, host, and timestamp. Cite the git
+    commit when reporting results (constitution C1).
+    """
+    bar = "=" * 78
+    sub = "-" * 78
+    devices = ", ".join(
+        f"{c['requested']}->{c['resolved']}({c['label']})" for c in device_configs
+    )
+    lines = [
+        bar,
+        " BENCHMARK RUN - REPRODUCIBILITY BANNER",
+        bar,
+        f" timestamp (UTC) : {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f" git commit      : {_git_commit_info()}",
+        f" host / machine  : {socket.gethostname()} / {machine_id}",
+        f" python          : {sys.version.split()[0]}",
+        sub,
+        f" algorithms      : {', '.join(algorithms)}",
+        f" reward ids      : {', '.join(rid for rid, _ in reward_specs)}",
+        f" seeds           : {', '.join(str(s) for s in seeds)}  (n={len(seeds)})",
+        f" devices         : {devices}",
+        f" total jobs      : {len(algorithms) * len(reward_specs) * len(seeds) * len(device_configs)}",
+        sub,
+        " full resolved args (vars(args)):",
+    ]
+    for key in sorted(vars(args)):
+        lines.append(f"   {key} = {getattr(args, key)}")
+    lines.append(bar)
+    print("\n".join(lines), flush=True)
+    if len(seeds) < 5:
+        print(
+            f"WARNING: only {len(seeds)} seed(s) - constitution Q3 requires >=5 for "
+            "reportable benchmark results (see D-003).",
+            flush=True,
+        )
+
+
 def main() -> None:
     args = parse_args()
     if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
@@ -1283,6 +1350,8 @@ def main() -> None:
     }
     for label, root in runs_roots_by_label.items():
         root.mkdir(parents=True, exist_ok=True)
+
+    _print_run_banner(args, algorithms, reward_specs, seeds, device_configs, machine_id)
 
     print("Benchmark device matrix:")
     for cfg in device_configs:
