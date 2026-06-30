@@ -1350,7 +1350,7 @@ class CaptureMerge4(CaptureMerge3):
 
     def _mean_distance(self, context: RewardContext) -> float | None:
         distances = [
-            self._bfs_distance(
+            CurrentGitTeamReward._bfs_distance(
                 ghost.current_position,
                 context.pacman_position,
                 context.board_shape,
