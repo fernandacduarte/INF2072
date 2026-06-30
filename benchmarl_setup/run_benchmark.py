@@ -659,7 +659,8 @@ class ProgressReporter:
             self.epsilon_algorithm,
             self.maze,
             self.max_frames,
-            float(epsilon_anneal_ratio),
+            pacman_curriculum=self.pacman_curriculum,
+            anneal_ratio=float(epsilon_anneal_ratio),
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
         self.eval_seed_base = int(eval_seed_base)
@@ -716,13 +717,29 @@ class ProgressReporter:
         self._reward_terms_order = sorted(seeded_terms)
 
     def _build_meta_line(self) -> str:
+        schedule_mode = str(self.epsilon_schedule.get("epsilon_schedule_mode", "global"))
+        extra_schedule = ""
+        if schedule_mode == "curriculum_piecewise":
+            extra_schedule = (
+                f"epsilon_stage_boundary_1={self.epsilon_schedule.get('epsilon_stage_boundary_1', 0)},"
+                f"epsilon_stage_boundary_2={self.epsilon_schedule.get('epsilon_stage_boundary_2', 0)},"
+                f"epsilon_easy_init={self.epsilon_schedule.get('epsilon_easy_init', 1.0)},"
+                f"epsilon_easy_end={self.epsilon_schedule.get('epsilon_easy_end', 0.25)},"
+                f"epsilon_medium_init={self.epsilon_schedule.get('epsilon_medium_init', 0.65)},"
+                f"epsilon_medium_end={self.epsilon_schedule.get('epsilon_medium_end', 0.20)},"
+                f"epsilon_hard_init={self.epsilon_schedule.get('epsilon_hard_init', 0.55)},"
+                f"epsilon_hard_end={self.epsilon_schedule.get('epsilon_hard_end', 0.08)},"
+            )
+
         return (
             "#meta,"
             f"max_frames={self.epsilon_schedule['max_frames']},"
+            f"epsilon_schedule_mode={schedule_mode},"
             f"epsilon_init={self.epsilon_schedule['epsilon_init']},"
             f"epsilon_end={self.epsilon_schedule['epsilon_end']},"
             f"epsilon_anneal_ratio={self.epsilon_schedule['epsilon_anneal_ratio']},"
             f"epsilon_anneal_frames={self.epsilon_schedule['epsilon_anneal_frames']},"
+            f"{extra_schedule}"
             f"epsilon_algorithm={self.epsilon_algorithm},"
             f"maze={self.maze},"
             f"pacman_curriculum={self.pacman_curriculum},"

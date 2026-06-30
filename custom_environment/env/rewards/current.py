@@ -1,7 +1,5 @@
 """The pre-refactor shared team reward, isolated as a strategy."""
 
-from __future__ import annotations
-
 from collections import deque
 from dataclasses import dataclass
 
@@ -963,3 +961,194 @@ class CaptureV0SparseControl(CaptureV0PurePotentialShaping):
             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
 
         return RewardResult(tuple(terms))
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureMergePotentialShapingWeights:
+    # Terminal/timestep/potential terms aligned with CaptureV0PurePotentialShaping.
+    get_pacman: float = 100.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    timestep: float = -0.05
+    potential_shaping_alpha: float = 0.7
+    # Visibility/exploration/motion terms aligned with CurrentRewardWeights.
+    newly_spotted: float = 1.0
+    currently_visible: float = 0.2
+    enter_recently_unvisited_tile: float = 0.15
+    reveal_unseen_local_cells: float = 0.03
+    invalid_move: float = -0.08
+    stay_still: float = -0.03
+    repeated_direction_reversal: float = -0.04
+    two_step_cycle: float = -0.06
+    recently_unvisited_window: int = 10
+    newly_spotted_min_unseen_steps: int = 6
+    # Fast-capture and pellet terms aligned with pellet/fast bonus variants.
+    pacman_eats_pellet: float = -0.5
+    fast_get_pacman_bonus_scale: float = 20.0
+
+
+class CaptureMergePotentialShaping(CurrentGitTeamReward):
+    """Merged sparse-PBRS reward with selected current-team shaping terms.
+
+    Includes: terminals, timestep, PBRS potential delta (mean distance),
+    visibility/exploration terms, invalid/still/reversal/cycle penalties,
+    pellet penalty, and fast-capture bonus.
+
+    Excludes: valid_move and overlap_or_same_corridor.
+    """
+
+    strategy_id = "capture_merge_potential_shaping"
+
+    def __init__(
+        self,
+        weights: CaptureMergePotentialShapingWeights | None = None,
+    ) -> None:
+        self.weights = weights or CaptureMergePotentialShapingWeights()
+        self._last_potential: float | None = None
+        self._last_any_pacman_visible = False
+        self._unseen_steps = self.weights.newly_spotted_min_unseen_steps
+        self._last_move_direction: dict[str, Position | None] = {}
+        self._reverse_streak: dict[str, int] = {}
+        self._recent_positions: dict[str, deque[Position]] = {}
+        self._seen_local_cells: dict[str, set[Position]] = {}
+        self._last_tile_visit_step: dict[str, dict[Position, int]] = {}
+
+    def reset(self, initial_context: RewardContext) -> None:
+        self._last_potential = None
+        self._last_any_pacman_visible = False
+        self._unseen_steps = self.weights.newly_spotted_min_unseen_steps
+        self._last_move_direction = {ghost.ghost_id: None for ghost in initial_context.ghosts}
+        self._reverse_streak = {ghost.ghost_id: 0 for ghost in initial_context.ghosts}
+        self._recent_positions = {
+            ghost.ghost_id: deque([ghost.current_position], maxlen=2)
+            for ghost in initial_context.ghosts
+        }
+        self._seen_local_cells = {
+            ghost.ghost_id: self._local_cells(
+                ghost.current_position,
+                initial_context.ghost_view_radius,
+            )
+            for ghost in initial_context.ghosts
+        }
+        self._last_tile_visit_step = {
+            ghost.ghost_id: {ghost.current_position: 0}
+            for ghost in initial_context.ghosts
+        }
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+
+        # PBRS potential shaping, aligned with CaptureV0PurePotentialShaping.
+        mean_distance = self._mean_distance(context)
+        visibility_progress = False
+        if mean_distance is not None:
+            potential = -w.potential_shaping_alpha * float(mean_distance)
+            if self._last_potential is not None:
+                terms.append(
+                    RewardTerm("potential_shaping", potential - self._last_potential)
+                )
+            if self._last_potential is None or potential > self._last_potential:
+                visibility_progress = True
+            self._last_potential = potential
+
+        if context.pacman_visible:
+            if (
+                not self._last_any_pacman_visible
+                and self._unseen_steps >= w.newly_spotted_min_unseen_steps
+            ):
+                terms.append(RewardTerm("newly_spotted", w.newly_spotted))
+            if visibility_progress:
+                terms.append(RewardTerm("currently_visible", w.currently_visible))
+            self._unseen_steps = 0
+        else:
+            self._unseen_steps += 1
+
+        for ghost in context.ghosts:
+            moved = ghost.previous_position != ghost.current_position
+            if not moved:
+                value = w.invalid_move if ghost.invalid_move else w.stay_still
+                name = "invalid_move" if ghost.invalid_move else "stay_still"
+                terms.append(RewardTerm(name, value))
+            else:
+                if self._is_recently_unvisited(ghost, context.step_count):
+                    terms.append(
+                        RewardTerm(
+                            "recently_unvisited_tile",
+                            w.enter_recently_unvisited_tile,
+                        )
+                    )
+                reverse_streak = self._update_movement_history(ghost)
+                if reverse_streak >= 1:
+                    factor = min(reverse_streak, 4)
+                    terms.append(
+                        RewardTerm(
+                            "repeated_direction_reversal",
+                            w.repeated_direction_reversal * float(factor),
+                        )
+                    )
+                if self._is_two_step_cycle(ghost):
+                    terms.append(RewardTerm("two_step_cycle", w.two_step_cycle))
+
+            if self._reveals_unseen_cells(ghost, context.ghost_view_radius):
+                terms.append(
+                    RewardTerm(
+                        "reveal_unseen_local_cells",
+                        w.reveal_unseen_local_cells,
+                    )
+                )
+
+            self._recent_positions.setdefault(ghost.ghost_id, deque(maxlen=2)).append(
+                ghost.current_position
+            )
+
+        pellets_eaten = int(context.pellets_eaten_this_step)
+        if pellets_eaten > 0:
+            terms.append(
+                RewardTerm(
+                    "pacman_eats_pellet",
+                    w.pacman_eats_pellet * float(pellets_eaten),
+                )
+            )
+
+        if context.capture_happened:
+            max_episode_steps = int(context.max_steps)
+            steps_elapsed = int(context.step_count)
+            if max_episode_steps <= 0:
+                bonus_multiplier = 0.0
+            else:
+                progress = float(steps_elapsed) / float(max_episode_steps)
+                progress = min(max(progress, 0.0), 1.0)
+                bonus_multiplier = 1.0 - progress
+            terms.append(
+                RewardTerm(
+                    "fast_get_pacman_bonus",
+                    w.fast_get_pacman_bonus_scale * bonus_multiplier,
+                )
+            )
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
+
+        self._last_any_pacman_visible = context.pacman_visible
+        return RewardResult(tuple(terms))
+
+    def _mean_distance(self, context: RewardContext) -> float | None:
+        distances = [
+            self._bfs_distance(
+                ghost.current_position,
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            for ghost in context.ghosts
+        ]
+        reachable = [distance for distance in distances if distance is not None]
+        if not reachable:
+            return None
+        return sum(reachable) / len(reachable)

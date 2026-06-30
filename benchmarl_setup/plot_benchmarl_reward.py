@@ -73,8 +73,7 @@ def _aggregate_algorithm_runs(
         step_axis = np.arange(1, max_step + 1, dtype=np.float64)
         mean_frames[invalid_frames] = step_axis[invalid_frames]
 
-    mean_captures = _moving_average(mean_captures, window)
-    std_captures = _moving_average(std_captures, window)
+    # Keep capture statistics exact (checkpoint snapshots): no smoothing.
     mean_rewards = _moving_average(mean_rewards, window)
     std_rewards = _moving_average(std_rewards, window)
 
@@ -92,6 +91,83 @@ def _epsilon_for_frames(
     span = float(epsilon_init) - float(epsilon_end)
     eps = float(epsilon_init) - span * np.minimum(frames, anneal_frames) / anneal_frames
     return np.maximum(eps, float(epsilon_end))
+
+
+def _epsilon_schedule_from_meta(meta: dict[str, str]) -> dict[str, float | int | str] | None:
+    schedule_mode = (meta.get("epsilon_schedule_mode") or "").strip().lower()
+    if schedule_mode == "curriculum_piecewise":
+        try:
+            return {
+                "epsilon_schedule_mode": "curriculum_piecewise",
+                "max_frames": int(meta["max_frames"]),
+                "epsilon_stage_boundary_1": int(meta.get("epsilon_stage_boundary_1", "0")),
+                "epsilon_stage_boundary_2": int(meta.get("epsilon_stage_boundary_2", "0")),
+                "epsilon_easy_init": float(meta.get("epsilon_easy_init", "1.0")),
+                "epsilon_easy_end": float(meta.get("epsilon_easy_end", "0.25")),
+                "epsilon_medium_init": float(meta.get("epsilon_medium_init", "0.65")),
+                "epsilon_medium_end": float(meta.get("epsilon_medium_end", "0.20")),
+                "epsilon_hard_init": float(meta.get("epsilon_hard_init", "0.55")),
+                "epsilon_hard_end": float(meta.get("epsilon_hard_end", "0.08")),
+                "epsilon_init": float(meta.get("epsilon_init", "1.0")),
+                "epsilon_end": float(meta.get("epsilon_end", "0.08")),
+                "epsilon_anneal_ratio": float(meta.get("epsilon_anneal_ratio", "1.0")),
+                "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", meta["max_frames"])),
+            }
+        except (KeyError, ValueError):
+            return None
+
+    try:
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": int(meta["max_frames"]),
+            "epsilon_init": float(meta["epsilon_init"]),
+            "epsilon_end": float(meta["epsilon_end"]),
+            "epsilon_anneal_ratio": float(meta["epsilon_anneal_ratio"]),
+            "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", "0") or 0),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+def _epsilon_for_frames_schedule(frames: np.ndarray, schedule: dict[str, float | int | str]) -> np.ndarray:
+    mode = str(schedule.get("epsilon_schedule_mode", "global")).strip().lower()
+    x = np.maximum(frames.astype(np.float64), 0.0)
+
+    if mode == "curriculum_piecewise":
+        max_frames = max(1, int(schedule.get("max_frames", 1) or 1))
+        b1 = max(0, min(max_frames, int(schedule.get("epsilon_stage_boundary_1", max_frames // 3) or 0)))
+        b2 = max(b1, min(max_frames, int(schedule.get("epsilon_stage_boundary_2", (2 * max_frames) // 3) or b1)))
+
+        easy_init = float(schedule.get("epsilon_easy_init", 1.0))
+        easy_end = float(schedule.get("epsilon_easy_end", easy_init))
+        medium_init = float(schedule.get("epsilon_medium_init", 0.65))
+        medium_end = float(schedule.get("epsilon_medium_end", medium_init))
+        hard_init = float(schedule.get("epsilon_hard_init", 0.55))
+        hard_end = float(schedule.get("epsilon_hard_end", hard_init))
+
+        y = np.empty_like(x)
+
+        def _interp(start_frame: float, end_frame: float, start_eps: float, end_eps: float, values: np.ndarray) -> np.ndarray:
+            span = max(1.0, end_frame - start_frame)
+            progress = np.clip((values - start_frame) / span, 0.0, 1.0)
+            return start_eps + (end_eps - start_eps) * progress
+
+        easy_mask = x < float(b1)
+        medium_mask = (x >= float(b1)) & (x < float(b2))
+        hard_mask = x >= float(b2)
+
+        y[easy_mask] = _interp(0.0, float(b1), easy_init, easy_end, x[easy_mask])
+        y[medium_mask] = _interp(float(b1), float(b2), medium_init, medium_end, x[medium_mask])
+        y[hard_mask] = _interp(float(b2), float(max_frames), hard_init, hard_end, np.minimum(x[hard_mask], float(max_frames)))
+        return y
+
+    return _epsilon_for_frames(
+        x,
+        epsilon_max_frames=int(schedule.get("max_frames", 1) or 1),
+        epsilon_init=float(schedule.get("epsilon_init", 1.0)),
+        epsilon_end=float(schedule.get("epsilon_end", 0.1)),
+        epsilon_anneal_ratio=float(schedule.get("epsilon_anneal_ratio", 0.95)),
+    )
 
 
 def _parse_progress_meta(progress_file: Path) -> dict[str, str]:
@@ -257,6 +333,15 @@ def _device_matches_selector(label: str, selector: str) -> bool:
     return parsed_device == selector
 
 
+def _reward_matches_selector(label: str, selector: str | None) -> bool:
+    if selector is None:
+        return True
+    reward_id, _parsed_device = _split_reward_and_device(label)
+    # Legacy rows may not carry reward_id; treat them as current baseline.
+    effective_reward_id = reward_id if reward_id is not None else "current"
+    return effective_reward_id == selector
+
+
 def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
     raw = str(hex_color).strip().lstrip("#")
     if len(raw) != 6:
@@ -305,10 +390,20 @@ def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: l
     phase = 0.5 if count <= 1 else idx / float(count - 1)
     h, l, s = colorsys.rgb_to_hls(*rgb)
 
-    hue_shift = -0.42 + 0.84 * phase
+    hue_shift = -0.045 + 0.09 * phase
     var_h = (h + hue_shift) % 1.0
-    sat_targets = (0.98, 0.42, 0.90, 0.50)
-    light_targets = (0.30, 0.72, 0.42, 0.62)
+    sat_targets = (
+        max(0.25, min(0.98, s * 1.06)),
+        max(0.25, min(0.98, s * 0.88)),
+        max(0.25, min(0.98, s * 0.98)),
+        max(0.25, min(0.98, s * 0.78)),
+    )
+    light_targets = (
+        max(0.18, min(0.82, l * 0.86)),
+        max(0.18, min(0.82, l * 1.16)),
+        max(0.18, min(0.82, l * 0.98)),
+        max(0.18, min(0.82, l * 1.26)),
+    )
     var_s = sat_targets[idx % len(sat_targets)]
     var_l = light_targets[idx % len(light_targets)]
 
@@ -374,6 +469,14 @@ def _merge_progress_payloads(
     merged_terms: dict[str, dict[str, dict[str, dict[str, dict[int, float]]]]] = {}
     merged_meta: dict[str, str] = {}
 
+    def _as_float(raw: str | None) -> float | None:
+        try:
+            if raw is None:
+                return None
+            return float(str(raw).strip())
+        except ValueError:
+            return None
+
     for file_path, core_data, term_data, meta in payloads:
         source_name = file_path.stem
         source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
@@ -387,7 +490,40 @@ def _merge_progress_payloads(
                 }
                 incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
                 merged_meta["reward_terms"] = "|".join(sorted(existing | incoming))
-            elif key not in merged_meta:
+                continue
+
+            if key == "pacman_curriculum":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "easy-medium-hard" and incoming_mode == "easy-medium-hard":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            if key in {
+                "pacman_curriculum_max_frames",
+                "pacman_curriculum_frame_offset",
+                "max_frames",
+            }:
+                incoming_num = _as_float(value)
+                existing_num = _as_float(merged_meta.get(key))
+                if key not in merged_meta:
+                    merged_meta[key] = value
+                elif incoming_num is not None and (existing_num is None or incoming_num > existing_num):
+                    merged_meta[key] = value
+                continue
+
+            if key == "epsilon_schedule_mode":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "curriculum_piecewise" and incoming_mode == "curriculum_piecewise":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            if key not in merged_meta:
                 merged_meta[key] = value
 
         for algorithm, by_device in core_data.items():
@@ -416,7 +552,7 @@ def _merge_progress_payloads(
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
     meta: dict[str, str],
-) -> tuple[int, float, float, float]:
+) -> dict[str, float | int | str]:
     resolved: dict[str, float | int] = {}
     missing: list[str] = []
 
@@ -479,7 +615,35 @@ def _resolve_epsilon_from_cli_or_meta(
     if not (0.0 < epsilon_anneal_ratio <= 1.0):
         raise ValueError("--epsilon-anneal-ratio must be in (0, 1]")
 
-    return epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio
+    schedule_from_meta = _epsilon_schedule_from_meta(meta)
+    if schedule_from_meta is None:
+        schedule_from_meta = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+
+    if any(
+        value is not None
+        for value in (
+            args.epsilon_max_frames,
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    ):
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+    return schedule_from_meta
 
 
 def _open_file(path: Path) -> None:
@@ -684,6 +848,7 @@ def main() -> None:
         )
 
     requested_device = args.device.strip().lower()
+    requested_reward_id = args.reward_id.strip().lower()
     if requested_device != "auto":
         selected_device_label = device_label(requested_device)
         device_root = discovery_root / selected_device_label
@@ -747,10 +912,14 @@ def main() -> None:
         or has_cli_epsilon_override
     )
     if show_epsilon:
-        epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = _resolve_epsilon_from_cli_or_meta(
+        epsilon_schedule = _resolve_epsilon_from_cli_or_meta(
             args,
             progress_meta,
         )
+        epsilon_max_frames = int(epsilon_schedule.get("max_frames", 1) or 1)
+        epsilon_init = float(epsilon_schedule.get("epsilon_init", 1.0))
+        epsilon_end = float(epsilon_schedule.get("epsilon_end", 0.0))
+        epsilon_anneal_ratio = float(epsilon_schedule.get("epsilon_anneal_ratio", 1.0))
         epsilon_source = (
             "metadata"
             if all(
@@ -765,6 +934,14 @@ def main() -> None:
             else "cli+metadata"
         )
     else:
+        epsilon_schedule = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": 1,
+            "epsilon_init": 1.0,
+            "epsilon_end": 0.0,
+            "epsilon_anneal_ratio": 1.0,
+            "epsilon_anneal_frames": 1,
+        }
         epsilon_max_frames = 1
         epsilon_init = 1.0
         epsilon_end = 0.0
@@ -800,12 +977,17 @@ def main() -> None:
             continue
 
         if requested_device == "auto":
-            selected_devices = sorted(by_device.keys())
+            selected_devices = [
+                key
+                for key in sorted(by_device.keys())
+                if _reward_matches_selector(key, requested_reward_id)
+            ]
         else:
             selected_devices = [
                 key
                 for key in sorted(by_device.keys())
                 if _device_matches_selector(key, requested_device)
+                and _reward_matches_selector(key, requested_reward_id)
             ]
 
         if not selected_devices:
@@ -828,7 +1010,13 @@ def main() -> None:
 
         for device_key in selected_devices:
             for run_id, step_map in by_device.get(device_key, {}).items():
-                if selected_run_names is not None and run_id not in selected_run_names:
+                # Merged multi-machine progress prefixes run ids as "machine:run".
+                canonical_run_id = run_id.split(":", 1)[-1]
+                if (
+                    selected_run_names is not None
+                    and run_id not in selected_run_names
+                    and canonical_run_id not in selected_run_names
+                ):
                     continue
 
                 run_key = f"{device_key}:{run_id}"
@@ -979,13 +1167,7 @@ def main() -> None:
 
     if show_epsilon and max_display_frame > 0.0:
         x_eps = np.linspace(0.0, max_display_frame, 256, dtype=np.float64)
-        y_eps = _epsilon_for_frames(
-            x_eps,
-            epsilon_max_frames=epsilon_max_frames,
-            epsilon_init=epsilon_init,
-            epsilon_end=epsilon_end,
-            epsilon_anneal_ratio=epsilon_anneal_ratio,
-        )
+        y_eps = _epsilon_for_frames_schedule(x_eps, epsilon_schedule)
         ax_eps.plot(
             x_eps,
             y_eps,

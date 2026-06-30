@@ -11,6 +11,84 @@ from algorithm_utils import SUPPORTED_ALGORITHMS, SUPPORTED_MAZES, normalize_alg
 from device_utils import device_label
 
 
+def _epsilon_schedule_from_meta(meta: dict[str, str]) -> dict[str, float | int | str] | None:
+    schedule_mode = (meta.get("epsilon_schedule_mode") or "").strip().lower()
+    if schedule_mode == "curriculum_piecewise":
+        try:
+            return {
+                "epsilon_schedule_mode": "curriculum_piecewise",
+                "max_frames": int(meta["max_frames"]),
+                "epsilon_stage_boundary_1": int(meta.get("epsilon_stage_boundary_1", "0")),
+                "epsilon_stage_boundary_2": int(meta.get("epsilon_stage_boundary_2", "0")),
+                "epsilon_easy_init": float(meta.get("epsilon_easy_init", "1.0")),
+                "epsilon_easy_end": float(meta.get("epsilon_easy_end", "0.25")),
+                "epsilon_medium_init": float(meta.get("epsilon_medium_init", "0.65")),
+                "epsilon_medium_end": float(meta.get("epsilon_medium_end", "0.20")),
+                "epsilon_hard_init": float(meta.get("epsilon_hard_init", "0.55")),
+                "epsilon_hard_end": float(meta.get("epsilon_hard_end", "0.08")),
+                "epsilon_init": float(meta.get("epsilon_init", "1.0")),
+                "epsilon_end": float(meta.get("epsilon_end", "0.08")),
+                "epsilon_anneal_ratio": float(meta.get("epsilon_anneal_ratio", "1.0")),
+                "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", meta["max_frames"])),
+            }
+        except (KeyError, ValueError):
+            return None
+
+    try:
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": int(meta["max_frames"]),
+            "epsilon_init": float(meta["epsilon_init"]),
+            "epsilon_end": float(meta["epsilon_end"]),
+            "epsilon_anneal_ratio": float(meta["epsilon_anneal_ratio"]),
+            "epsilon_anneal_frames": int(meta.get("epsilon_anneal_frames", "0") or 0),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+def _epsilon_for_frames_schedule(frames: np.ndarray, schedule: dict[str, float | int | str]) -> np.ndarray:
+    mode = str(schedule.get("epsilon_schedule_mode", "global")).strip().lower()
+    x = np.maximum(frames.astype(np.float64), 0.0)
+
+    if mode == "curriculum_piecewise":
+        max_frames = max(1, int(schedule.get("max_frames", 1) or 1))
+        b1 = max(0, min(max_frames, int(schedule.get("epsilon_stage_boundary_1", max_frames // 3) or 0)))
+        b2 = max(b1, min(max_frames, int(schedule.get("epsilon_stage_boundary_2", (2 * max_frames) // 3) or b1)))
+
+        easy_init = float(schedule.get("epsilon_easy_init", 1.0))
+        easy_end = float(schedule.get("epsilon_easy_end", easy_init))
+        medium_init = float(schedule.get("epsilon_medium_init", 0.65))
+        medium_end = float(schedule.get("epsilon_medium_end", medium_init))
+        hard_init = float(schedule.get("epsilon_hard_init", 0.55))
+        hard_end = float(schedule.get("epsilon_hard_end", hard_init))
+
+        y = np.empty_like(x)
+
+        def _interp(start_frame: float, end_frame: float, start_eps: float, end_eps: float, values: np.ndarray) -> np.ndarray:
+            span = max(1.0, end_frame - start_frame)
+            progress = np.clip((values - start_frame) / span, 0.0, 1.0)
+            return start_eps + (end_eps - start_eps) * progress
+
+        easy_mask = x < float(b1)
+        medium_mask = (x >= float(b1)) & (x < float(b2))
+        hard_mask = x >= float(b2)
+
+        y[easy_mask] = _interp(0.0, float(b1), easy_init, easy_end, x[easy_mask])
+        y[medium_mask] = _interp(float(b1), float(b2), medium_init, medium_end, x[medium_mask])
+        y[hard_mask] = _interp(float(b2), float(max_frames), hard_init, hard_end, np.minimum(x[hard_mask], float(max_frames)))
+        return y
+
+    epsilon_max_frames = max(1.0, float(schedule.get("max_frames", 1) or 1))
+    epsilon_init = float(schedule.get("epsilon_init", 1.0))
+    epsilon_end = float(schedule.get("epsilon_end", 0.1))
+    epsilon_anneal_ratio = float(schedule.get("epsilon_anneal_ratio", 0.95))
+    anneal_frames = max(1.0, epsilon_max_frames * epsilon_anneal_ratio)
+    span = epsilon_init - epsilon_end
+    eps = epsilon_init - span * np.minimum(x, anneal_frames) / anneal_frames
+    return np.maximum(eps, epsilon_end)
+
+
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values.copy()
@@ -56,6 +134,15 @@ def _device_matches_selector(label: str, selector: str) -> bool:
         return True
     _reward_id, parsed_device = _split_reward_and_device(label)
     return parsed_device == selector
+
+
+def _reward_matches_selector(label: str, allowed_reward_ids: set[str] | None) -> bool:
+    if allowed_reward_ids is None:
+        return True
+    reward_id, _parsed_device = _split_reward_and_device(label)
+    # Legacy progress rows may not carry reward_id; treat them as current baseline.
+    effective_reward_id = reward_id if reward_id is not None else "current"
+    return effective_reward_id in allowed_reward_ids
 
 
 def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
@@ -106,11 +193,21 @@ def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: l
     phase = 0.5 if count <= 1 else idx / float(count - 1)
     h, l, s = colorsys.rgb_to_hls(*rgb)
 
-    # Stronger separation for multiple reward IDs of the same algorithm.
-    hue_shift = -0.42 + 0.84 * phase
+    # Keep variants in the same algorithm color family.
+    hue_shift = -0.045 + 0.09 * phase
     var_h = (h + hue_shift) % 1.0
-    sat_targets = (0.98, 0.42, 0.90, 0.50)
-    light_targets = (0.30, 0.72, 0.42, 0.62)
+    sat_targets = (
+        max(0.25, min(0.98, s * 1.06)),
+        max(0.25, min(0.98, s * 0.88)),
+        max(0.25, min(0.98, s * 0.98)),
+        max(0.25, min(0.98, s * 0.78)),
+    )
+    light_targets = (
+        max(0.18, min(0.82, l * 0.86)),
+        max(0.18, min(0.82, l * 1.16)),
+        max(0.18, min(0.82, l * 0.98)),
+        max(0.18, min(0.82, l * 1.26)),
+    )
     var_s = sat_targets[idx % len(sat_targets)]
     var_l = light_targets[idx % len(light_targets)]
 
@@ -180,6 +277,14 @@ def _merge_progress_payloads(
     )
     merged_meta: dict[str, str] = {}
 
+    def _as_float(raw: str | None) -> float | None:
+        try:
+            if raw is None:
+                return None
+            return float(str(raw).strip())
+        except ValueError:
+            return None
+
     for file_path, core_data, term_data, meta in payloads:
         source_name = file_path.stem
         source_machine_id = (meta.get("machine_id") or "").strip().lower() or source_name.lower()
@@ -194,7 +299,43 @@ def _merge_progress_payloads(
                 incoming = {item.strip().lower() for item in value.split("|") if item.strip()}
                 merged_terms_meta = sorted(existing | incoming)
                 merged_meta["reward_terms"] = "|".join(merged_terms_meta)
-            elif key not in merged_meta:
+                continue
+
+            # Prefer curriculum-enabled metadata when merging multiple progress files.
+            if key == "pacman_curriculum":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "easy-medium-hard" and incoming_mode == "easy-medium-hard":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            # Keep the largest frame budgets/offsets so transition markers are visible
+            # even when one merged file has stale or minimal metadata.
+            if key in {
+                "pacman_curriculum_max_frames",
+                "pacman_curriculum_frame_offset",
+                "max_frames",
+            }:
+                incoming_num = _as_float(value)
+                existing_num = _as_float(merged_meta.get(key))
+                if key not in merged_meta:
+                    merged_meta[key] = value
+                elif incoming_num is not None and (existing_num is None or incoming_num > existing_num):
+                    merged_meta[key] = value
+                continue
+
+            if key == "epsilon_schedule_mode":
+                existing_mode = (merged_meta.get(key) or "").strip().lower()
+                incoming_mode = str(value).strip().lower()
+                if existing_mode != "curriculum_piecewise" and incoming_mode == "curriculum_piecewise":
+                    merged_meta[key] = value
+                elif key not in merged_meta:
+                    merged_meta[key] = value
+                continue
+
+            if key not in merged_meta:
                 merged_meta[key] = value
 
         for algorithm, by_device in core_data.items():
@@ -312,8 +453,8 @@ def _parse_progress_file(
 def _resolve_epsilon_from_cli_or_meta(
     args: argparse.Namespace,
     meta: dict[str, str],
-) -> tuple[int, float, float, float] | None:
-    resolved: dict[str, float | int] = {}
+) -> dict[str, float | int | str] | None:
+    resolved: dict[str, float | int | str] = {}
     missing: list[str] = []
 
     cli_fields = (
@@ -386,7 +527,28 @@ def _resolve_epsilon_from_cli_or_meta(
     if not (0.0 < epsilon_anneal_ratio <= 1.0):
         raise ValueError("--epsilon-anneal-ratio must be in (0, 1]")
 
-    return epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio
+    schedule_from_meta = _epsilon_schedule_from_meta(meta)
+    if schedule_from_meta is None:
+        schedule_from_meta = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+
+    if any_cli_override:
+        # Preserve CLI overrides for global curve semantics.
+        return {
+            "epsilon_schedule_mode": "global",
+            "max_frames": epsilon_max_frames,
+            "epsilon_init": epsilon_init,
+            "epsilon_end": epsilon_end,
+            "epsilon_anneal_ratio": epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(epsilon_max_frames * epsilon_anneal_ratio),
+        }
+    return schedule_from_meta
 
 
 def _aggregate_algorithm_runs(
@@ -425,8 +587,7 @@ def _aggregate_algorithm_runs(
         step_axis = np.arange(1, max_step + 1, dtype=np.float64)
         mean_frames[invalid_frames] = step_axis[invalid_frames]
 
-    mean_captures = _moving_average(mean_captures, window)
-    std_captures = _moving_average(std_captures, window)
+    # Keep capture statistics exact (checkpoint snapshots): no smoothing.
     mean_rewards = _moving_average(mean_rewards, window)
     std_rewards = _moving_average(std_rewards, window)
     mean_frames = mean_frames[: len(mean_captures)]
@@ -472,6 +633,7 @@ class LiveComparisonPlotter:
         show_epsilon_overlay: bool,
         show_individual_reward_terms: bool,
         reward_terms_filter: set[str] | None,
+        reward_ids_filter: set[str] | None,
     ) -> None:
         self.algorithms = algorithms
         self.window = window
@@ -483,6 +645,7 @@ class LiveComparisonPlotter:
         self.show_epsilon_overlay = bool(show_epsilon_overlay)
         self.show_individual_reward_terms = bool(show_individual_reward_terms)
         self.reward_terms_filter = reward_terms_filter
+        self.reward_ids_filter = reward_ids_filter
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
         self.ax_reward = self.ax.twinx()
@@ -497,6 +660,14 @@ class LiveComparisonPlotter:
         self.fills_capture: dict[str, any] = {}
         self.marker_scatter_capture: dict[str, any] = {}
         self.epsilon_line = None
+        self.epsilon_schedule: dict[str, float | int | str] = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": self.epsilon_max_frames,
+            "epsilon_init": self.epsilon_init,
+            "epsilon_end": self.epsilon_end,
+            "epsilon_anneal_ratio": self.epsilon_anneal_ratio,
+            "epsilon_anneal_frames": int(self.epsilon_max_frames * self.epsilon_anneal_ratio),
+        }
         self.curriculum_lines: list[any] = []
         self.curriculum_texts: list[any] = []
 
@@ -559,10 +730,7 @@ class LiveComparisonPlotter:
         return marker, linestyle
 
     def _epsilon_for_frames(self, frames: np.ndarray) -> np.ndarray:
-        anneal_frames = max(1.0, float(self.epsilon_max_frames) * self.epsilon_anneal_ratio)
-        span = self.epsilon_init - self.epsilon_end
-        eps = self.epsilon_init - span * np.minimum(frames, anneal_frames) / anneal_frames
-        return np.maximum(eps, self.epsilon_end)
+        return _epsilon_for_frames_schedule(frames, self.epsilon_schedule)
 
     def _update_epsilon_curve(self, max_display_frame: float, show: bool) -> None:
         if not show or max_display_frame <= 0:
@@ -626,15 +794,13 @@ class LiveComparisonPlotter:
 
     def set_epsilon_schedule(
         self,
-        epsilon_max_frames: int,
-        epsilon_init: float,
-        epsilon_end: float,
-        epsilon_anneal_ratio: float,
+        epsilon_schedule: dict[str, float | int | str],
     ) -> None:
-        self.epsilon_max_frames = max(1, int(epsilon_max_frames))
-        self.epsilon_init = float(epsilon_init)
-        self.epsilon_end = float(epsilon_end)
-        self.epsilon_anneal_ratio = float(epsilon_anneal_ratio)
+        self.epsilon_schedule = dict(epsilon_schedule)
+        self.epsilon_max_frames = max(1, int(self.epsilon_schedule.get("max_frames", 1) or 1))
+        self.epsilon_init = float(self.epsilon_schedule.get("epsilon_init", 1.0))
+        self.epsilon_end = float(self.epsilon_schedule.get("epsilon_end", 0.0))
+        self.epsilon_anneal_ratio = float(self.epsilon_schedule.get("epsilon_anneal_ratio", 1.0))
         self.show_epsilon_overlay = True
 
     def update_from_payload(
@@ -688,6 +854,9 @@ class LiveComparisonPlotter:
                 selected_labels = [
                     key for key in sorted(by_device.keys()) if _device_matches_selector(key, self.device_selector)
                 ]
+            selected_labels = [
+                key for key in selected_labels if _reward_matches_selector(key, self.reward_ids_filter)
+            ]
 
             for device_key in selected_labels:
                 run_steps = by_device.get(device_key, {})
@@ -955,6 +1124,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reward-ids",
+        type=str,
+        default="all",
+        help=(
+            "Comma-separated reward ids to display (for example: current,capture_v0). "
+            "Use 'all' to show all reward ids present in progress data."
+        ),
+    )
+    parser.add_argument(
         "--epsilon-max-frames",
         type=int,
         default=None,
@@ -1001,6 +1179,16 @@ def _normalize_device_selector(raw: str) -> str:
     return device_label(value)
 
 
+def _normalize_reward_ids_selector(raw: str) -> set[str] | None:
+    value = str(raw).strip().lower()
+    if value in {"", "all", "*"}:
+        return None
+    reward_ids = {item.strip().lower() for item in value.split(",") if item.strip()}
+    if not reward_ids:
+        raise ValueError("Reward id selector cannot be empty.")
+    return reward_ids
+
+
 def main() -> None:
     args = parse_args()
     maze_runs_root = runs_root_for_maze(args.runs_root, args.maze)
@@ -1015,6 +1203,7 @@ def main() -> None:
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
     device_selector = _normalize_device_selector(args.device)
+    reward_ids_filter = _normalize_reward_ids_selector(args.reward_ids)
 
     if args.window < 1:
         raise ValueError("--window must be >= 1")
@@ -1046,23 +1235,39 @@ def main() -> None:
         )
         if epsilon_cfg is None:
             waiting_for_meta = True
-            epsilon_max_frames = 1
-            epsilon_init = 1.0
-            epsilon_end = 0.0
-            epsilon_anneal_ratio = 1.0
+            epsilon_schedule = {
+                "epsilon_schedule_mode": "global",
+                "max_frames": 1,
+                "epsilon_init": 1.0,
+                "epsilon_end": 0.0,
+                "epsilon_anneal_ratio": 1.0,
+                "epsilon_anneal_frames": 1,
+            }
         else:
-            epsilon_max_frames, epsilon_init, epsilon_end, epsilon_anneal_ratio = epsilon_cfg
+            epsilon_schedule = epsilon_cfg
     else:
-        epsilon_max_frames = 1
-        epsilon_init = 1.0
-        epsilon_end = 0.0
-        epsilon_anneal_ratio = 1.0
+        epsilon_schedule = {
+            "epsilon_schedule_mode": "global",
+            "max_frames": 1,
+            "epsilon_init": 1.0,
+            "epsilon_end": 0.0,
+            "epsilon_anneal_ratio": 1.0,
+            "epsilon_anneal_frames": 1,
+        }
 
     print("[LivePlot] Watching progress files:")
     for progress_file in progress_files:
         print(f"- {progress_file}")
     print(f"[LivePlot] Algorithms: {', '.join(algorithms)}")
     print(f"[LivePlot] Device selector: {device_selector}")
+    if reward_ids_filter is None:
+        print("[LivePlot] Reward-id selector: all")
+    else:
+        print(f"[LivePlot] Reward-id selector: {', '.join(sorted(reward_ids_filter))}")
+    epsilon_max_frames = int(epsilon_schedule.get("max_frames", 1) or 1)
+    epsilon_init = float(epsilon_schedule.get("epsilon_init", 1.0))
+    epsilon_end = float(epsilon_schedule.get("epsilon_end", 0.0))
+    epsilon_anneal_ratio = float(epsilon_schedule.get("epsilon_anneal_ratio", 1.0))
     print(
         "[LivePlot] Epsilon overlay: "
         f"init={epsilon_init} end={epsilon_end} "
@@ -1085,7 +1290,9 @@ def main() -> None:
         show_epsilon_overlay=show_epsilon and not waiting_for_meta,
         show_individual_reward_terms=args.individual_reward_plotting,
         reward_terms_filter=reward_terms_filter,
+        reward_ids_filter=reward_ids_filter,
     )
+    plotter.epsilon_schedule = dict(epsilon_schedule)
     try:
         while True:
             if show_epsilon and not plotter.show_epsilon_overlay:
@@ -1096,13 +1303,11 @@ def main() -> None:
                 _loop_core_data, _loop_term_data, loop_meta = _merge_progress_payloads(loop_payloads)
                 loop_epsilon_cfg = _resolve_epsilon_from_cli_or_meta(args, loop_meta)
                 if loop_epsilon_cfg is not None:
-                    loop_max_frames, loop_init, loop_end, loop_ratio = loop_epsilon_cfg
-                    plotter.set_epsilon_schedule(
-                        epsilon_max_frames=loop_max_frames,
-                        epsilon_init=loop_init,
-                        epsilon_end=loop_end,
-                        epsilon_anneal_ratio=loop_ratio,
-                    )
+                    plotter.set_epsilon_schedule(epsilon_schedule=loop_epsilon_cfg)
+                    loop_max_frames = int(loop_epsilon_cfg.get("max_frames", 1) or 1)
+                    loop_init = float(loop_epsilon_cfg.get("epsilon_init", 1.0))
+                    loop_end = float(loop_epsilon_cfg.get("epsilon_end", 0.0))
+                    loop_ratio = float(loop_epsilon_cfg.get("epsilon_anneal_ratio", 1.0))
                     print(
                         "[LivePlot] Epsilon overlay enabled from progress metadata: "
                         f"init={loop_init} end={loop_end} anneal_ratio={loop_ratio} "

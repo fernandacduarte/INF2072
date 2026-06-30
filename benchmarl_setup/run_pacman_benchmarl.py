@@ -58,11 +58,16 @@ def _tune_shared_experiment(
     algorithm: str,
     max_frames: int,
     maze: str,
+    pacman_curriculum: str,
     epsilon_anneal_ratio: float = 0.95,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
     schedule = training_exploration_schedule(
-        algorithm, maze, max_frames, epsilon_anneal_ratio
+        algorithm,
+        maze,
+        max_frames,
+        pacman_curriculum=pacman_curriculum,
+        anneal_ratio=float(epsilon_anneal_ratio),
     )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
@@ -335,6 +340,7 @@ def main() -> None:
         algorithm,
         args.max_frames,
         args.maze,
+        args.pacman_curriculum,
         float(args.epsilon_anneal_ratio),
     )
 
