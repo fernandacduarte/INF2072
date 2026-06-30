@@ -248,7 +248,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=20,
         help=(
-            "Deterministic eval_report episodes used to periodically backfill true capture% "
+            "Deterministic eval_report episodes used to periodically backfill true capture%% "
             "in live progress (set 0 to disable)."
         ),
     )
