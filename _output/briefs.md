@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-30 21:22 UTC | STARTED | 2026-06-30 21:17 UTC | research | is there any way to give a iql net a memory ?
+
+STARTED | 2026-06-30 20:58 UTC | research | como implementar um sistema de reward que a política seja que os ghosts aprendam a perseguir?
+
 DONE | 2026-06-30 18:19 UTC | STARTED | 2026-06-30 18:17 UTC | research | Minha dúvida é se estamos calculando os shaping rewards só com a técnica do PBRS, ou se estamos somando esses valores direto na função de rewards também
 
 DONE | 2026-06-30 00:49 UTC | STARTED | 2026-06-30 00:43 UTC | research | boas práticas de benchmarking com o paper Papoudakis_2021.pdf
