@@ -36,6 +36,9 @@ _REWARD_CLASS_BY_ID = {
     "capture_merge3": (
         "custom_environment.env.rewards.current:CaptureMerge3"
     ),
+    "capture_merge4": (
+        "custom_environment.env.rewards.current:CaptureMerge4"
+    ),
     "capture_merge2": (
         "custom_environment.env.rewards.current:CaptureMerge2"
     ),

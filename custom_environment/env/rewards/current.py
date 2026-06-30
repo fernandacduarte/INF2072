@@ -1252,6 +1252,11 @@ class CaptureMerge3Weights:
     invalid_move: float = -0.05
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureMerge4Weights(CaptureMerge3Weights):
+    potential_shaping_alpha: float = 0.7
+
+
 class CaptureMerge3(RewardStrategy):
     """Sparse capture reward with only explicit terminal/control terms.
 
@@ -1313,3 +1318,47 @@ class CaptureMerge3(RewardStrategy):
             terms.append(RewardTerm("PACMAN_WIN_PELLETS", w.pacman_win_pellets, "terminal"))
 
         return RewardResult(tuple(terms))
+
+
+class CaptureMerge4(CaptureMerge3):
+    """Capture-merge3 with PBRS potential shaping re-enabled."""
+
+    strategy_id = "capture_merge4"
+
+    def __init__(self, weights: CaptureMerge4Weights | None = None) -> None:
+        self.weights = weights or CaptureMerge4Weights()
+        self._last_potential: float | None = None
+
+    def reset(self, initial_context: RewardContext) -> None:
+        super().reset(initial_context)
+        self._last_potential = None
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        mean_distance = self._mean_distance(context)
+        if mean_distance is None:
+            return result
+
+        potential = -self.weights.potential_shaping_alpha * float(mean_distance)
+        if self._last_potential is None:
+            self._last_potential = potential
+            return result
+
+        shaping = RewardTerm("potential_shaping", potential - self._last_potential)
+        self._last_potential = potential
+        return RewardResult(result.terms + (shaping,))
+
+    def _mean_distance(self, context: RewardContext) -> float | None:
+        distances = [
+            self._bfs_distance(
+                ghost.current_position,
+                context.pacman_position,
+                context.board_shape,
+                context.wall_positions,
+            )
+            for ghost in context.ghosts
+        ]
+        reachable = [distance for distance in distances if distance is not None]
+        if not reachable:
+            return None
+        return sum(reachable) / len(reachable)
