@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-06-30 18:19 UTC | STARTED | 2026-06-30 18:17 UTC | research | Minha dúvida é se estamos calculando os shaping rewards só com a técnica do PBRS, ou se estamos somando esses valores direto na função de rewards também
+
 DONE | 2026-06-30 00:49 UTC | STARTED | 2026-06-30 00:43 UTC | research | boas práticas de benchmarking com o paper Papoudakis_2021.pdf
 
 DONE | 2026-06-29 21:39 UTC | STARTED | 2026-06-29 21:30 UTC | implement | 000036 | PLAN | 000036
