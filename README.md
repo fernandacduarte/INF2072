@@ -869,6 +869,11 @@ Four-way comparison setup:
   shaping (`0.2 * (prev_legal_moves - curr_legal_moves)` when visible), and a
   small penalty for immediate reverse ghost actions.
 
+- `custom_environment.env.rewards.current:CaptureV0PurePotentialShapingPellets`
+  (`strategy_id = capture_v0_pure_potential_shaping_pellets`):
+  `capture_v0_pure_potential_shaping` plus an extra shaping penalty
+  `pacman_eats_pellet = -0.5 * pellets_eaten_this_step`.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -969,6 +974,7 @@ Or use a built-in reward id alias:
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id current_with_overlap_or_same_corridor
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
 ```
 
 </details>
@@ -994,6 +1000,9 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0_pure_potential_shaping_pellets
 ```
 
 </details>
@@ -1052,6 +1061,7 @@ Built-in reward ids can also be passed directly:
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --reward-ids current,current_with_overlap_or_same_corridor
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
 ```
 
 </details>
@@ -1081,6 +1091,10 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql \
   --seeds 0,1,2 \
   --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
 ```
 
 </details>

@@ -968,6 +968,25 @@ class CaptureV0ClosingReward(CaptureV0Reward):
             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
 
         return RewardResult(tuple(terms))
+class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
+    """Pure potential shaping variant with a per-pellet Pacman penalty."""
+
+    strategy_id = "capture_v0_pure_potential_shaping_pellets"
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        pellets_eaten = int(context.pellets_eaten_this_step)
+        if pellets_eaten <= 0:
+            return result
+        return RewardResult(
+            result.terms
+            + (
+                RewardTerm(
+                    "pacman_eats_pellet",
+                    -0.5 * float(pellets_eaten),
+                ),
+            )
+        )
 
 
 class CaptureV0SparseControl(CaptureV0PurePotentialShaping):
