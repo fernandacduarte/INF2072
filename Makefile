@@ -17,7 +17,7 @@ ALGOS   ?= iql
 # 5 seeds per algorithm — constitution Q3 minimum and the Papoudakis-2021
 # benchmarking standard (D-003). Do not drop below 5 for reported results.
 SEEDS   ?= 0
-FRAMES  ?= 40000
+FRAMES  ?= 100000
 CHECKPOINT_INTERVAL ?= 5000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_closing
@@ -46,7 +46,7 @@ EPSILON_END ?= 0.05
 #   Dumbest:   make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy
 #   Noisy:     make benchmark CURRICULUM=off PACMAN_RANDOM_ACTION_PROB=0.5
 PACMAN_DIFFICULTY ?= hard
-PACMAN_RANDOM_ACTION_PROB ?= 0.5
+PACMAN_RANDOM_ACTION_PROB ?= 0.2
 PACMAN_SAFE_DISTANCE ?=
 PACMAN_SAFE_DISTANCE_ARG := $(if $(strip $(PACMAN_SAFE_DISTANCE)),--pacman-safe-distance $(PACMAN_SAFE_DISTANCE),)
 
