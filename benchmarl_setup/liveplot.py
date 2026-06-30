@@ -255,6 +255,11 @@ def _reward_matches_selector(label: str, allowed_reward_ids: set[str] | None) ->
     return effective_reward_id in allowed_reward_ids
 
 
+def _effective_reward_id_from_label(label: str) -> str:
+    reward_id, _parsed_device = _split_reward_and_device(label)
+    return reward_id if reward_id is not None else "current"
+
+
 def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
     raw = str(hex_color).strip().lstrip("#")
     if len(raw) != 6:
@@ -323,6 +328,27 @@ def _reward_variant_color(base_color: str, reward_id: str, ordered_reward_ids: l
 
     variant_rgb = colorsys.hls_to_rgb(var_h, var_l, var_s)
     return _rgb01_to_hex(variant_rgb)
+
+
+def _distinct_reward_palette_color(reward_id: str, ordered_reward_ids: list[str]) -> str:
+    # High-contrast palette for single-algorithm comparisons across reward ids.
+    palette = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#17becf",
+        "#bcbd22",
+        "#7f7f7f",
+    ]
+    try:
+        idx = ordered_reward_ids.index(reward_id)
+    except ValueError:
+        idx = 0
+    return palette[idx % len(palette)]
 
 
 def _curriculum_transition_frames_from_meta(meta: dict[str, str]) -> list[tuple[float, str]]:
@@ -758,7 +784,10 @@ class LiveComparisonPlotter:
         show_epsilon_overlay: bool,
         show_individual_reward_terms: bool,
         reward_terms_filter: set[str] | None,
-        reward_ids_filter: set[str] | None,
+        reward_ids_filter: list[str] | None,
+        algorithm_labels: dict[str, str] | None,
+        reward_id_labels: dict[str, str] | None,
+        plot_title: str | None,
     ) -> None:
         self.algorithms = algorithms
         self.window = window
@@ -771,6 +800,10 @@ class LiveComparisonPlotter:
         self.show_individual_reward_terms = bool(show_individual_reward_terms)
         self.reward_terms_filter = reward_terms_filter
         self.reward_ids_filter = reward_ids_filter
+        self.reward_ids_filter_set = set(reward_ids_filter) if reward_ids_filter is not None else None
+        self.algorithm_labels = algorithm_labels or {}
+        self.reward_id_labels = reward_id_labels or {}
+        self.plot_title_override = plot_title.strip() if plot_title else ""
 
         self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 5))
         self.ax_reward = self.ax.twinx()
@@ -813,8 +846,33 @@ class LiveComparisonPlotter:
 
         self._init_plot()
 
+    def _ordered_selected_labels(self, by_device: dict[str, object]) -> list[str]:
+        if self.device_selector == "all":
+            selected_labels = list(by_device.keys())
+        else:
+            selected_labels = [
+                key for key in by_device.keys() if _device_matches_selector(key, self.device_selector)
+            ]
+        selected_labels = [
+            key for key in selected_labels if _reward_matches_selector(key, self.reward_ids_filter_set)
+        ]
+
+        if not self.reward_ids_filter:
+            return sorted(selected_labels)
+
+        reward_order = {reward_id: idx for idx, reward_id in enumerate(self.reward_ids_filter)}
+        unknown_index = len(reward_order)
+        return sorted(
+            selected_labels,
+            key=lambda key: (
+                reward_order.get(_effective_reward_id_from_label(key), unknown_index),
+                _effective_reward_id_from_label(key),
+                key,
+            ),
+        )
+
     def _init_plot(self) -> None:
-        self.ax.set_title("Live Benchmark Comparison (True Capture Snapshots)")
+        self.ax.set_title(self.plot_title_override or "Live Benchmark Comparison (True Capture Snapshots)")
         self.ax.set_xlabel("Total frames")
         self.ax.set_ylabel("True Capture Rate (%)")
         # Keep a small negative margin so zero-valued capture lines/markers are visible above the axis frame.
@@ -838,6 +896,12 @@ class LiveComparisonPlotter:
             self.ax_terminal.set_ylabel("")
         plt.ion()
         plt.show(block=False)
+
+    def _algorithm_display_name(self, algorithm: str) -> str:
+        return self.algorithm_labels.get(algorithm, algorithm.upper())
+
+    def _reward_display_name(self, reward_id: str) -> str:
+        return self.reward_id_labels.get(reward_id, reward_id)
 
     def _line_style_for_device(self, device_key: str) -> str:
         _reward_id, parsed_device = _split_reward_and_device(device_key)
@@ -938,13 +1002,19 @@ class LiveComparisonPlotter:
         metric_name = (meta.get("metric") or "").strip().lower()
         if metric_name == "capture_pct_live_eval":
             self.ax.set_ylabel("True Capture Rate (%)")
-            self.ax.set_title("Live Benchmark Comparison (Rolling True Capture Rate)")
+            if not self.plot_title_override:
+                self.ax.set_title("Live Benchmark Comparison (Rolling True Capture Rate)")
         elif metric_name:
             self.ax.set_ylabel("Estimated Capture Rate (%)")
-            self.ax.set_title("Live Benchmark Comparison (Rolling Estimated Capture Rate)")
+            if not self.plot_title_override:
+                self.ax.set_title("Live Benchmark Comparison (Rolling Estimated Capture Rate)")
         else:
             self.ax.set_ylabel("Capture Rate (%)")
-            self.ax.set_title("Live Benchmark Comparison (Rolling Capture Rate)")
+            if not self.plot_title_override:
+                self.ax.set_title("Live Benchmark Comparison (Rolling Capture Rate)")
+
+        if self.plot_title_override:
+            self.ax.set_title(self.plot_title_override)
 
         # Remove old fills so uncertainty bands can be redrawn cleanly.
         for fill in self.fills_capture.values():
@@ -958,30 +1028,49 @@ class LiveComparisonPlotter:
         active_keys: set[str] = set()
         max_display_frame = 0.0
         reward_ids_by_algorithm: dict[str, list[str]] = {}
+        selected_labels_by_algorithm: dict[str, list[str]] = {}
+        selected_devices_for_labels: set[str] = set()
         for algorithm in self.algorithms:
             by_device = data.get(algorithm, {})
-            reward_ids = {
-                reward_id
-                for device_key in by_device.keys()
-                for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
-                if reward_id is not None
-            }
-            reward_ids_by_algorithm[algorithm] = sorted(reward_ids)
+            selected_labels = self._ordered_selected_labels(by_device)
+            selected_labels_by_algorithm[algorithm] = selected_labels
+
+            reward_ids_in_series: list[str] = []
+            seen_reward_ids: set[str] = set()
+            for device_key in selected_labels:
+                reward_id, _parsed_device = _split_reward_and_device(device_key)
+                if reward_id is None or reward_id in seen_reward_ids:
+                    continue
+                seen_reward_ids.add(reward_id)
+                reward_ids_in_series.append(reward_id)
+
+            if self.reward_ids_filter:
+                available = set(reward_ids_in_series)
+                reward_ids_by_algorithm[algorithm] = [
+                    reward_id for reward_id in self.reward_ids_filter if reward_id in available
+                ]
+            else:
+                reward_ids_by_algorithm[algorithm] = reward_ids_in_series
+
+            for key in selected_labels:
+                _reward_id, parsed_device = _split_reward_and_device(key)
+                selected_devices_for_labels.add(parsed_device)
+
+        include_device_suffix = not (
+            selected_devices_for_labels
+            and all(device.startswith("cuda") for device in selected_devices_for_labels)
+        )
+        active_algorithms = [
+            algorithm for algorithm in self.algorithms if selected_labels_by_algorithm.get(algorithm)
+        ]
+        single_algorithm_mode = len(active_algorithms) == 1
 
         for algorithm in self.algorithms:
             by_device = data.get(algorithm, {})
             if not by_device:
                 continue
 
-            if self.device_selector == "all":
-                selected_labels = sorted(by_device.keys())
-            else:
-                selected_labels = [
-                    key for key in sorted(by_device.keys()) if _device_matches_selector(key, self.device_selector)
-                ]
-            selected_labels = [
-                key for key in selected_labels if _reward_matches_selector(key, self.reward_ids_filter)
-            ]
+            selected_labels = selected_labels_by_algorithm.get(algorithm, [])
 
             for device_key in selected_labels:
                 run_steps = by_device.get(device_key, {})
@@ -996,15 +1085,22 @@ class LiveComparisonPlotter:
                 series_key = f"{algorithm}@{device_key}"
                 active_keys.add(series_key)
                 reward_id, parsed_device = _split_reward_and_device(device_key)
-                legend_suffix = (
-                    f"{reward_id}@{parsed_device}" if reward_id is not None else parsed_device
-                )
+                algorithm_name = self._algorithm_display_name(algorithm)
+                if reward_id is not None:
+                    reward_name = self._reward_display_name(reward_id)
+                    legend_suffix = f"{reward_name}@{parsed_device}" if include_device_suffix else reward_name
+                else:
+                    legend_suffix = parsed_device if include_device_suffix else ""
                 ordered_reward_ids = reward_ids_by_algorithm.get(algorithm, [])
                 color = self.color_map.get(algorithm, "#1f77b4")
                 if reward_id is not None:
-                    color = _reward_variant_color(color, reward_id, ordered_reward_ids)
-                legend_capture = f"{algorithm.upper()}@{legend_suffix} capture snapshot% (n={n_runs})"
-                legend_reward = f"{algorithm.upper()}@{legend_suffix} reward"
+                    if single_algorithm_mode and len(ordered_reward_ids) > 1:
+                        color = _distinct_reward_palette_color(reward_id, ordered_reward_ids)
+                    else:
+                        color = _reward_variant_color(color, reward_id, ordered_reward_ids)
+                series_name = f"{algorithm_name}@{legend_suffix}" if legend_suffix else algorithm_name
+                legend_capture = f"{series_name} capture snapshot% (n={n_runs})"
+                legend_reward = f"{series_name} reward"
                 valid_mask = ~np.isnan(mean_captures)
                 valid_frames = frames[valid_mask]
                 valid_captures = mean_captures[valid_mask]
@@ -1106,7 +1202,7 @@ class LiveComparisonPlotter:
                                 stale_terminal.remove()
                             continue
 
-                        legend_term = f"{algorithm.upper()}@{legend_suffix} reward::{term_name}"
+                        legend_term = f"{series_name} reward::{term_name}"
                         marker, term_linestyle = self._reward_term_style(term_name)
                         is_terminal_term = _is_terminal_reward_term(term_name)
                         target_lines = self.lines_terminal_terms if is_terminal_term else self.lines_reward_terms
@@ -1292,6 +1388,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable plotting individual reward terms (disabled by default).",
     )
+    parser.add_argument(
+        "--algorithm-labels",
+        type=str,
+        default="",
+        help="Optional algorithm display-name mapping: algorithm=Label pairs separated by commas.",
+    )
+    parser.add_argument(
+        "--reward-id-labels",
+        type=str,
+        default="",
+        help="Optional reward-id display-name mapping: reward_id=Label pairs separated by commas.",
+    )
+    parser.add_argument(
+        "--plot-title",
+        type=str,
+        default="",
+        help="Optional custom plot title.",
+    )
     return parser.parse_args()
 
 
@@ -1304,14 +1418,40 @@ def _normalize_device_selector(raw: str) -> str:
     return device_label(value)
 
 
-def _normalize_reward_ids_selector(raw: str) -> set[str] | None:
+def _normalize_reward_ids_selector(raw: str) -> list[str] | None:
     value = str(raw).strip().lower()
     if value in {"", "all", "*"}:
         return None
-    reward_ids = {item.strip().lower() for item in value.split(",") if item.strip()}
+    reward_ids: list[str] = []
+    seen: set[str] = set()
+    for item in value.split(","):
+        reward_id = item.strip().lower()
+        if not reward_id or reward_id in seen:
+            continue
+        seen.add(reward_id)
+        reward_ids.append(reward_id)
     if not reward_ids:
         raise ValueError("Reward id selector cannot be empty.")
     return reward_ids
+
+
+def _parse_name_mapping(raw: str) -> dict[str, str]:
+    value = str(raw).strip()
+    if value in {"", "none"}:
+        return {}
+
+    mapping: dict[str, str] = {}
+    for item in value.split(","):
+        chunk = item.strip()
+        if not chunk:
+            continue
+        key, sep, label = chunk.partition("=")
+        if sep != "=" or not key.strip() or not label.strip():
+            raise ValueError(
+                "Invalid mapping entry. Expected key=value pairs separated by commas."
+            )
+        mapping[key.strip().lower()] = label.strip()
+    return mapping
 
 
 def main() -> None:
@@ -1327,6 +1467,11 @@ def main() -> None:
     invalid = [name for name in algorithms if name not in SUPPORTED_ALGORITHMS]
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {list(SUPPORTED_ALGORITHMS)}")
+    raw_algorithm_labels = _parse_name_mapping(args.algorithm_labels)
+    algorithm_labels = {
+        normalize_algorithm(key): value for key, value in raw_algorithm_labels.items()
+    }
+    reward_id_labels = _parse_name_mapping(args.reward_id_labels)
     device_selector = _normalize_device_selector(args.device)
     reward_ids_filter = _normalize_reward_ids_selector(args.reward_ids)
 
@@ -1417,6 +1562,9 @@ def main() -> None:
         show_individual_reward_terms=args.individual_reward_plotting,
         reward_terms_filter=reward_terms_filter,
         reward_ids_filter=reward_ids_filter,
+        algorithm_labels=algorithm_labels,
+        reward_id_labels=reward_id_labels,
+        plot_title=args.plot_title,
     )
     plotter.epsilon_schedule = dict(epsilon_schedule)
     try:

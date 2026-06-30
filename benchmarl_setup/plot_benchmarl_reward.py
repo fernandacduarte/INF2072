@@ -442,13 +442,78 @@ def _device_matches_selector(label: str, selector: str) -> bool:
     return parsed_device == selector
 
 
-def _reward_matches_selector(label: str, selector: str | None) -> bool:
-    if selector is None:
+def _reward_matches_any_selector(label: str, selectors: set[str] | None) -> bool:
+    if selectors is None:
         return True
     reward_id, _parsed_device = _split_reward_and_device(label)
-    # Legacy rows may not carry reward_id; treat them as current baseline.
     effective_reward_id = reward_id if reward_id is not None else "current"
-    return effective_reward_id == selector
+    return effective_reward_id in selectors
+
+
+def _effective_reward_id_from_label(label: str) -> str:
+    reward_id, _parsed_device = _split_reward_and_device(label)
+    return reward_id if reward_id is not None else "current"
+
+
+def _normalize_reward_ids_selector(raw: str) -> list[str] | None:
+    value = str(raw).strip().lower()
+    if value in {"", "all", "*"}:
+        return None
+
+    reward_ids: list[str] = []
+    seen: set[str] = set()
+    for item in value.split(","):
+        reward_id = item.strip().lower()
+        if not reward_id or reward_id in seen:
+            continue
+        seen.add(reward_id)
+        reward_ids.append(reward_id)
+    if not reward_ids:
+        raise ValueError("Reward id selector cannot be empty.")
+    return reward_ids
+
+
+def _order_labels_by_reward_ids(labels: list[str], reward_ids_order: list[str] | None) -> list[str]:
+    if not reward_ids_order:
+        return sorted(labels)
+
+    reward_order = {reward_id: idx for idx, reward_id in enumerate(reward_ids_order)}
+    unknown_index = len(reward_order)
+    return sorted(
+        labels,
+        key=lambda key: (
+            reward_order.get(_effective_reward_id_from_label(key), unknown_index),
+            _effective_reward_id_from_label(key),
+            key,
+        ),
+    )
+
+
+def _parse_name_mapping(raw: str) -> dict[str, str]:
+    value = str(raw).strip()
+    if value in {"", "none"}:
+        return {}
+
+    mapping: dict[str, str] = {}
+    for item in value.split(","):
+        chunk = item.strip()
+        if not chunk:
+            continue
+        key, sep, label = chunk.partition("=")
+        if sep != "=" or not key.strip() or not label.strip():
+            raise ValueError(
+                "Invalid mapping entry. Expected key=value pairs separated by commas."
+            )
+        mapping[key.strip().lower()] = label.strip()
+    return mapping
+
+
+def _algorithm_display_name(algorithm: str, mapping: dict[str, str]) -> str:
+    return mapping.get(algorithm, algorithm.upper())
+
+
+def _reward_display_name(reward_id: str, mapping: dict[str, str]) -> str:
+    return mapping.get(reward_id, reward_id)
 
 
 def _color_with_multiplier(hex_color: str, multiplier: float) -> str:
@@ -858,6 +923,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reward-ids",
+        type=str,
+        default="",
+        help=(
+            "Optional comma-separated reward ids to filter and order legend labels "
+            "(for example: capture_merge3,capture_merge4)."
+        ),
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="auto",
@@ -932,6 +1006,24 @@ def parse_args() -> argparse.Namespace:
         help="Enable plotting individual reward terms (disabled by default).",
     )
     parser.add_argument(
+        "--algorithm-labels",
+        type=str,
+        default="",
+        help="Optional algorithm display-name mapping: algorithm=Label pairs separated by commas.",
+    )
+    parser.add_argument(
+        "--reward-id-labels",
+        type=str,
+        default="",
+        help="Optional reward-id display-name mapping: reward_id=Label pairs separated by commas.",
+    )
+    parser.add_argument(
+        "--plot-title",
+        type=str,
+        default="",
+        help="Optional custom plot title.",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -974,6 +1066,11 @@ def main() -> None:
 
     requested_device = args.device.strip().lower()
     requested_reward_id = args.reward_id.strip().lower()
+    requested_reward_ids = _normalize_reward_ids_selector(args.reward_ids)
+    reward_selector_list = requested_reward_ids
+    if reward_selector_list is None:
+        reward_selector_list = [requested_reward_id] if requested_reward_id else None
+    reward_selector_set = set(reward_selector_list) if reward_selector_list is not None else None
     if requested_device != "auto":
         selected_device_label = device_label(requested_device)
         device_root = discovery_root / selected_device_label
@@ -1015,6 +1112,12 @@ def main() -> None:
     invalid = [name for name in algorithms if name not in allowed]
     if invalid:
         raise ValueError(f"Unsupported algorithm(s): {invalid}. Allowed: {sorted(allowed)}")
+
+    raw_algorithm_labels = _parse_name_mapping(args.algorithm_labels)
+    algorithm_labels = {
+        normalize_algorithm(key): value for key, value in raw_algorithm_labels.items()
+    }
+    reward_id_labels = _parse_name_mapping(args.reward_id_labels)
 
     epsilon_algorithm_raw = progress_meta.get("epsilon_algorithm", "")
     epsilon_algorithm = (
@@ -1087,6 +1190,7 @@ def main() -> None:
     }
 
     per_algorithm: dict[str, dict[str, object]] = {}
+    all_devices_for_labels: set[str] = set()
     selected_run_names = (
         {path.name for path in args.run_dir if path is not None}
         if args.run_dir
@@ -1105,15 +1209,16 @@ def main() -> None:
             selected_devices = [
                 key
                 for key in sorted(by_device.keys())
-                if _reward_matches_selector(key, requested_reward_id)
+                if _reward_matches_any_selector(key, reward_selector_set)
             ]
         else:
             selected_devices = [
                 key
                 for key in sorted(by_device.keys())
                 if _device_matches_selector(key, requested_device)
-                and _reward_matches_selector(key, requested_reward_id)
+                and _reward_matches_any_selector(key, reward_selector_set)
             ]
+        selected_devices = _order_labels_by_reward_ids(selected_devices, reward_selector_list)
 
         if not selected_devices:
             print(
@@ -1125,15 +1230,20 @@ def main() -> None:
         run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
         run_terms: dict[str, dict[str, dict[int, float]]] = {}
         used_run_dirs: list[str] = []
+        used_devices: set[str] = set()
         reward_ids = {
             reward_id
             for device_key in selected_devices
             for reward_id, _parsed_device in [_split_reward_and_device(device_key)]
             if reward_id is not None
         }
-        ordered_reward_ids = sorted(reward_ids)
+        if reward_selector_list is not None:
+            ordered_reward_ids = [reward_id for reward_id in reward_selector_list if reward_id in reward_ids]
+        else:
+            ordered_reward_ids = sorted(reward_ids)
 
         for device_key in selected_devices:
+            _reward_id, parsed_device = _split_reward_and_device(device_key)
             for run_id, step_map in by_device.get(device_key, {}).items():
                 # Merged multi-machine progress prefixes run ids as "machine:run".
                 canonical_run_id = run_id.split(":", 1)[-1]
@@ -1148,6 +1258,7 @@ def main() -> None:
                 run_steps[run_key] = step_map
                 run_terms[run_key] = progress_term_data.get(algorithm, {}).get(device_key, {}).get(run_id, {})
                 used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
+                used_devices.add(parsed_device)
 
         aggregated = _aggregate_algorithm_runs(run_steps, args.window)
         if aggregated is None:
@@ -1166,6 +1277,8 @@ def main() -> None:
             color = _reward_variant_color(color, reward_id, ordered_reward_ids)
             series_label = f"{algorithm.upper()}@{reward_id}"
 
+        all_devices_for_labels.update(used_devices)
+
         per_algorithm[algorithm] = {
             "frames": frames,
             "capture_mean": capture_mean,
@@ -1178,12 +1291,19 @@ def main() -> None:
             "used_run_dirs": used_run_dirs,
             "color": color,
             "series_label": series_label,
+            "reward_ids": ordered_reward_ids,
+            "devices_used": sorted(used_devices),
         }
 
     if not per_algorithm:
         raise FileNotFoundError(
             "No usable runs were found for selected algorithms."
         )
+
+    include_device_suffix = not (
+        all_devices_for_labels
+        and all(device.startswith("cuda") for device in all_devices_for_labels)
+    )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1207,7 +1327,21 @@ def main() -> None:
         reward_mean = payload["reward_mean"]
         run_terms = payload["run_terms"]
         color = payload["color"]
-        series_label = payload.get("series_label", algorithm.upper())
+        algorithm_name = _algorithm_display_name(algorithm, algorithm_labels)
+        reward_ids_for_series = payload.get("reward_ids", [])
+        devices_for_series = payload.get("devices_used", [])
+        series_label = algorithm_name
+        if len(reward_ids_for_series) == 1:
+            reward_id = reward_ids_for_series[0]
+            series_label = f"{algorithm_name}@{_reward_display_name(reward_id, reward_id_labels)}"
+        elif reward_ids_for_series and requested_reward_ids is not None:
+            rendered_reward_ids = ",".join(
+                _reward_display_name(reward_id, reward_id_labels)
+                for reward_id in reward_ids_for_series
+            )
+            series_label = f"{algorithm_name}@{rendered_reward_ids}"
+        if include_device_suffix and len(devices_for_series) == 1:
+            series_label = f"{series_label}@{devices_for_series[0]}"
 
         valid_capture_mask = ~np.isnan(capture_mean)
         valid_frames = frames[valid_capture_mask]
@@ -1344,7 +1478,7 @@ def main() -> None:
     ax.set_xlabel("Total frames")
     ax.set_ylabel("True Capture Rate (%)")
     ax.set_ylim(0.0, 100.0)
-    ax.set_title("Benchmark True Capture Rate Across Runs")
+    ax.set_title(args.plot_title.strip() or "Benchmark True Capture Rate Across Runs")
     ax.grid(True, alpha=0.3)
     handles, labels = ax.get_legend_handles_labels()
     reward_handles, reward_labels = ax_reward.get_legend_handles_labels()

@@ -673,8 +673,16 @@ py -3.11 benchmarl_setup\liveplot.py --maze pinklike --device all --interval 1.0
 py -3.11 benchmarl_setup\liveplot.py --maze pinklike3 --algorithms iql,vdn --reward-ids capture_v0_pure_potential_shaping_pellets,capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms all
 py -3.11 benchmarl_setup\liveplot.py --individual-reward-plotting --reward-terms timestep,potential_shaping
+py -3.11 benchmarl_setup\liveplot.py --algorithm-labels "iql=IQL Agent,vdn=VDN Team" --reward-id-labels "current=Baseline,capture_merge4=CM4" --plot-title "Pinklike3 live comparison"
 py -3.11 benchmarl_setup\run_benchmark.py --maze pinklike --live-progress-file benchmarl_setup\runs\pinklike\live_progress.csvl --report-interval-seconds 1.0
 ```
+
+Live/offline legend formatting note: when every selected series is on CUDA,
+the plot legends omit the redundant `@cuda` suffix.
+When `--reward-ids` is provided, reward-id entries in legends follow exactly
+the same order as passed on CLI.
+In live plot, if all visible curves belong to a single algorithm, reward-id
+curves use distinct colors (not hue/lightness variants of one base color).
 
 ### Plot Benchmark Capture % in One Figure (IQL, VDN, QMIX Local, QMIX Global)
 
@@ -709,9 +717,12 @@ Useful options:
 
 ```bash
 --reward-id current --device auto|cpu|cuda|cuda:0
+--reward-ids capture_merge3,capture_merge4
 --progress-file benchmarl_setup\runs\pinklike3\live_progress.csvl
 --epsilon-max-frames 200000 --epsilon-init 1.0 --epsilon-end 0.10 --epsilon-anneal-ratio 0.95
 --individual-reward-plotting --reward-terms all|timestep,potential_shaping
+--algorithm-labels "iql=IQL Agent,vdn=VDN Team" --reward-id-labels "current=Baseline,capture_merge4=CM4"
+--plot-title "Benchmark True Capture Rate (Pinklike3)"
 --maze pinklike --window 30 --out benchmarl_setup\runs\pinklike\benchmark_iql_vdn.png --no-open
 ```
 
