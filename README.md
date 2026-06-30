@@ -908,6 +908,21 @@ Four-way comparison setup:
   `capture_merge_potential_shaping`, but with the `potential_shaping` and
   reversal-related reward terms disabled.
 
+- `custom_environment.env.rewards.current:CaptureMerge2`
+  (`strategy_id = capture_merge2`): tuned anti-oscillation variant. Keeps
+  `potential_shaping` enabled, strengthens `two_step_cycle` and
+  `repeated_direction_reversal` penalties, and adds
+  `no_progress_visible` after a short grace window when Pacman is visible
+  but pursuit does not improve.
+
+- `custom_environment.env.rewards.current:CaptureMerge3`
+  (`strategy_id = capture_merge3`): sparse capture objective with only
+  `timestep=-0.005`, `GET_PACMAN=+100`,
+  `fast_get_pacman_bonus=20*(1-step_count/max_steps)`,
+  `PACMAN_TIMEOUT_WIN=-100`, `PACMAN_WIN_PELLETS=-100`,
+  `pacman_eats_pellet=-0.5*pellets_eaten`, and
+  `invalid_move=-0.05*invalid_moves`.
+
 - `custom_environment.env.rewards.current:CurrentGitTeamReward`
   (`strategy_id = current_git`): git baseline rewards and logic.
 - `custom_environment.env.rewards.current:CurrentTeamReward`
@@ -1011,6 +1026,8 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id cap
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets_fast_capture_bonus
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge2
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge3
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_merge_potential_shaping
 ```
 
@@ -1046,6 +1063,12 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_merge
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_merge2
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_merge3
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_merge_potential_shaping

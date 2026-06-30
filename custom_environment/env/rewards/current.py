@@ -987,6 +987,18 @@ class CaptureMergePotentialShapingWeights:
     fast_get_pacman_bonus_scale: float = 20.0
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureMerge2Weights(CaptureMergePotentialShapingWeights):
+    # Stronger anti-loop pressure.
+    repeated_direction_reversal: float = -0.10
+    two_step_cycle: float = -0.18
+    # Slightly stronger PBRS pull for pursuit.
+    potential_shaping_alpha: float = 1.0
+    # Penalize visible-but-stalled behavior after a short grace window.
+    no_progress_visible: float = -0.05
+    no_progress_visible_grace_steps: int = 2
+
+
 class CaptureMergePotentialShaping(CurrentGitTeamReward):
     """Merged sparse-PBRS reward with selected current-team shaping terms.
 
@@ -1173,3 +1185,131 @@ class CaptureMerge(CaptureMergePotentialShaping):
         if len(filtered_terms) == len(result.terms):
             return result
         return RewardResult(filtered_terms)
+
+
+class CaptureMerge2(CaptureMergePotentialShaping):
+    """Capture-merge variant tuned to reduce visible oscillation.
+
+    Differences from ``capture_merge``:
+    - Keeps ``potential_shaping`` enabled.
+    - Keeps and strengthens ``repeated_direction_reversal``.
+    - Strengthens ``two_step_cycle``.
+    - Adds ``no_progress_visible`` after a grace window.
+    """
+
+    strategy_id = "capture_merge2"
+
+    def __init__(self, weights: CaptureMerge2Weights | None = None) -> None:
+        self.weights = weights or CaptureMerge2Weights()
+        self._last_potential: float | None = None
+        self._last_any_pacman_visible = False
+        self._unseen_steps = self.weights.newly_spotted_min_unseen_steps
+        self._last_move_direction: dict[str, Position | None] = {}
+        self._reverse_streak: dict[str, int] = {}
+        self._recent_positions: dict[str, deque[Position]] = {}
+        self._seen_local_cells: dict[str, set[Position]] = {}
+        self._last_tile_visit_step: dict[str, dict[Position, int]] = {}
+        self._visible_no_progress_steps = 0
+
+    def reset(self, initial_context: RewardContext) -> None:
+        super().reset(initial_context)
+        self._visible_no_progress_steps = 0
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        terms = result.terms
+
+        if context.pacman_visible:
+            had_progress = any(term.name == "currently_visible" for term in terms)
+            if had_progress:
+                self._visible_no_progress_steps = 0
+            elif self._last_potential is not None:
+                self._visible_no_progress_steps += 1
+                if self._visible_no_progress_steps > self.weights.no_progress_visible_grace_steps:
+                    terms = terms + (
+                        RewardTerm("no_progress_visible", self.weights.no_progress_visible),
+                    )
+        else:
+            self._visible_no_progress_steps = 0
+
+        disabled_terms = {"reverse_action"}
+        filtered_terms = tuple(
+            term for term in terms if term.name not in disabled_terms
+        )
+        if len(filtered_terms) == len(terms):
+            return RewardResult(terms)
+        return RewardResult(filtered_terms)
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureMerge3Weights:
+    timestep: float = -0.005
+    get_pacman: float = 100.0
+    fast_get_pacman_bonus_scale: float = 20.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    pacman_eats_pellet: float = -0.5
+    invalid_move: float = -0.05
+
+
+class CaptureMerge3(RewardStrategy):
+    """Sparse capture reward with only explicit terminal/control terms.
+
+    Enabled terms:
+    - timestep
+    - GET_PACMAN
+    - fast_get_pacman_bonus
+    - PACMAN_TIMEOUT_WIN
+    - PACMAN_WIN_PELLETS
+    - pacman_eats_pellet
+    - invalid_move
+    """
+
+    strategy_id = "capture_merge3"
+
+    def __init__(self, weights: CaptureMerge3Weights | None = None) -> None:
+        self.weights = weights or CaptureMerge3Weights()
+
+    def reset(self, initial_context: RewardContext) -> None:
+        _ = initial_context
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        w = self.weights
+        terms = [RewardTerm("timestep", w.timestep)]
+
+        if context.capture_happened:
+            terms.append(RewardTerm("GET_PACMAN", w.get_pacman, "terminal"))
+            max_episode_steps = int(context.max_steps)
+            steps_elapsed = int(context.step_count)
+            if max_episode_steps <= 0:
+                bonus_multiplier = 0.0
+            else:
+                progress = float(steps_elapsed) / float(max_episode_steps)
+                progress = min(max(progress, 0.0), 1.0)
+                bonus_multiplier = 1.0 - progress
+            terms.append(
+                RewardTerm(
+                    "fast_get_pacman_bonus",
+                    w.fast_get_pacman_bonus_scale * bonus_multiplier,
+                )
+            )
+
+        pellets_eaten = int(context.pellets_eaten_this_step)
+        if pellets_eaten > 0:
+            terms.append(
+                RewardTerm(
+                    "pacman_eats_pellet",
+                    w.pacman_eats_pellet * float(pellets_eaten),
+                )
+            )
+
+        invalid_moves = sum(1 for ghost in context.ghosts if ghost.invalid_move)
+        if invalid_moves > 0:
+            terms.append(RewardTerm("invalid_move", w.invalid_move * float(invalid_moves)))
+
+        if context.timeout_happened:
+            terms.append(RewardTerm("PACMAN_TIMEOUT_WIN", w.pacman_timeout_win, "terminal"))
+        if context.pacman_win_happened:
+            terms.append(RewardTerm("PACMAN_WIN_PELLETS", w.pacman_win_pellets, "terminal"))
+
+        return RewardResult(tuple(terms))

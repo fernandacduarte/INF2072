@@ -14,6 +14,8 @@ from custom_environment.env.rewards import (
 )
 from custom_environment.env.rewards.current import (
     CaptureMerge,
+    CaptureMerge2,
+    CaptureMerge3,
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
     CaptureV0PurePotentialShaping,
     CaptureV0PurePotentialShapingPelletsFastCaptureBonus,
@@ -695,6 +697,171 @@ def test_loader_resolves_capture_merge_id():
     assert strategy.strategy_id == "capture_merge"
 
 
+def test_loader_resolves_capture_merge2_id():
+    strategy = load_reward_strategy(reward_class_from_id("capture_merge2"))
+    assert isinstance(strategy, CaptureMerge2)
+    assert strategy.strategy_id == "capture_merge2"
+    assert strategy.weights.potential_shaping_alpha == pytest.approx(1.0)
+    assert strategy.weights.two_step_cycle == pytest.approx(-0.18)
+    assert strategy.weights.repeated_direction_reversal == pytest.approx(-0.10)
+
+
+def test_loader_resolves_capture_merge3_id():
+    strategy = load_reward_strategy(reward_class_from_id("capture_merge3"))
+    assert isinstance(strategy, CaptureMerge3)
+    assert strategy.strategy_id == "capture_merge3"
+
+
+def test_capture_merge3_emits_only_requested_terms():
+    strategy = CaptureMerge3()
+
+    context = RewardContext(
+        step_count=10,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 1),
+                current_position=(0, 1),
+                action=0,
+                invalid_move=True,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=True,
+        visible_pacman_positions=((0, 5),),
+        pellets_before=3,
+        pellets_remaining=2,
+        total_pellets=3,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.reset(context)
+    result = strategy.compute(context)
+
+    assert result.breakdown["timestep"] == pytest.approx(-0.005)
+    assert result.breakdown["pacman_eats_pellet"] == pytest.approx(-0.5)
+    assert result.breakdown["invalid_move"] == pytest.approx(-0.05)
+
+    disabled_terms = {
+        "potential_shaping",
+        "newly_spotted",
+        "currently_visible",
+        "recently_unvisited_tile",
+        "reveal_unseen_local_cells",
+        "stay_still",
+        "two_step_cycle",
+        "repeated_direction_reversal",
+        "reverse_action",
+        "valid_move",
+        "no_progress_visible",
+    }
+    for name in disabled_terms:
+        assert name not in result.breakdown
+
+
+def test_capture_merge3_emits_requested_terminal_terms():
+    strategy = CaptureMerge3()
+
+    capture_context = RewardContext(
+        step_count=50,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 4),
+                current_position=(0, 5),
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=True,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.reset(capture_context)
+    capture_result = strategy.compute(capture_context)
+    assert capture_result.breakdown["GET_PACMAN"] == pytest.approx(100.0)
+    assert capture_result.breakdown["fast_get_pacman_bonus"] == pytest.approx(15.0)
+
+    timeout_context = RewardContext(
+        step_count=200,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 1),
+                current_position=(0, 1),
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 10),
+        pacman_position=(0, 10),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=True,
+        pacman_win_happened=False,
+    )
+    timeout_result = strategy.compute(timeout_context)
+    assert timeout_result.breakdown["PACMAN_TIMEOUT_WIN"] == pytest.approx(-100.0)
+
+    pellet_win_context = RewardContext(
+        step_count=100,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 1),
+                current_position=(0, 1),
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 10),
+        pacman_position=(0, 10),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=0,
+        pellets_remaining=0,
+        total_pellets=10,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=True,
+    )
+    pellet_win_result = strategy.compute(pellet_win_context)
+    assert pellet_win_result.breakdown["PACMAN_WIN_PELLETS"] == pytest.approx(-100.0)
+
+
 def test_capture_merge_disables_potential_shaping_term():
     strategy = CaptureMerge()
     strategy.reset(_pbrs_context(0, 5))
@@ -703,6 +870,153 @@ def test_capture_merge_disables_potential_shaping_term():
     second = strategy.compute(_pbrs_context(1, 5, step_count=2))
 
     assert "potential_shaping" not in second.breakdown
+
+
+def test_capture_merge2_keeps_potential_shaping_term():
+    strategy = CaptureMerge2()
+    strategy.reset(_pbrs_context(0, 5))
+
+    first = strategy.compute(_pbrs_context(0, 5, step_count=1))
+    second = strategy.compute(_pbrs_context(1, 5, step_count=2))
+
+    assert "potential_shaping" not in first.breakdown
+    assert "potential_shaping" in second.breakdown
+
+
+def test_capture_merge2_keeps_reversal_penalty_with_stronger_weight():
+    strategy = CaptureMerge2()
+
+    initial_context = RewardContext(
+        step_count=0,
+        max_steps=200,
+        board_shape=(1, 12),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=(
+            GhostTransition(
+                ghost_id="ghost_1",
+                previous_position=(0, 1),
+                current_position=(0, 1),
+                action=0,
+                invalid_move=False,
+                local_observation=((1, 1, 1),),
+            ),
+        ),
+        pacman_previous_position=(0, 5),
+        pacman_position=(0, 5),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+    strategy.reset(initial_context)
+
+    strategy.compute(
+        RewardContext(
+            step_count=1,
+            max_steps=200,
+            board_shape=(1, 12),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=(
+                GhostTransition(
+                    ghost_id="ghost_1",
+                    previous_position=(0, 1),
+                    current_position=(0, 2),
+                    action=0,
+                    invalid_move=False,
+                    local_observation=((1, 1, 1),),
+                ),
+            ),
+            pacman_previous_position=(0, 5),
+            pacman_position=(0, 5),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+    )
+
+    result = strategy.compute(
+        RewardContext(
+            step_count=2,
+            max_steps=200,
+            board_shape=(1, 12),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=(
+                GhostTransition(
+                    ghost_id="ghost_1",
+                    previous_position=(0, 2),
+                    current_position=(0, 1),
+                    action=1,
+                    invalid_move=False,
+                    local_observation=((1, 1, 1),),
+                ),
+            ),
+            pacman_previous_position=(0, 5),
+            pacman_position=(0, 5),
+            pacman_visible=False,
+            visible_pacman_positions=(),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+    )
+
+    assert result.breakdown["repeated_direction_reversal"] == pytest.approx(-0.10)
+
+
+def test_capture_merge2_adds_visible_no_progress_penalty_after_grace():
+    strategy = CaptureMerge2()
+
+    def visible_context(step_count: int) -> RewardContext:
+        return RewardContext(
+            step_count=step_count,
+            max_steps=200,
+            board_shape=(1, 12),
+            ghost_view_radius=1,
+            wall_positions=frozenset(),
+            ghosts=(
+                GhostTransition(
+                    ghost_id="ghost_1",
+                    previous_position=(0, 2),
+                    current_position=(0, 2),
+                    action=0,
+                    invalid_move=False,
+                    local_observation=((1, 1, 1),),
+                ),
+            ),
+            pacman_previous_position=(0, 5),
+            pacman_position=(0, 5),
+            pacman_visible=True,
+            visible_pacman_positions=((0, 5),),
+            pellets_before=1,
+            pellets_remaining=1,
+            total_pellets=1,
+            capture_happened=False,
+            timeout_happened=False,
+            pacman_win_happened=False,
+        )
+
+    strategy.reset(visible_context(0))
+    strategy.compute(visible_context(1))
+    strategy.compute(visible_context(2))
+    strategy.compute(visible_context(3))
+    result = strategy.compute(visible_context(4))
+
+    assert result.breakdown["no_progress_visible"] == pytest.approx(-0.05)
 
 
 def test_capture_merge_disables_reversal_terms():
