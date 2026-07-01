@@ -50,6 +50,7 @@ MANIFEST_FIELDS = [
     "max_frames",
     "eval_episodes",
     "save_folder",
+    "status",
     "git_commit",
     "git_dirty",
     "timestamp_utc",
@@ -227,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  points (p): {', '.join(str(p) for p in points)}")
     print()
 
+    failed_points: list[float] = []
     for p in points:
         evasiveness = 1.0 - p
         save_folder = _point_folder(save_root, p)
@@ -236,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             continue
         result = subprocess.run(command, cwd=str(PROJECT_ROOT))
+        status = "ok" if result.returncode == 0 else f"failed(exit={result.returncode})"
         _append_manifest_row(
             manifest_path,
             {
@@ -249,18 +252,34 @@ def main(argv: list[str] | None = None) -> int:
                 # Stored relative to the manifest's own directory (the save-root) so
                 # the plotter resolves it portably regardless of absolute location.
                 "save_folder": save_folder.name,
+                "status": status,
                 "git_commit": commit,
                 "git_dirty": dirty,
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             },
         )
         if result.returncode != 0:
-            print(f"ERROR: training failed at p={p} (exit {result.returncode}).", file=sys.stderr)
-            return result.returncode
+            # A single point's job failure (e.g. a crashed seed/algorithm) must not
+            # abort the whole sweep -- record it and keep going so the other points
+            # still produce data. run_benchmark already tolerates per-job failures.
+            failed_points.append(p)
+            print(
+                f"WARNING: run_benchmark returned exit {result.returncode} at p={p}; "
+                "continuing to the next point.",
+                file=sys.stderr,
+            )
 
     if not args.dry_run:
         print(f"\nManifest written to {manifest_path}")
-    return 0
+        if failed_points:
+            print(
+                f"NOTE: {len(failed_points)}/{len(points)} point(s) had job failures: "
+                f"{', '.join(str(p) for p in failed_points)}. Their eval outputs may be "
+                "missing (run_benchmark skips paired eval when any job fails).",
+                file=sys.stderr,
+            )
+    # Non-zero only if EVERY point failed; partial success is still a usable sweep.
+    return 1 if (failed_points and len(failed_points) == len(points)) else 0
 
 
 if __name__ == "__main__":

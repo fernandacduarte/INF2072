@@ -90,6 +90,7 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         pacman_curriculum_frame_offset: int = 0,
         randomize_spawns: bool = False,
         randomize_spawns_min_distance: int = 4,
+        capture_radius: int = 0,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -165,6 +166,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
             )
         if not (0.0 <= self.pacman_random_action_prob <= 1.0):
             raise ValueError("pacman_random_action_prob must be in [0, 1].")
+        # Capture rule radius. 0 (default) keeps the original co-location-only
+        # capture; >0 registers a capture when any ghost is within this BFS
+        # distance of Pacman after moves resolve, which defeats the "flee the
+        # cornered cell" endgame (research-000033 / research-000035 L3). Kept a
+        # default-off flag so capture rates under different rules never mix.
+        self.capture_radius = int(capture_radius)
+        if self.capture_radius < 0:
+            raise ValueError("capture_radius must be >= 0.")
         self._pacman_rng = np.random.default_rng()
 
         # Spawn randomization. When enabled, reset() draws fresh Pacman/ghost cells
@@ -809,6 +818,14 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
         for action in Action:
             if self._is_valid_ghost_action(ghost, action):
                 mask[action.value] = 1
+        # A fully boxed-in ghost (every neighbor a wall or another ghost) would
+        # yield an all-zero mask, which makes masked epsilon-greedy sampling draw
+        # from an all-zero distribution and crash (`multinomial`/CUDA device-side
+        # assert `input[0] != 0`). Fall back to all-ones: the policy may pick any
+        # action, and _execute_action already turns an illegal move into a no-op
+        # (sets invalid_move, the ghost stays put) -- same outcome, no crash.
+        if not mask.any():
+            mask[:] = 1
         return mask
 
     # Compute the composed observation for one ghost.
@@ -883,7 +900,18 @@ class PacManEnvironment(ParallelEnv):  # Main environment class
     def _is_capture_state(self) -> bool:
         if np.any(self.global_view == Observation.CAPUTRED.value):
             return True
-        return any(ghost.current_position == self.pacman.current_position for ghost in self.ghosts)
+        if any(ghost.current_position == self.pacman.current_position for ghost in self.ghosts):
+            return True
+        # Adjacency capture: when capture_radius > 0, a ghost within that BFS
+        # distance of Pacman (after moves resolve) counts as a capture. Radius 0
+        # short-circuits here, preserving exact co-location-only behavior.
+        if self.capture_radius > 0:
+            pacman_position = self.pacman.current_position
+            for ghost in self.ghosts:
+                distance = self._bfs_distance(ghost.current_position, pacman_position)
+                if distance is not None and distance <= self.capture_radius:
+                    return True
+        return False
 
     def _collect_visible_pacman_positions(self) -> tuple[bool, list[tuple[int, int]]]:
         seen_positions = []

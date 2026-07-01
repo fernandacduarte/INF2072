@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communication 000047 Academics</title>
+  <style>
+body {
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+}
+h1, h2, h3 { margin-top: 1.4em; }
+code { background: #f4f4f4; padding: 0.15em 0.3em; border-radius: 3px; }
+pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ddd; padding: 0.5em 0.75em; text-align: left; }
+th { background: #f8f8f8; }
+blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #555; }
+a { color: #0366d6; }
+
+  </style>
+</head>
+<body>
+
+<h1 id="communication-000047-acd-2026-07-01-1301-utc-academicos-pares-de-pesquisa-e-professores">Communication 000047 | ACD | 2026-07-01 13:01 UTC | Academicos (pares de pesquisa e professores)</h1>
+<blockquote>
+<p>Publico-alvo: pares de pesquisa e professores em aprendizado por reforco multiagente (MARL), disciplina INF2072 (PUC-Rio). Registro academico; termos consagrados de RL/MARL mantidos em ingles conforme a norma da area.</p>
+</blockquote>
+<hr />
+<h2 id="1-visao-geral-do-trabalho">1. Visao geral do trabalho</h2>
+<p>Este trabalho investiga <strong>design de reward</strong> para perseguicao cooperativa (cooperative pursuit) em um ambiente Pacman multiagente customizado. O ambiente implementa a interface <strong>PettingZoo AEC</strong>; os fantasmas (ghosts) sao agentes cooperativos que compartilham um sinal de reward de equipe (joint reward). Os algoritmos avaliados sao <strong>IQL, VDN e QMIX</strong>, treinados via <strong>BenchMARL</strong> (sobre TorchRL).</p>
+<p>O objetivo especifico deste branch (<code>capture_v0_pure_potential_shaping</code>) e fazer os fantasmas efetivamente <strong>perseguirem e capturarem</strong> um Pacman dificil e evasivo -- ou seja, resolver um problema de <strong>pursuit-evasion</strong>, e nao apenas de coleta de reward. Ate o marco descrito aqui, o comportamento de perseguicao (following) nunca havia sido observado.</p>
+<h3 id="setup-experimental">Setup experimental</h3>
+<ul>
+<li><strong>Agentes:</strong> fantasmas cooperativos que compartilham um joint reward; Pacman como adversario com politica fixa. A configuracao consolidada (Etapa 2) usa <strong>3 fantasmas</strong> (maze <code>pinklike3</code>); a Etapa 1 (PBRS) rodou com <strong>2 fantasmas</strong> (maze <code>pinklike</code>) -- ver secao 3.2.</li>
+<li><strong>Ambiente:</strong> labirinto ciclico de aproximadamente 20x20 celulas.</li>
+<li><strong>Captura:</strong> por co-localizacao (<code>capture_radius = 0</code>) -- um fantasma precisa ocupar a mesma celula do Pacman.</li>
+<li><strong>Adversario (evader):</strong> politica BFS <code>defense-first</code> (survival primeiro, coleta de pellets secundaria), com <code>safe_distance = 3</code>. O Pacman <strong>move primeiro</strong> a cada passo, o que lhe da vantagem estrutural de fuga.</li>
+<li><strong>Observabilidade:</strong> parcial (POMDP) -- cada fantasma ve apenas sua vizinhanca local.</li>
+<li><strong>Regime CTDE</strong> (Centralized Training, Decentralized Execution): o sinal de reward de treino le a posicao <strong>verdadeira</strong> do Pacman (via distancia BFS), mas as politicas em execucao observam apenas a visao local e nunca acessam essa distancia.</li>
+</ul>
+<p>A narrativa a seguir esta organizada em duas etapas: uma tentativa fundamentada em <strong>Potential-Based Reward Shaping (PBRS)</strong> que falhou de modo diagnosticavel, e uma correcao subsequente que produziu perseguicao emergente.</p>
+<hr />
+<h2 id="2-etapa-1-tentativas-com-potential-based-reward-shaping-pbrs">2. Etapa 1 -- Tentativas com Potential-Based Reward Shaping (PBRS)</h2>
+<h3 id="21-hipotese-e-design">2.1 Hipotese e design</h3>
+<p>A hipotese inicial era que uma perseguicao densa poderia ser induzida por <strong>potential-based reward shaping</strong> no sentido classico de <strong>Ng, Harada e Russell (1999)</strong>, cuja garantia central e a <strong>invariancia de politica</strong>: adicionar um termo de shaping da forma <code>F = gamma * Phi(s') - Phi(s)</code> preserva a politica otima do MDP original.</p>
+<p>A estrategia implementada (<code>CaptureV0PurePotentialShaping</code>) usa a forma telescopica episodica <strong>nao descontada</strong> <code>F = Phi(s') - Phi(s)</code>, com potencial <code>Phi = -alpha * mean_BFS_dist</code>, <code>alpha = 0.7</code>, tomando a <strong>media</strong> da distancia BFS sobre <strong>todos</strong> os fantasmas. Os terminais sao esparsos: <code>+100</code> na captura (<code>GET_PACMAN</code>), <code>-100</code> em timeout, <code>-100</code> quando o Pacman come todos os pellets; alem de um custo por passo <code>timestep = -0.05</code>.</p>
+<p>Duas escolhas de design foram deliberadas, cada uma corrigindo um modo de falha observado empiricamente:</p>
+<ul>
+<li><strong>(a) Telescoping exato (gamma = 1).</strong> Com <code>gamma = 1</code>, a soma cumulativa do shaping ao longo de um episodio e exatamente <code>Phi(fim) - Phi(inicio)</code>, ou seja, <strong>independente do caminho</strong>. Qualquer oscilacao no lugar (in-place) resulta em soma exatamente zero. Ja um shaping descontado <code>gamma * Phi(s') - Phi(s)</code> com <code>Phi &lt;= 0</code> paga <code>(1 - gamma) * (-Phi) &gt; 0</code> por ciclo de vaivem -- um lucro parasita que uma politica gulosa passou a <strong>farmar</strong> em vez de capturar.</li>
+<li><strong>(b) Distancia media (mean), nao minima (min).</strong> Sob um reward de equipe compartilhado, um potencial baseado em <code>min</code> so responde ao fantasma mais proximo; os demais recebem um reward que nao conseguem influenciar, ficam sem gradiente e estacionam em cantos. A media recompensa <strong>cada</strong> fantasma por se aproximar, de modo que a equipe converge e cerca o Pacman -- que e exatamente a coordenacao que motiva o projeto.</li>
+</ul>
+<p>A verificacao formal (research-000038) confirmou que a implementacao e <strong>PBRS puro</strong>: apenas o delta <code>Phi(s') - Phi(s)</code> entra no reward; o potencial absoluto nunca e somado diretamente.</p>
+<h3 id="22-a-falha-diagnosticada-causalmente-research-000035">2.2 A falha, diagnosticada causalmente (research-000035)</h3>
+<p>Contra um evader quase-perfeito que mantem a distancia de equipe aproximadamente <strong>constante</strong>, a soma telescopica colapsa para aproximadamente zero. O resultado e <strong>pressao de perseguicao liquida nula</strong> ao longo do episodio.</p>
+<p>Simultaneamente, o terminal de captura <code>+100</code> quase nunca dispara: <strong>dois</strong> fantasmas de mesma velocidade (maze <code>pinklike</code>) em um labirinto ciclico <strong>nao conseguem forcar</strong> a captura de um evader <code>defense-first</code>. Trata-se de um teto estrutural de pursuit-evasion (cop-number / endgame), documentado em research-000033 -- e um dos motivos pelos quais a Etapa 2 passa a usar um terceiro fantasma.</p>
+<p>Assim, o sinal dominante remanescente e o <code>timestep = -0.05</code> por passo somado ao <code>-100</code> de timeout. A licao racional que o agente aprende e: <em>"perco -100 de qualquer forma; entao minimizo o custo por passo"</em> -- o que produz <strong>passividade</strong>. Os fantasmas nunca aprenderam a seguir.</p>
+<p>Fatores secundarios contribuintes (registrados para transparencia metodologica):</p>
+<ul>
+<li><strong>Mismatch de desconto (discount mismatch):</strong> a invariancia de Ng-Harada-Russell exige o <code>gamma</code> do proprio <strong>learner</strong> (<code>gamma = 0.99</code>), mas o shaping usou <code>gamma = 1</code> para eliminar o oscillation-farming. O termo ficou, portanto, nem limpamente invariante nem um driver forte de comportamento.</li>
+<li><strong>MLP sem memoria sob observabilidade parcial (POMDP):</strong> uma rede feedforward nao tem memoria quando o Pacman sai do campo de visao.</li>
+<li><strong>Substrato de hyperparameters fraco:</strong> replay buffer de 10k, update-to-data ratio de aproximadamente 6-10, piso de epsilon em 0.10 e cerca de 60k frames -- claramente subtreinado.</li>
+</ul>
+<h3 id="23-o-reframe-conceitual-insight-central">2.3 O reframe conceitual (insight central)</h3>
+<p>Contra um evader quase-perfeito, <strong>capture rate e ao mesmo tempo o sinal de treino errado e a metrica de sucesso errada</strong>.</p>
+<p>E ha um ponto teorico mais profundo. A virtude central do PBRS -- <strong>invariancia de politica</strong> -- e exatamente o que <strong>preservou a passividade</strong>. Por construcao, um shaping invariante nao pode alterar a politica otima; logo, ele <strong>nao podia</strong> fabricar o vies de perseguicao (pursuit bias) de que efetivamente precisavamos. A propriedade que torna o PBRS teoricamente atraente e a propriedade que o tornou inutil neste regime.</p>
+<hr />
+<h2 id="3-etapa-2-nova-politica-de-reward-capture_v0_closing-correcoes-de-substrato">3. Etapa 2 -- Nova politica de reward (capture_v0_closing) + correcoes de substrato</h2>
+<h3 id="31-design-da-closing-reward">3.1 Design da closing reward</h3>
+<p>A nova estrategia (<code>CaptureV0ClosingReward</code>) implementa uma <strong>closing reward persistente e nao-telescopica</strong>:</p>
+<pre><code>closing_reward = closing_weight * clip(prev_dist - cur_dist, -clip, +clip)
+</code></pre>
+<p>sobre a distancia BFS <strong>media</strong> (mean) da equipe ao Pacman, com <code>closing_weight = 2.0</code> e <code>closing_clip = 2.0</code>.</p>
+<p>O ponto de design e explicito: essa reward <strong>nao</strong> e potential-based, portanto <strong>nao telescopa</strong> ao longo do episodio. A equipe e paga a cada passo em que se aproxima e cobrada a cada passo em que recua. Uma oscilacao no lugar continua somando aproximadamente zero (celulas positivas e negativas se cancelam), e o <code>clip</code> limita qualquer tentativa de orbit-farming (risco RC4, research-000022).</p>
+<p>O enquadramento teorico deve ser tornado explicito: esta estrategia <strong>troca a invariancia de politica do PBRS por um pursuit bias explicito</strong> -- que e precisamente o objetivo, ja que foi a invariancia que preservou a passividade que se busca corrigir. Isso implementa diretamente a recomendacao R2 de research-000035.</p>
+<p>Um pequeno <strong>termo de containment</strong> (<code>pacman_legal_moves_reduced = 0.5</code>) recompensa a reducao do numero de movimentos legais do Pacman enquanto ele esta visivel -- ou seja, empurra o Pacman (herding) para cantos e becos sem saida. E este termo que <strong>converte perseguicao em captura</strong> contra um evader. Mantem-se os mesmos terminais esparsos <code>+100/-100</code>. Novamente <strong>mean</strong> (nao min), para que cada fantasma receba gradiente rumo ao Pacman; <code>closing_weight = 2.0</code> amplifica o sinal de closing para mante-lo comparavel em magnitude aos demais termos.</p>
+<h3 id="32-captura-atingivel-terceiro-fantasma-maze-pinklike3">3.2 Captura atingivel: terceiro fantasma (maze <code>pinklike3</code>)</h3>
+<p>Alem da reward, a configuracao consolidada troca o maze <code>pinklike</code> (2 fantasmas) pelo <code>pinklike3</code> (<strong>3 fantasmas</strong>), implementando a alavanca L3 de research-000035: tornar a captura <strong>mecanicamente atingivel</strong>. Isso e a contrapartida direta do diagnostico da Etapa 1. Onde aquele diagnostico previa que bastaria corrigir <strong>um</strong> dos dois lados do loop quebrado (perseguicao OU captura atingivel), a Etapa 2 corrige <strong>os dois</strong> de uma vez: a closing reward persistente fornece a pressao de perseguicao, e o terceiro fantasma torna o cerco (surround) capaz de forcar a captura de um evader <code>defense-first</code>. A troca de maze acompanhou a introducao da nova classe de reward (commit <code>ae4da68</code>).</p>
+<h3 id="33-correcoes-de-substrato-research-000042-plan-000043-agora-defaults-no-codigo">3.3 Correcoes de substrato (research-000042 -&gt; plan-000043, agora defaults no codigo)</h3>
+<table>
+<thead>
+<tr>
+<th>Hyperparameter</th>
+<th>Antes</th>
+<th>Depois</th>
+<th>Motivacao</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Replay buffer</td>
+<td>10k</td>
+<td>25k</td>
+<td>Buffer totalmente aquecido antes do primeiro gradient step</td>
+</tr>
+<tr>
+<td>Optimizer steps (por coleta)</td>
+<td>10</td>
+<td>4</td>
+<td>Update-to-data ratio de 10:1 -&gt; 4:1</td>
+</tr>
+<tr>
+<td>Init-random-frames</td>
+<td>5k</td>
+<td>25k</td>
+<td>Preenchimento inicial adequado do buffer</td>
+</tr>
+<tr>
+<td>Epsilon-anneal-ratio</td>
+<td>0.95</td>
+<td>0.70</td>
+<td>Mais frames de exploitation</td>
+</tr>
+<tr>
+<td>Epsilon-end</td>
+<td>0.10</td>
+<td>0.05</td>
+<td>Frames de exploitation elevados de ~3k para ~18k do budget</td>
+</tr>
+</tbody>
+</table>
+<p>O treino foi escalado para <strong>1.000.000 de frames</strong>. O oponente de treino usou <code>CURRICULUM = off</code>, Pacman <code>hard</code> com <code>PACMAN_RANDOM_ACTION_PROB = 0.2</code> (20% de acoes aleatorias).</p>
+<h3 id="34-resultado">3.4 Resultado</h3>
+<p><strong>O IQL atinge uma capture rate de quase 80% apos 1M de frames.</strong> O comportamento de perseguicao/following finalmente emerge.</p>
+<p>Este resultado valida empiricamente a predicao central do diagnostico da Etapa 1: <strong>corrigir qualquer um dos dois lados do loop quebrado</strong> -- uma reward de perseguicao persistente OU uma captura atingivel -- faz o following aparecer. Na pratica, a Etapa 2 corrigiu <strong>os dois</strong> lados simultaneamente (closing reward + terceiro fantasma via <code>pinklike3</code>), de modo que o comportamento observado e plenamente consistente com o diagnostico. Registra-se com precisao: <strong>os aproximadamente 80% sao o resultado observado para um algoritmo (IQL) sob a configuracao consolidada, e nao ainda o agregado multi-seed do benchmark completo.</strong></p>
+<hr />
+<h2 id="4-metodologia-e-reprodutibilidade">4. Metodologia e reprodutibilidade</h2>
+<p>O padrao de benchmarking adotado segue a Decisao <strong>D-003</strong> do projeto, alinhada a <strong>Papoudakis et al. (2021, EPyMARL)</strong>:</p>
+<ul>
+<li><strong>Grade experimental:</strong> todos os algoritmos x <strong>&gt;= 5 seeds</strong> (0-4, conforme constitution Q3) x 1M frames.</li>
+<li><strong>Reporte de resultados:</strong> media +/- <strong>95% CI</strong> com estimadores robustos estilo <strong>rliable</strong> (IQM + bootstrap CI, <strong>Agarwal et al. 2021</strong>), apropriados ao regime de baixo n desta area.</li>
+<li><strong>Significancia:</strong> teste t bicaudal (<code>p &lt; 0.05</code>) para marcar algoritmos nao significativamente diferentes do melhor.</li>
+<li><strong>Metricas:</strong> tanto <strong>max-return</strong> quanto <strong>average-return</strong> sobre todas as avaliacoes.</li>
+<li><strong>Avaliacao:</strong> avaliacao gulosa (greedy) fixa de N episodios, <strong>desacoplada</strong> da coleta de treino.</li>
+</ul>
+<h3 id="41-gap-de-dificuldade-treinoeval-divulgacao-obrigatoria-research-000045-r1">4.1 Gap de dificuldade treino/eval (divulgacao obrigatoria, research-000045 R1)</h3>
+<p>Treino e avaliacao usam ruidos de Pacman <strong>diferentes</strong>, e isso precisa ser divulgado explicitamente. Na avaliacao, <code>EVASIVENESS</code> mapeia para <code>random_action_prob = 1 - evasiveness</code>. O numero de manchete canonico usa <code>EVASIVENESS = 1.0</code> (Pacman deterministico e maximamente dificil). Declara-se essa assimetria de forma explicita para que o leitor <strong>nao atribua</strong> o gap de capture rate a qualidade de aprendizado quando ele decorre, em parte, da diferenca de dificuldade entre os regimes.</p>
+<h3 id="42-reprodutibilidade">4.2 Reprodutibilidade</h3>
+<p>Todo resultado reportado cita o hash de commit git exato (constitution C1). O estado descrito neste documento corresponde ao commit <code>8279a5b</code>.</p>
+<p>Comando de reproducao:</p>
+<pre><code>make pipeline ALGOS=iql,vdn,qmixglobal
+make eval-report EVASIVENESS=1.0
+</code></pre>
+<hr />
+<h2 id="5-limitacoes-e-honestidade-metodologica">5. Limitacoes e honestidade metodologica</h2>
+<ul>
+<li>Os aproximadamente <strong>80% sao IQL</strong> sob <strong>uma</strong> configuracao consolidada; o agregado completo de 5 seeds para IQL/VDN/QMIX com intervalos de confianca e o proximo artefato.</li>
+<li>A closing reward <strong>sacrifica intencionalmente</strong> a invariancia de politica do PBRS em troca de um pursuit bias -- essa e uma escolha de design, nao uma propriedade teoricamente neutra.</li>
+<li>Os resultados sao para <strong>captura por co-localizacao</strong> (<code>capture_radius = 0</code>) no regime de evader dificil (hard-evader); a generalizacao para outros regimes nao esta demonstrada.</li>
+<li>O comentario de calibracao de <code>closing_weight = 2.0</code> no codigo ainda referencia <strong>2 fantasmas</strong>, enquanto a config consolidada usa <strong>3</strong> (<code>pinklike3</code>); o peso funciona empiricamente, mas essa calibracao de escala merece revisao.</li>
+<li><strong>Intervalos de confianca largos sao esperados em n = 5</strong> e serao apresentados de forma honesta (D-003), sem estreitamento artificial.</li>
+</ul>
+<h3 id="status-epistemico-das-afirmacoes">Status epistemico das afirmacoes</h3>
+<table>
+<thead>
+<tr>
+<th>Afirmacao</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IQL atinge ~80% de capture rate sob a config consolidada</td>
+<td>Suportada por evidencia (resultado observado, um algoritmo)</td>
+</tr>
+<tr>
+<td>A cadeia causal da passividade na Etapa 1 (telescoping -&gt; soma zero; captura inatingivel -&gt; teto estrutural)</td>
+<td>Suportada por evidencia (diagnostico research-000035/000033)</td>
+</tr>
+<tr>
+<td>Closing reward + captura atingivel generaliza para VDN/QMIX</td>
+<td>Hipotese de design (a validar pelo agregado multi-seed)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="referencias">Referencias</h2>
+<ul>
+<li>Ng, A. Y., Harada, D., &amp; Russell, S. (1999). <em>Policy invariance under reward transformations: Theory and application to reward shaping.</em> ICML.</li>
+<li>Papoudakis, G., Christianos, F., Schafer, L., &amp; Albrecht, S. V. (2021). <em>Benchmarking Multi-Agent Deep Reinforcement Learning Algorithms in Cooperative Tasks (EPyMARL).</em> NeurIPS Datasets and Benchmarks Track.</li>
+<li>Agarwal, R., Schwarzer, M., Castro, P. S., Courville, A., &amp; Bellemare, M. G. (2021). <em>Deep Reinforcement Learning at the Edge of the Statistical Precipice (rliable).</em> NeurIPS.</li>
+</ul>
+<p><em>Estado de codigo: commit <code>8279a5b</code>, branch <code>capture_v0_pure_potential_shaping</code>.</em></p>
+
+</body>
+</html>

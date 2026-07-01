@@ -37,10 +37,10 @@ from custom_environment.eval import (
     CHECKPOINT_BEST_METRICS,
     _capture_rate_for_run_checkpoint,
     _best_checkpoint_for_learner,
-    _force_hard_pacman_for_eval,
     _latest_checkpoint_for_learner,
     _resolve_checkpoint_view_size,
     _set_global_ghost_view_size,
+    _set_pacman_evasiveness_for_eval,
     _unwrap_pacman_env,
 )
 from custom_environment.env.rewards.current import CaptureV0PurePotentialShaping
@@ -325,6 +325,9 @@ def _run_episode(
     newly_spotted_count = 0
     timeout = False
     pellet_win = False
+    # Step index (1-based) at which the team first sees Pacman; None until then.
+    # Reduced into the normalized time-to-first-contact pursuit-acquisition metric.
+    first_contact_step: int | None = None
     # Pursuit metric: per-step team BFS distance to Pacman; reduced at the end into
     # the fraction of steps the team closed in (research-000024 R5 -- capture_rate
     # alone cannot show pursuit).
@@ -349,6 +352,8 @@ def _run_episode(
         context = raw_env.last_reward_context
         if context is not None:
             visible_steps += int(context.pacman_visible)
+            if first_contact_step is None and bool(context.pacman_visible):
+                first_contact_step = steps
             timeout = timeout or bool(context.timeout_happened)
             pellet_win = pellet_win or bool(context.pacman_win_happened)
             team_distances.append(_team_mean_distance(context))
@@ -368,6 +373,14 @@ def _run_episode(
     timeout = timeout and not pellet_win
     evaluation_cutoff = not done and not captured and not timeout and not pellet_win
     pursuit_fraction = _pursuit_fraction_from_distances(team_distances)
+    # Normalize first-contact to [0, 1] by the step budget; never seeing Pacman
+    # is the worst case (1.0) so lower is better, like a latency.
+    denom = max(int(max_steps), 1)
+    time_to_first_contact = (
+        float(first_contact_step) / float(denom)
+        if first_contact_step is not None
+        else 1.0
+    )
     return {
         "captured": captured,
         "timeout": timeout,
@@ -380,6 +393,7 @@ def _run_episode(
         "visible_steps": visible_steps,
         "newly_spotted_count": newly_spotted_count,
         "pursuit_fraction": pursuit_fraction,
+        "time_to_first_contact": time_to_first_contact,
     }
 
 
@@ -403,6 +417,7 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
     visible_fractions: list[float] = []
     newly_spotted_counts: list[float] = []
     pursuit_fractions: list[float] = []
+    time_to_first_contacts: list[float] = []
     shaping_returns: list[float] = []
     terminal_returns: list[float] = []
     reward_breakdown_per_step_values: dict[str, list[float]] = defaultdict(list)
@@ -411,6 +426,9 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         visible_fractions.append(float(episode["visible_steps"]) / float(steps))
         newly_spotted_counts.append(float(episode["newly_spotted_count"]))
         pursuit_fractions.append(float(episode.get("pursuit_fraction", float("nan"))))
+        time_to_first_contacts.append(
+            float(episode.get("time_to_first_contact", float("nan")))
+        )
         categories = episode["category_totals"]
         shaping_returns.append(float(categories.get("shaping", 0.0)))
         terminal_returns.append(float(categories.get("terminal", 0.0)))
@@ -470,6 +488,11 @@ def _aggregate_episodes(episodes: list[EpisodeResult]) -> dict[str, float | int]
         # distance to Pacman -- the pursuit-acquisition signal capture_rate hides.
         "pursuit_fraction_mean": _safe_mean(pursuit_fractions),
         "pursuit_fraction_std": _safe_std(pursuit_fractions),
+        # Time-to-first-contact is the mean normalized step index at which the
+        # team first sights Pacman (1.0 = never seen); the acquisition-latency
+        # companion to pursuit_fraction. Lower is better.
+        "time_to_first_contact_mean": _safe_mean(time_to_first_contacts),
+        "time_to_first_contact_std": _safe_std(time_to_first_contacts),
         # Shaping return is the mean non-terminal reward contribution per episode.
         "mean_shaping_return": _safe_mean(shaping_returns),
         # Terminal return is the mean win/loss reward contribution per episode.
@@ -494,6 +517,7 @@ def _evaluate_checkpoint(
     expected_reward_id: str | None,
     allow_non_hard_checkpoint: bool,
     curriculum_frame_offset: int,
+    pacman_evasiveness: float = 0.8,
 ) -> tuple[dict[str, ReportValue], list[EpisodeResult]]:
     resolved_view_size = _resolve_checkpoint_view_size(checkpoint_path, ghost_view_size)
     if resolved_view_size is not None:
@@ -512,7 +536,13 @@ def _evaluate_checkpoint(
     )
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
-    raw_env.shared_memory_in_observation_enabled = False
+    # Keep the SAME observation encoding the checkpoint trained with. Forcing this
+    # off zeroes the shared-memory bearing channel (the directional signal the
+    # policy uses to pursue Pacman outside its local view), producing an
+    # out-of-distribution observation that makes trained ghosts wander instead of
+    # chase -- systematically suppressing the reported capture rate. Training runs
+    # with this enabled (True), so the report must match (mirrors eval.py).
+    raw_env.shared_memory_in_observation_enabled = True
     raw_env.render_mode = None
     if curriculum_frame_offset > 0:
         raw_env.pacman_curriculum_frame_offset = int(curriculum_frame_offset)
@@ -523,11 +553,11 @@ def _evaluate_checkpoint(
     if allow_non_hard_checkpoint:
         print(
             "Pacman eval_report mode: keeping checkpoint-defined difficulty/curriculum "
-            "(--allow-non-hard-checkpoint). "
+            "(--allow-non-hard-checkpoint); --pacman-evasiveness ignored. "
             f"curriculum_frame_offset={curriculum_frame_offset}"
         )
     else:
-        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
+        _set_pacman_evasiveness_for_eval(raw_env, pacman_evasiveness, checkpoint_path)
     actual_reward_id = str(getattr(raw_env, "reward_strategy_id", "current"))
     actual_reward_class = str(getattr(raw_env, "reward_strategy_class", ""))
 
@@ -633,6 +663,10 @@ def _build_variant_summary(
                 # fraction across training seeds (mirrors capture_rate_mean).
                 "pursuit_fraction_mean": _safe_mean(pursuit_fracs),
                 "pursuit_fraction_std": _safe_std(pursuit_fracs),
+                # Pooled acquisition latency: mean normalized first-sight step.
+                "time_to_first_contact_mean": float(
+                    pooled_stats["time_to_first_contact_mean"]
+                ),
                 # Mean return is diagnostic because reward scales can differ by strategy.
                 "mean_episode_return": float(pooled_stats["mean_episode_return"]),
                 # Shaping return is the pooled mean non-terminal reward contribution.
@@ -668,6 +702,8 @@ REPORT_FIELDS = [
     "mean_newly_spotted_count",
     "pursuit_fraction_mean",
     "pursuit_fraction_std",
+    "time_to_first_contact_mean",
+    "time_to_first_contact_std",
     "mean_shaping_return",
     "mean_terminal_return",
     "reward_breakdown_per_step_mean_json",
@@ -691,6 +727,7 @@ VARIANT_FIELDS = [
     "mean_newly_spotted_count",
     "pursuit_fraction_mean",
     "pursuit_fraction_std",
+    "time_to_first_contact_mean",
     "mean_episode_return",
     "mean_shaping_return",
     "mean_terminal_return",
@@ -794,6 +831,7 @@ def _evaluate_direct(args: argparse.Namespace, device: str) -> tuple[
                 expected_reward_id=args.reward_id,
                 allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
                 curriculum_frame_offset=args.curriculum_frame_offset,
+                pacman_evasiveness=args.pacman_evasiveness,
             )
             row["train_seed"] = "" if train_seed is None else train_seed
             row["run_dir"] = run_dir.name
@@ -875,6 +913,7 @@ def _evaluate_jobs(args: argparse.Namespace, device: str) -> tuple[
             expected_reward_id=reward_id,
             allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
             curriculum_frame_offset=args.curriculum_frame_offset,
+            pacman_evasiveness=args.pacman_evasiveness,
         )
         row["train_seed"] = train_seed
         row["run_dir"] = run_dir_name
@@ -1021,7 +1060,21 @@ def parse_args() -> argparse.Namespace:
             "Use checkpoint frame to reconstruct checkpoint-stage curriculum in checkpoint-native eval."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--pacman-evasiveness",
+        type=float,
+        default=0.8,
+        help=(
+            "Pacman evasiveness in [0,1] for the report (default 0.8 = 80%% evasive). "
+            "1.0 = deterministic hard evader; 0.0 = fully random. Maps to "
+            "pacman_random_action_prob = 1 - evasiveness. Ignored with "
+            "--allow-non-hard-checkpoint."
+        ),
+    )
+    args = parser.parse_args()
+    if not (0.0 <= args.pacman_evasiveness <= 1.0):
+        parser.error("--pacman-evasiveness must be in [0, 1]")
+    return args
 
 
 def _resolve_algorithms(args: argparse.Namespace) -> list[str]:

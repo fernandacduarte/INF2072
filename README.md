@@ -265,6 +265,8 @@ This writes `benchmarl_setup/runs/<maze>/evaluation_report.csv` plus an
 - `capture_rate`, `timeout_rate`, `pellet_win_rate`, and `evaluation_cutoff_rate`
 - `mean_steps_to_capture` and `median_steps_to_capture`
 - `frac_steps_visible` and `mean_newly_spotted_count`
+- `pursuit_fraction_mean` / `pursuit_fraction_std` (fraction of steps the team closed BFS distance to Pacman)
+- `time_to_first_contact_mean` / `time_to_first_contact_std` (normalized step of first Pacman sighting; 1.0 = never seen — lower is better)
 - `mean_shaping_return` and `mean_terminal_return`
 
 Useful options for deterministic report evaluation (`custom_environment\eval_report.py`):
@@ -298,6 +300,46 @@ Useful optional rendering parameters for the random-policy demo
 ```
 
 Outputs are saved under `benchmarl_setup/runs/<maze>` by default.
+
+### Pursuit Diagnostics & Reward / Capture Levers
+
+These tools help diagnose and fix the case where ghosts do not visibly pursue a
+strong (`hard`) Pacman (research-000035 / plan-000036).
+
+**Scripted-pursuit capture ceiling** (`custom_environment/ceiling_eval.py`). Drives the
+raw environment with a scripted greedy-BFS pursuit ghost team (no training) to measure
+the *upper bound* capture rate achievable under the current dynamics. A learned policy
+far below this ceiling is a learning gap; a low ceiling itself means capture is
+structurally hard and reward/HP tuning cannot cross it.
+
+```bash
+py -3.11 custom_environment\ceiling_eval.py --maze default --pacman-difficulty hard --episodes 40 --seeds 0,1,2,3,4
+```
+
+Reports `capture_rate` plus pursuit metrics (`pursuit_fraction`, `time_to_first_contact`,
+`frac_steps_visible`, `mean_team_distance`) and writes a CSV (with the git commit) under
+`benchmarl_setup/runs/`.
+
+**Persistent closing reward** (`--reward-id capture_v0_closing`). A sparse-capture base plus
+a *non-telescoping* reward for reducing the team's min-BFS distance to Pacman each step
+(clipped to prevent orbit-farming), plus a containment bonus for shrinking Pacman's legal
+moves. Unlike the telescoping PBRS (`capture_v0_pure_potential_shaping`), it does not net to
+zero against an evader, so it persistently rewards pursuit.
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --pacman-difficulty hard --reward-id capture_v0_closing
+```
+
+**Adjacency capture** (`--capture-radius N`, default `0`). With `N=0` the original
+co-location-only capture rule is used. With `N>0`, a capture is registered when a ghost is
+within `N` BFS cells of Pacman after moves resolve, which defeats the "flee the cornered
+cell" endgame and makes capture more attainable. **This changes the task definition** —
+re-baseline all algorithms under the new rule and never mix capture rates gathered under
+different radii in one figure.
+
+```bash
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --pacman-difficulty hard --capture-radius 1
+```
 
 ### Mazes (Map Selection)
 
