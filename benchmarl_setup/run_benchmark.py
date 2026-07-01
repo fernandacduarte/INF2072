@@ -729,10 +729,11 @@ class ProgressReporter:
             extra_schedule = (
                 f"epsilon_stage_boundary_1={self.epsilon_schedule.get('epsilon_stage_boundary_1', 0)},"
                 f"epsilon_stage_boundary_2={self.epsilon_schedule.get('epsilon_stage_boundary_2', 0)},"
+                f"epsilon_stage_decay_fraction={self.epsilon_schedule.get('epsilon_stage_decay_fraction', 0.4)},"
                 f"epsilon_easy_init={self.epsilon_schedule.get('epsilon_easy_init', 1.0)},"
-                f"epsilon_easy_end={self.epsilon_schedule.get('epsilon_easy_end', 0.25)},"
+                f"epsilon_easy_end={self.epsilon_schedule.get('epsilon_easy_end', 0.08)},"
                 f"epsilon_medium_init={self.epsilon_schedule.get('epsilon_medium_init', 0.65)},"
-                f"epsilon_medium_end={self.epsilon_schedule.get('epsilon_medium_end', 0.20)},"
+                f"epsilon_medium_end={self.epsilon_schedule.get('epsilon_medium_end', 0.08)},"
                 f"epsilon_hard_init={self.epsilon_schedule.get('epsilon_hard_init', 0.55)},"
                 f"epsilon_hard_end={self.epsilon_schedule.get('epsilon_hard_end', 0.08)},"
             )

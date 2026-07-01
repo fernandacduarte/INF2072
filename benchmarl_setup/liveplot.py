@@ -22,10 +22,11 @@ def _epsilon_schedule_from_meta(meta: dict[str, str]) -> dict[str, float | int |
                 "max_frames": int(meta["max_frames"]),
                 "epsilon_stage_boundary_1": int(meta.get("epsilon_stage_boundary_1", "0")),
                 "epsilon_stage_boundary_2": int(meta.get("epsilon_stage_boundary_2", "0")),
+                "epsilon_stage_decay_fraction": float(meta.get("epsilon_stage_decay_fraction", "0.4")),
                 "epsilon_easy_init": float(meta.get("epsilon_easy_init", "1.0")),
-                "epsilon_easy_end": float(meta.get("epsilon_easy_end", "0.25")),
+                "epsilon_easy_end": float(meta.get("epsilon_easy_end", "0.08")),
                 "epsilon_medium_init": float(meta.get("epsilon_medium_init", "0.65")),
-                "epsilon_medium_end": float(meta.get("epsilon_medium_end", "0.20")),
+                "epsilon_medium_end": float(meta.get("epsilon_medium_end", "0.08")),
                 "epsilon_hard_init": float(meta.get("epsilon_hard_init", "0.55")),
                 "epsilon_hard_end": float(meta.get("epsilon_hard_end", "0.08")),
                 "epsilon_init": float(meta.get("epsilon_init", "1.0")),
@@ -57,6 +58,8 @@ def _epsilon_for_frames_schedule(frames: np.ndarray, schedule: dict[str, float |
         max_frames = max(1, int(schedule.get("max_frames", 1) or 1))
         b1 = max(0, min(max_frames, int(schedule.get("epsilon_stage_boundary_1", max_frames // 3) or 0)))
         b2 = max(b1, min(max_frames, int(schedule.get("epsilon_stage_boundary_2", (2 * max_frames) // 3) or b1)))
+        stage_decay_fraction = float(schedule.get("epsilon_stage_decay_fraction", 1.0) or 1.0)
+        stage_decay_fraction = min(max(stage_decay_fraction, 0.0), 1.0)
 
         easy_init = float(schedule.get("epsilon_easy_init", 1.0))
         easy_end = float(schedule.get("epsilon_easy_end", easy_init))
@@ -67,18 +70,19 @@ def _epsilon_for_frames_schedule(frames: np.ndarray, schedule: dict[str, float |
 
         y = np.empty_like(x)
 
-        def _interp(start_frame: float, end_frame: float, start_eps: float, end_eps: float, values: np.ndarray) -> np.ndarray:
-            span = max(1.0, end_frame - start_frame)
-            progress = np.clip((values - start_frame) / span, 0.0, 1.0)
+        def _stage_eps(start_frame: float, end_frame: float, start_eps: float, end_eps: float, values: np.ndarray) -> np.ndarray:
+            stage_span = max(1.0, end_frame - start_frame)
+            decay_span = max(1.0, stage_span * stage_decay_fraction)
+            progress = np.clip((values - start_frame) / decay_span, 0.0, 1.0)
             return start_eps + (end_eps - start_eps) * progress
 
         easy_mask = x < float(b1)
         medium_mask = (x >= float(b1)) & (x < float(b2))
         hard_mask = x >= float(b2)
 
-        y[easy_mask] = _interp(0.0, float(b1), easy_init, easy_end, x[easy_mask])
-        y[medium_mask] = _interp(float(b1), float(b2), medium_init, medium_end, x[medium_mask])
-        y[hard_mask] = _interp(float(b2), float(max_frames), hard_init, hard_end, np.minimum(x[hard_mask], float(max_frames)))
+        y[easy_mask] = _stage_eps(0.0, float(b1), easy_init, easy_end, x[easy_mask])
+        y[medium_mask] = _stage_eps(float(b1), float(b2), medium_init, medium_end, x[medium_mask])
+        y[hard_mask] = _stage_eps(float(b2), float(max_frames), hard_init, hard_end, np.minimum(x[hard_mask], float(max_frames)))
         return y
 
     epsilon_max_frames = max(1.0, float(schedule.get("max_frames", 1) or 1))

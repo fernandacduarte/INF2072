@@ -219,13 +219,14 @@ Spawn sampling enforces:
 - no ghost spawns directly on Pacman
 - ghosts cannot all start in one corridor line (all same row or all same column)
 
-When `--pacman-curriculum easy-medium-hard` or `--pacman-curriculum mixed-easy-medium-hard` is enabled, exploration epsilon now
-uses stage-aligned bumps (for all algorithms) to help adaptation at each
-transition:
+When `--pacman-curriculum easy-medium-hard` or `--pacman-curriculum mixed-easy-medium-hard` is enabled, exploration epsilon
+uses stage-aligned resets (for all algorithms). In each stage, epsilon decays
+to `0.08` during the first `40%` of that stage and remains flat for the
+remaining `60%`:
 
-- Easy phase (`[0, 1/3)`): `1.00 -> 0.25`
-- Medium phase (`[1/3, 2/3)`): reset `0.65 -> 0.20`
-- Hard phase (`[2/3, 1]`): reset `0.55 -> 0.08`
+- Easy phase (`[0, 1/3)`): `1.00 -> 0.08` over first 40%, then stable
+- Medium phase (`[1/3, 2/3)`): reset `0.65 -> 0.08` over first 40%, then stable
+- Hard phase (`[2/3, 1]`): reset `0.55 -> 0.08` over first 40%, then stable
 
 Transition boundaries use exact thirds of `--max-frames`.
 With `--pacman-curriculum off`, the previous global schedule remains unchanged

@@ -113,6 +113,7 @@ def training_exploration_schedule(
     if curriculum_mode in {"easy-medium-hard", "mixed-easy-medium-hard"}:
         b1 = resolved_max_frames // 3
         b2 = (2 * resolved_max_frames) // 3
+        stage_decay_fraction = 0.4
         return {
             "epsilon_schedule_mode": "curriculum_piecewise",
             "epsilon_init": 1.0,
@@ -122,10 +123,11 @@ def training_exploration_schedule(
             "max_frames": int(resolved_max_frames),
             "epsilon_stage_boundary_1": int(b1),
             "epsilon_stage_boundary_2": int(b2),
+            "epsilon_stage_decay_fraction": float(stage_decay_fraction),
             "epsilon_easy_init": 1.0,
-            "epsilon_easy_end": 0.25,
+            "epsilon_easy_end": 0.08,
             "epsilon_medium_init": 0.65,
-            "epsilon_medium_end": 0.20,
+            "epsilon_medium_end": 0.08,
             "epsilon_hard_init": 0.55,
             "epsilon_hard_end": 0.08,
         }
@@ -157,6 +159,8 @@ def epsilon_at_frame(frame: float, schedule: dict[str, float | int | str]) -> fl
         max_frames = max(1, int(schedule.get("max_frames", 1) or 1))
         b1 = max(0, min(max_frames, int(schedule.get("epsilon_stage_boundary_1", max_frames // 3) or 0)))
         b2 = max(b1, min(max_frames, int(schedule.get("epsilon_stage_boundary_2", (2 * max_frames) // 3) or b1)))
+        stage_decay_fraction = float(schedule.get("epsilon_stage_decay_fraction", 1.0) or 1.0)
+        stage_decay_fraction = min(max(stage_decay_fraction, 0.0), 1.0)
 
         easy_init = float(schedule.get("epsilon_easy_init", 1.0))
         easy_end = float(schedule.get("epsilon_easy_end", easy_init))
@@ -165,16 +169,26 @@ def epsilon_at_frame(frame: float, schedule: dict[str, float | int | str]) -> fl
         hard_init = float(schedule.get("epsilon_hard_init", 0.55))
         hard_end = float(schedule.get("epsilon_hard_end", hard_init))
 
-        def _interp(start_frame: float, end_frame: float, start_eps: float, end_eps: float, x: float) -> float:
-            span = max(1.0, end_frame - start_frame)
-            progress = min(max((x - start_frame) / span, 0.0), 1.0)
+        def _stage_eps(
+            start_frame: float,
+            end_frame: float,
+            start_eps: float,
+            end_eps: float,
+            x: float,
+        ) -> float:
+            stage_span = max(1.0, end_frame - start_frame)
+            decay_span = max(1.0, stage_span * stage_decay_fraction)
+            decay_end = start_frame + decay_span
+            if x >= decay_end:
+                return float(end_eps)
+            progress = min(max((x - start_frame) / decay_span, 0.0), 1.0)
             return float(start_eps + (end_eps - start_eps) * progress)
 
         if f < b1:
-            return _interp(0.0, float(b1), easy_init, easy_end, f)
+            return _stage_eps(0.0, float(b1), easy_init, easy_end, f)
         if f < b2:
-            return _interp(float(b1), float(b2), medium_init, medium_end, f)
-        return _interp(float(b2), float(max_frames), hard_init, hard_end, min(f, float(max_frames)))
+            return _stage_eps(float(b1), float(b2), medium_init, medium_end, f)
+        return _stage_eps(float(b2), float(max_frames), hard_init, hard_end, min(f, float(max_frames)))
 
     epsilon_max_frames = max(1.0, float(schedule.get("max_frames", 1) or 1))
     epsilon_init = float(schedule.get("epsilon_init", 1.0))
