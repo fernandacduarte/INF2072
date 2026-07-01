@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-07-01 20:08 UTC | STARTED | 2026-07-01 20:03 UTC | communicate | explique a politica de reward capture_v0_closing
+
+DONE | 2026-07-01 20:07 UTC | STARTED | 2026-07-01 20:02 UTC | communicate | explicar o PBRS para colegas de turma
+
 DONE | 2026-06-30 22:13 UTC | STARTED | 2026-06-30 22:11 UTC | research | how PACMAN_RANDOM_ACTION_PROB and EVASIVENESS are being used and how affect make pipeline
 
 DONE | 2026-06-30 22:14 UTC | STARTED | 2026-06-30 22:01 UTC | reflect | what is implemented and how can i test ?

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communication 000046 Academics</title>
+  <style>
+body {
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+}
+h1, h2, h3 { margin-top: 1.4em; }
+code { background: #f4f4f4; padding: 0.15em 0.3em; border-radius: 3px; }
+pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ddd; padding: 0.5em 0.75em; text-align: left; }
+th { background: #f8f8f8; }
+blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #555; }
+a { color: #0366d6; }
+
+  </style>
+</head>
+<body>
+
+<h1 id="communication-000046-acd-2026-07-01-2002-utc-academics">Communication 000046 | ACD | 2026-07-01 20:02 UTC | Academics</h1>
+<h1 id="potential-based-reward-shaping-in-the-ghost-coordination-environment">Potential-Based Reward Shaping in the Ghost-Coordination Environment</h1>
+<h2 id="why-this-note-exists">Why this note exists</h2>
+<p>If you are working on a MARL project for INF2072, you have probably run into the same problem we ran into: a sparse terminal reward (capture Pacman, or don't) gives almost no learning signal for most of an episode, but naive dense shaping risks changing what the optimal policy actually is. Potential-based reward shaping (PBRS) is the standard tool for adding reward density without that risk. This note explains what PBRS guarantees, how we used it in the cooperative-ghost Pacman environment, where the guarantee itself became an obstacle, and how we are checking that any of this actually helps.</p>
+<h2 id="1-what-pbrs-is-and-why-it-is-theoretically-safe">1. What PBRS is, and why it is theoretically safe</h2>
+<p>Ng, Harada, and Russell (1999) show that if you augment an MDP's reward function with a shaping term of the form</p>
+<pre><code>F(s, s') = gamma * Phi(s') - Phi(s)
+</code></pre>
+<p>for any potential function <code>Phi: S -&gt; R</code>, and <code>gamma</code> is the same discount factor used by the learning algorithm, then the set of optimal policies for the shaped MDP is identical to the set of optimal policies for the original MDP. The shaping term is a telescoping quantity: summed over a trajectory it collapses to <code>gamma^T * Phi(s_T) - Phi(s_0)</code> (exactly <code>Phi(s_T) - Phi(s_0)</code> when <code>gamma = 1</code>), so it behaves like a potential-energy difference rather than an extra source of reward that a policy could exploit independently of the base task. This is the property that distinguishes PBRS from ad hoc dense-reward engineering: you get a denser gradient without the risk of the agent learning to farm the shaping term instead of solving the task. The theorem requires <code>Phi</code> to be a function of state only (not of action, and not time-varying in a way that breaks the telescoping), and it requires the same <code>gamma</code> on both sides -- get either wrong and the invariance guarantee no longer holds.</p>
+<h2 id="2-how-the-environment-applies-it-and-why-the-potential-function-evolved">2. How the environment applies it, and why the potential function evolved</h2>
+<p>The cooperative-ghost Pacman environment used the shaping term long before it was isolated as "PBRS" in the code. The original git-baseline strategies, <code>CurrentGitTeamReward</code> (V1) and <code>CurrentTeamReward</code> (V2) in <code>custom_environment/env/rewards/current.py</code>, define</p>
+<pre><code>Phi(s) = -alpha * min_ghost_distance(s)
+</code></pre>
+<p>for V1, and a weighted two-nearest-ghost variant <code>Phi(s) = -alpha * (d1 + beta * d2)</code> for V2, where distance is BFS shortest-path distance on the grid (respecting walls), not Euclidean distance -- the metric that actually matches reachability in a maze. Each step emits <code>potential_shaping = Phi(s') - Phi(s)</code> as one term inside a much larger reward: visibility bonuses, exploration bonuses, anti-oscillation and anti-corridor-overlap penalties, and so on. This is a reasonable "kitchen sink" design for getting something working, but it makes it impossible to attribute any observed behavior change specifically to the shaping term -- there are a dozen confounded signals active at once.</p>
+<p><code>CaptureV0PurePotentialShaping</code> (<code>strategy_id = "capture_v0_pure_potential_shaping"</code>) was built to isolate the shaping term for causal analysis. The base reward is sparse: <code>GET_PACMAN = +100</code>, <code>PACMAN_TIMEOUT_WIN = -100</code>, <code>PACMAN_WIN_PALLETS = -100</code>, and a <code>timestep = -0.05</code> cost, nothing else. On top of that sits exactly one shaping term, with</p>
+<pre><code>Phi(s) = -alpha * mean_ghost_distance(s),  alpha = 0.7
+</code></pre>
+<p>using the mean BFS distance across all ghosts rather than the minimum. This min-versus-mean choice is the most interesting design decision here for anyone studying MARL specifically. With a shared team reward, a <code>min</code>-based potential only produces a gradient for whichever ghost happens to be nearest to Pacman at each step -- the other ghost's actions cannot move that minimum, so it receives a shaping signal it cannot influence, learns nothing useful from it, and empirically converges to parking in a corner. Switching the potential to the mean distance across all ghosts gives every ghost a component of the potential that responds to its own actions, so every ghost has a gradient toward Pacman. That is what produces the surrounding/coordination behavior this project is actually trying to study, rather than a single active pursuer and passive bystanders.</p>
+<p>Two further choices in this strategy are worth flagging as implementation details that matter for correctness, not just style:</p>
+<ul>
+<li><strong>Exact undiscounted telescoping (<code>gamma = 1</code>).</strong> Because <code>Phi &lt;= 0</code> and shrinks toward zero as the team closes in, a discounted <code>gamma*Phi(s') - Phi(s)</code> with <code>gamma &lt; 1</code> pays a strictly positive reward for any back-and-forth oscillation near Pacman (since <code>(1-gamma)*(-Phi) &gt; 0</code> per cycle), which a greedy policy will farm. Setting <code>gamma = 1</code> makes the cumulative shaping over an episode exactly <code>Phi(end) - Phi(start)</code> regardless of the path taken, so in-place oscillation nets exactly zero shaping reward. This is a direct, practical instance of the telescoping property, not just theoretical furniture.</li>
+<li><strong>A deliberately enlarged <code>timestep</code> cost.</strong> Once oscillation nets zero shaping reward, nothing else in the reward function penalizes standing still or camping near Pacman -- so <code>timestep</code> was raised from the more typical <code>-0.01</code>/<code>-0.015</code> used elsewhere in the codebase to <code>-0.05</code>, specifically to make camping unprofitable once the shaping term can no longer do that job.</li>
+</ul>
+<p><code>CaptureV0PurePotentialShapingPellets</code> extends the pure-PBRS strategy with a small penalty when Pacman eats a pellet, testing whether adding one more sparse signal alongside PBRS changes the learned behavior.</p>
+<h2 id="3-where-the-policy-invariance-guarantee-became-a-liability">3. Where the policy-invariance guarantee became a liability</h2>
+<p><code>research-000035</code> found a failure mode against a hard, evasive Pacman policy: if the team of ghosts maintains roughly constant distance from Pacman for an entire episode -- a pursuit stalemate -- then exact telescoping means the shaping reward sums to approximately <code>Phi(end) - Phi(start)</code> approximately zero. A policy that actively pursues Pacman all episode and one that does nothing productive both net roughly the same (near-zero) cumulative shaping reward if neither manages to close the distance. This is worth sitting with, because it is not a bug in the implementation; it is the theorem working exactly as advertised. Ng/Harada/Russell's guarantee is about final-policy optimality under the shaped MDP being identical to the unshaped MDP -- it says nothing about within-episode reward density against an adversary that can hold the potential roughly constant. Against a hard evader, that is precisely the scenario where the guarantee stops being useful: the theorem protects you from PBRS distorting the optimum, but it does not protect you from PBRS failing to provide a usable gradient in the first place.</p>
+<p><code>CaptureV0ClosingReward</code> is a direct response, and it is a deliberate departure from PBRS rather than a variant of it. Instead of a telescoping potential difference, it pays a persistent, non-telescoping per-step reward proportional to the reduction in mean team-BFS-distance to Pacman, clipped to bound how much a ghost can farm by oscillating at the edge of a safe-distance cordon. Because this term does not telescope, it does not cancel over an episode against an evader who holds distance -- the team is paid every step it closes in and charged every step it backs off, trading away PBRS's policy-invariance guarantee in exchange for an explicit directional pursuit bias. The honest way to describe this design is: PBRS's own invariance property was preserving the passivity that needed fixing, so the fix had to give up the invariance property on purpose. This is a useful teaching example of matching the tool to the failure mode rather than defending a technique past the point where its guarantee is doing the work you need.</p>
+<h2 id="4-how-the-shaping-is-actually-checked-for-a-causal-effect">4. How the shaping is actually checked for a causal effect</h2>
+<p>None of the above is meaningful without a control condition. <code>CaptureV0SparseControl</code> (<code>strategy_id = "capture_v0_sparse_control"</code>) is byte-identical to <code>CaptureV0PurePotentialShaping</code> except that the <code>potential_shaping</code> term is omitted entirely; it deliberately reuses the same weights dataclass so the terminal reward magnitudes and the <code>timestep</code> cost cannot drift between the two arms. This is the matched sparse-reward control for an A/B experiment (<code>plan-000031</code>) testing whether PBRS improves sample efficiency relative to sparse-only reward -- if you want to claim "PBRS helped," you need an arm where literally nothing else differs.</p>
+<p>Comparisons across arms and algorithms (IQL/VDN/QMIX) follow the project's benchmarking-reporting standard (D-003, grounded in Papoudakis et al. 2021): mean plus 95% confidence interval across at least 5 seeds, with IQM (interquartile mean) and bootstrap confidence intervals per the small-sample-robust approach of Agarwal et al. (2021), a two-sided t-test (p &lt; 0.05) to flag algorithms not significantly different from the best performer, both max-return and all-evals average-return reported, and a fixed greedy N-episode evaluation decoupled from training-time rollouts. This matters for the same reason the matched control matters: at n=5 seeds, a bare mean-over-runs comparison invites over-claiming, and a fixed greedy evaluation avoids conflating exploration noise during training with actual policy quality.</p>
+<h2 id="5-if-you-want-to-extend-this">5. If you want to extend this</h2>
+<p>Reward strategies in this codebase are pluggable via a <code>module:Class</code> loader in <code>custom_environment/env/rewards/loader.py</code>, which accepts a class path string and validates/instantiates it against the shared <code>RewardStrategy</code> interface (<code>custom_environment/env/rewards/base.py</code>). If you want to try your own potential function -- a different distance metric, a different aggregation across ghosts, a discounted variant matched to the training algorithm's actual <code>gamma</code> -- you can implement a new <code>RewardStrategy</code> subclass following the pattern in <code>CaptureV0PurePotentialShaping</code> and pass its <code>module:Class</code> path via the <code>--reward-class</code> CLI flag rather than modifying the existing strategies in place. Given the min-versus-mean lesson above, anything with a shared team reward and more than one agent is worth checking for whether every agent actually receives a gradient it can act on before you assume the shaping term is doing what you designed it to do.</p>
+<h2 id="references">References</h2>
+<ul>
+<li>Ng, A. Y., Harada, D., &amp; Russell, S. (1999). Policy invariance under reward transformations: Theory and application to reward shaping. <em>Proceedings of the Sixteenth International Conference on Machine Learning (ICML)</em>.</li>
+<li>Papoudakis, G., Christianos, F., Schafer, L., &amp; Albrecht, S. V. (2021). Benchmarking multi-agent deep reinforcement learning algorithms in cooperative tasks. <em>NeurIPS Datasets and Benchmarks Track</em>.</li>
+<li>Agarwal, R., Schwarzer, M., Castro, P. S., Courville, A., &amp; Bellemare, M. (2021). Deep reinforcement learning at the edge of the statistical precipice. <em>NeurIPS</em>.</li>
+</ul>
+
+</body>
+</html>
