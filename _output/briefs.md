@@ -4,6 +4,8 @@ Execution log of all skill invocations.
 
 ---
 
+DONE | 2026-07-01 13:36 UTC | STARTED | 2026-07-01 13:31 UTC | research | closing_weight=2.0 esta calibrado para o default de 3 fantasmas (pinklike3)? a escala mean-BFS depende de N (1/2 vs 1/3); sinal de closing sub/superponderado vs terminais/timestep/containment; importa para o ~80% do IQL e o benchmark final?
+
 DONE | 2026-07-01 13:11 UTC | STARTED | 2026-07-01 13:01 UTC | communicate | o trabalho que foi feito aqui nesta branch para meus colegas e professores. quero dividir nas 2 principais etapas: tentativas com potential reward shaping e a nova politica de reward recente, que agora fez o iql ter uma taxa de captura de quase 80% depois de 1M frames
 
 DONE | 2026-07-01 04:10 UTC | STARTED | 2026-07-01 04:05 UTC | research | check current makefile presets. i want to run a full benchmark with the new parameters weve explored in last research.
