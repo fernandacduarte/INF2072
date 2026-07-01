@@ -13,12 +13,12 @@ SEED   ?= 11
 MAZE   ?= pinklike3
 
 # Benchmark training knobs (override on the command line, e.g. make benchmark FRAMES=1200)
-ALGOS   ?= iql
+ALGOS   ?= iql,vdn,qmixglobal
 # 5 seeds per algorithm — constitution Q3 minimum and the Papoudakis-2021
 # benchmarking standard (D-003). Do not drop below 5 for reported results.
-SEEDS   ?= 0
-FRAMES  ?= 100000
-CHECKPOINT_INTERVAL ?= 5000
+SEEDS   ?= 0,1,2,3,4
+FRAMES  ?= 1000000
+CHECKPOINT_INTERVAL ?= 10000
 DEVICE  ?= cuda
 REWARD_ID ?= capture_v0_closing
 LEARNER ?= iql
