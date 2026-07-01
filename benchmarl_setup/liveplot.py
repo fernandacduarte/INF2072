@@ -750,6 +750,28 @@ def _aggregate_algorithm_runs(
     return mean_frames, mean_captures, std_captures, mean_rewards, std_rewards, n_runs
 
 
+def _run_step_map_quality(step_map: dict[int, tuple[float, float, float]]) -> tuple[int, int]:
+    if not step_map:
+        return (0, 0)
+    return (max(step_map.keys()), len(step_map))
+
+
+def _dedupe_run_steps_by_canonical_id(
+    run_steps: dict[str, dict[int, tuple[float, float, float]]],
+) -> dict[str, dict[int, tuple[float, float, float]]]:
+    deduped: dict[str, dict[int, tuple[float, float, float]]] = {}
+    quality_by_run: dict[str, tuple[int, int]] = {}
+    for run_id, step_map in run_steps.items():
+        canonical_run_id = _canonical_run_dir_name(run_id)
+        incoming_quality = _run_step_map_quality(step_map)
+        existing_quality = quality_by_run.get(canonical_run_id)
+        if existing_quality is not None and existing_quality >= incoming_quality:
+            continue
+        quality_by_run[canonical_run_id] = incoming_quality
+        deduped[canonical_run_id] = step_map
+    return deduped
+
+
 def _aggregate_term_runs(
     run_terms: dict[str, dict[int, float]],
     window: int,
@@ -1077,7 +1099,8 @@ class LiveComparisonPlotter:
             selected_labels = selected_labels_by_algorithm.get(algorithm, [])
 
             for device_key in selected_labels:
-                run_steps = by_device.get(device_key, {})
+                run_steps_raw = by_device.get(device_key, {})
+                run_steps = _dedupe_run_steps_by_canonical_id(run_steps_raw)
                 aggregated = _aggregate_algorithm_runs(run_steps, self.window)
                 if aggregated is None:
                     continue
@@ -1182,10 +1205,17 @@ class LiveComparisonPlotter:
                             continue
 
                         term_run_series: dict[str, dict[int, float]] = {}
+                        term_run_quality: dict[str, tuple[int, int]] = {}
                         for run_id, run_term_map in by_term_for_device.items():
                             step_map = run_term_map.get(term_name)
                             if step_map:
-                                term_run_series[run_id] = step_map
+                                canonical_run_id = _canonical_run_dir_name(run_id)
+                                incoming_quality = _run_step_map_quality(run_steps_raw.get(run_id, {}))
+                                existing_quality = term_run_quality.get(canonical_run_id)
+                                if existing_quality is not None and existing_quality >= incoming_quality:
+                                    continue
+                                term_run_quality[canonical_run_id] = incoming_quality
+                                term_run_series[canonical_run_id] = step_map
 
                         aggregated_term = _aggregate_term_runs(term_run_series, self.window)
                         term_series_key = f"{series_key}::reward::{term_name}"

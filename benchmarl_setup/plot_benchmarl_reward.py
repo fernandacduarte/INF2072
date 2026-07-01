@@ -86,6 +86,12 @@ def _canonical_run_dir_name(run_id: str) -> str:
     return str(run_id).split(":", 1)[-1]
 
 
+def _run_step_map_quality(step_map: dict[int, tuple[float, float, float]]) -> tuple[int, int]:
+    if not step_map:
+        return (0, 0)
+    return (max(step_map.keys()), len(step_map))
+
+
 def _checkpoint_frame_from_capture_csv(path: Path) -> int | None:
     prefix = "evaluation_report_live_capture_checkpoint_"
     stem = path.stem
@@ -1233,7 +1239,8 @@ def main() -> None:
 
         run_steps: dict[str, dict[int, tuple[float, float, float]]] = {}
         run_terms: dict[str, dict[str, dict[int, float]]] = {}
-        used_run_dirs: list[str] = []
+        run_step_quality: dict[str, tuple[int, int]] = {}
+        used_run_dirs: set[str] = set()
         used_devices: set[str] = set()
         reward_ids = {
             reward_id
@@ -1258,10 +1265,16 @@ def main() -> None:
                 ):
                     continue
 
-                run_key = f"{device_key}:{run_id}"
+                run_key = f"{device_key}:{canonical_run_id}"
+                incoming_quality = _run_step_map_quality(step_map)
+                existing_quality = run_step_quality.get(run_key)
+                if existing_quality is not None and existing_quality >= incoming_quality:
+                    continue
+
+                run_step_quality[run_key] = incoming_quality
                 run_steps[run_key] = step_map
                 run_terms[run_key] = progress_term_data.get(algorithm, {}).get(device_key, {}).get(run_id, {})
-                used_run_dirs.append(f"{algorithm}@{device_key}:{run_id}")
+                used_run_dirs.add(f"{algorithm}@{device_key}:{canonical_run_id}")
                 used_devices.add(parsed_device)
 
         aggregated = _aggregate_algorithm_runs(run_steps, args.window)
@@ -1292,7 +1305,7 @@ def main() -> None:
             "reward_std": reward_std,
             "run_terms": run_terms,
             "n_runs": n_runs,
-            "used_run_dirs": used_run_dirs,
+            "used_run_dirs": sorted(used_run_dirs),
             "color": color,
             "series_label": series_label,
             "reward_ids": ordered_reward_ids,
