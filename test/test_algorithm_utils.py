@@ -12,6 +12,7 @@ def test_training_schedule_is_shared_across_algorithms_and_mazes():
     max_frames = 60000
     expected = {
         "epsilon_schedule_mode": "global",
+        "epsilon_schedule_source": "global_default",
         "epsilon_init": 1.0,
         "epsilon_end": 0.1,
         "epsilon_anneal_ratio": 0.95,
@@ -31,9 +32,10 @@ def test_training_schedule_curriculum_piecewise_values():
     max_frames = 60000
     expected = {
         "epsilon_schedule_mode": "curriculum_piecewise",
+        "epsilon_schedule_source": "curriculum_default",
         "epsilon_init": 1.0,
         "epsilon_end": 0.08,
-        "epsilon_anneal_ratio": 1.0,
+        "epsilon_anneal_ratio": 0.95,
         "epsilon_anneal_frames": max_frames,
         "max_frames": max_frames,
         "epsilon_stage_boundary_1": max_frames // 3,
@@ -67,9 +69,10 @@ def test_training_schedule_mixed_curriculum_piecewise_values():
     max_frames = 60000
     expected = {
         "epsilon_schedule_mode": "curriculum_piecewise",
+        "epsilon_schedule_source": "curriculum_default",
         "epsilon_init": 1.0,
         "epsilon_end": 0.08,
-        "epsilon_anneal_ratio": 1.0,
+        "epsilon_anneal_ratio": 0.95,
         "epsilon_anneal_frames": max_frames,
         "max_frames": max_frames,
         "epsilon_stage_boundary_1": max_frames // 3,
@@ -153,3 +156,23 @@ def test_epsilon_at_frame_curriculum_stage_decay_plateau_points():
     assert abs(epsilon_at_frame(hard_decay_end, schedule) - 0.08) < 1e-9
     assert abs(epsilon_at_frame(hard_decay_end + 100, schedule) - 0.08) < 1e-9
     assert abs(epsilon_at_frame(max_frames, schedule) - 0.08) < 1e-9
+
+
+def test_training_schedule_curriculum_respects_cli_override_values():
+    max_frames = 60000
+    schedule = training_exploration_schedule(
+        "iql",
+        "pinklike3",
+        max_frames,
+        pacman_curriculum="easy-medium-hard",
+        anneal_ratio=0.5,
+        epsilon_init=0.9,
+        epsilon_end=0.05,
+    )
+
+    assert schedule["epsilon_schedule_mode"] == "global"
+    assert schedule["epsilon_schedule_source"] == "global_cli_override"
+    assert abs(float(schedule["epsilon_init"]) - 0.9) < 1e-9
+    assert abs(float(schedule["epsilon_end"]) - 0.05) < 1e-9
+    assert abs(float(schedule["epsilon_anneal_ratio"]) - 0.5) < 1e-9
+    assert int(schedule["epsilon_anneal_frames"]) == int(max_frames * 0.5)

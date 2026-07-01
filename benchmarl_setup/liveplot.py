@@ -694,34 +694,6 @@ def _resolve_epsilon_from_cli_or_meta(
         }
 
     if any_cli_override:
-        if str(schedule_from_meta.get("epsilon_schedule_mode", "")).strip().lower() == "curriculum_piecewise":
-            schedule = dict(schedule_from_meta)
-            schedule["max_frames"] = int(epsilon_max_frames)
-            schedule["epsilon_init"] = float(epsilon_init)
-            schedule["epsilon_end"] = float(epsilon_end)
-            schedule["epsilon_anneal_ratio"] = float(epsilon_anneal_ratio)
-            schedule["epsilon_anneal_frames"] = int(epsilon_max_frames * epsilon_anneal_ratio)
-
-            if args.epsilon_max_frames is not None:
-                schedule["epsilon_stage_boundary_1"] = int(epsilon_max_frames) // 3
-                schedule["epsilon_stage_boundary_2"] = (2 * int(epsilon_max_frames)) // 3
-
-            if args.epsilon_anneal_ratio is not None:
-                schedule["epsilon_stage_decay_fraction"] = float(epsilon_anneal_ratio)
-
-            if args.epsilon_init is not None or args.epsilon_end is not None:
-                span = float(epsilon_init) - float(epsilon_end)
-                medium_init = float(epsilon_end) + span * (0.65 - 0.08) / (1.0 - 0.08)
-                hard_init = float(epsilon_end) + span * (0.55 - 0.08) / (1.0 - 0.08)
-                schedule["epsilon_easy_init"] = float(epsilon_init)
-                schedule["epsilon_easy_end"] = float(epsilon_end)
-                schedule["epsilon_medium_init"] = float(medium_init)
-                schedule["epsilon_medium_end"] = float(epsilon_end)
-                schedule["epsilon_hard_init"] = float(hard_init)
-                schedule["epsilon_hard_end"] = float(epsilon_end)
-
-            return schedule
-
         return {
             "epsilon_schedule_mode": "global",
             "max_frames": epsilon_max_frames,

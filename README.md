@@ -236,8 +236,8 @@ With `--pacman-curriculum off`, the previous global schedule remains unchanged
 Explicit epsilon override rule: pass `--epsilon-init`, `--epsilon-end`, and
 `--epsilon-anneal-ratio` together (all three) to override epsilon schedule
 values. Partial epsilon overrides are rejected. With curriculum enabled, this
-override keeps curriculum piecewise structure (third boundaries and stage
-resets) while applying the provided epsilon values/decay fraction.
+override uses a single global train-wide decay over `--max-frames` using the
+provided values (it does not use piecewise stage resets for epsilon).
 
 Examples:
 
@@ -743,7 +743,7 @@ from merged `live_progress*.csvl` metadata (`max_frames`, `epsilon_init`,
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
 When metadata indicates curriculum piecewise epsilon, `--epsilon-*` overrides
-now preserve curriculum piecewise shape instead of forcing a global curve.
+force a global epsilon curve using the provided values.
 
 Capture metric note: this plot reads capture values from merged
 `live_progress*.csvl` files (unless `--progress-file` is provided).

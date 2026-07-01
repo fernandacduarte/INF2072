@@ -132,30 +132,39 @@ def training_exploration_schedule(
     if not (0.0 <= eps_end <= eps_init <= 1.0):
         raise ValueError("epsilon values must satisfy 0 <= epsilon_end <= epsilon_init <= 1")
 
-    if curriculum_mode in {"easy-medium-hard", "mixed-easy-medium-hard"}:
-        b1 = resolved_max_frames // 3
-        b2 = (2 * resolved_max_frames) // 3
-        stage_decay_fraction = anneal_ratio if override_active else 0.4
-        span = eps_init - eps_end
-        medium_init = eps_end + span * (0.65 - 0.08) / (1.0 - 0.08)
-        hard_init = eps_end + span * (0.55 - 0.08) / (1.0 - 0.08)
+    if override_active:
+        anneal_frames = int(resolved_max_frames * anneal_ratio)
         return {
-            "epsilon_schedule_mode": "curriculum_piecewise",
-            "epsilon_schedule_source": "curriculum_cli_override" if override_active else "curriculum_default",
+            "epsilon_schedule_mode": "global",
+            "epsilon_schedule_source": "global_cli_override",
             "epsilon_init": float(eps_init),
             "epsilon_end": float(eps_end),
             "epsilon_anneal_ratio": float(anneal_ratio),
+            "epsilon_anneal_frames": int(anneal_frames),
+            "max_frames": int(resolved_max_frames),
+        }
+
+    if curriculum_mode in {"easy-medium-hard", "mixed-easy-medium-hard"}:
+        b1 = resolved_max_frames // 3
+        b2 = (2 * resolved_max_frames) // 3
+        stage_decay_fraction = 0.4
+        return {
+            "epsilon_schedule_mode": "curriculum_piecewise",
+            "epsilon_schedule_source": "curriculum_default",
+            "epsilon_init": 1.0,
+            "epsilon_end": 0.08,
+            "epsilon_anneal_ratio": 0.95,
             "epsilon_anneal_frames": int(resolved_max_frames),
             "max_frames": int(resolved_max_frames),
             "epsilon_stage_boundary_1": int(b1),
             "epsilon_stage_boundary_2": int(b2),
             "epsilon_stage_decay_fraction": float(stage_decay_fraction),
-            "epsilon_easy_init": float(eps_init),
-            "epsilon_easy_end": float(eps_end),
-            "epsilon_medium_init": float(medium_init),
-            "epsilon_medium_end": float(eps_end),
-            "epsilon_hard_init": float(hard_init),
-            "epsilon_hard_end": float(eps_end),
+            "epsilon_easy_init": 1.0,
+            "epsilon_easy_end": 0.08,
+            "epsilon_medium_init": 0.65,
+            "epsilon_medium_end": 0.08,
+            "epsilon_hard_init": 0.55,
+            "epsilon_hard_end": 0.08,
         }
 
     anneal_frames = int(resolved_max_frames * anneal_ratio)
