@@ -269,13 +269,30 @@ def parse_args() -> argparse.Namespace:
         help="Objective evaluation CSV (default: <save-folder>/<maze>/reward_eval.csv).",
     )
     parser.add_argument(
+        "--epsilon-init",
+        type=float,
+        default=None,
+        help=(
+            "Optional exploration epsilon start value. Must be passed together with "
+            "--epsilon-end and --epsilon-anneal-ratio."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=None,
+        help=(
+            "Optional exploration epsilon end value. Must be passed together with "
+            "--epsilon-init and --epsilon-anneal-ratio."
+        ),
+    )
+    parser.add_argument(
         "--epsilon-anneal-ratio",
         type=float,
-        default=0.95,
+        default=None,
         help=(
-            "Fraction of training over which exploration epsilon anneals from 1.0 "
-            "to 0.1 (default 0.95). Lower (e.g. 0.5) gives the greedy policy a "
-            "longer low-epsilon phase to converge and stabilizes the capture curve."
+            "Optional anneal fraction in (0,1]. Must be passed together with "
+            "--epsilon-init and --epsilon-end to activate explicit epsilon override."
         ),
     )
     parser.add_argument(
@@ -349,7 +366,18 @@ def _build_command(
         command.extend(["--pacman-safe-distance", str(args.pacman_safe_distance)])
     command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
     command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
-    command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
+    epsilon_override_active = all(
+        value is not None
+        for value in (
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    )
+    if epsilon_override_active:
+        command.extend(["--epsilon-init", str(args.epsilon_init)])
+        command.extend(["--epsilon-end", str(args.epsilon_end)])
+        command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
 
     if args.randomize_spawns:
         command.append("--randomize-spawns")
@@ -644,6 +672,8 @@ class ProgressReporter:
         machine_id: str,
         epsilon_algorithm: str,
         epsilon_anneal_ratio: float,
+        epsilon_init: float | None,
+        epsilon_end: float | None,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
@@ -667,6 +697,8 @@ class ProgressReporter:
             self.max_frames,
             pacman_curriculum=self.pacman_curriculum,
             anneal_ratio=float(epsilon_anneal_ratio),
+            epsilon_init=epsilon_init,
+            epsilon_end=epsilon_end,
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
         self.eval_seed_base = int(eval_seed_base)
@@ -742,6 +774,7 @@ class ProgressReporter:
             "#meta,"
             f"max_frames={self.epsilon_schedule['max_frames']},"
             f"epsilon_schedule_mode={schedule_mode},"
+            f"epsilon_schedule_source={self.epsilon_schedule.get('epsilon_schedule_source', '')},"
             f"epsilon_init={self.epsilon_schedule['epsilon_init']},"
             f"epsilon_end={self.epsilon_schedule['epsilon_end']},"
             f"epsilon_anneal_ratio={self.epsilon_schedule['epsilon_anneal_ratio']},"
@@ -1192,6 +1225,30 @@ def main() -> None:
         raise ValueError("--pacman-random-action-prob must be in [0,1].")
     if int(args.pacman_curriculum_max_frames) < 0:
         raise ValueError("--pacman-curriculum-max-frames must be >= 0.")
+    epsilon_override_count = sum(
+        value is not None
+        for value in (
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    )
+    if epsilon_override_count not in {0, 3}:
+        raise ValueError(
+            "Explicit epsilon override requires all three flags together: "
+            "--epsilon-init, --epsilon-end, --epsilon-anneal-ratio."
+        )
+    if epsilon_override_count == 3 and not (
+        0.0 <= float(args.epsilon_end) <= float(args.epsilon_init) <= 1.0
+    ):
+        raise ValueError("--epsilon values must satisfy 0 <= epsilon-end <= epsilon-init <= 1")
+    resolved_epsilon_anneal_ratio = (
+        float(args.epsilon_anneal_ratio)
+        if args.epsilon_anneal_ratio is not None
+        else 0.95
+    )
+    if not (0.0 < resolved_epsilon_anneal_ratio <= 1.0):
+        raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
 
     algorithms = [normalize_algorithm(item) for item in args.algorithms.split(",") if item.strip()]
     if not algorithms:
@@ -1225,8 +1282,6 @@ def main() -> None:
         reward_specs.append((strategy.strategy_id, class_path))
     if not reward_specs:
         raise ValueError("At least one reward class must be provided.")
-    if not (0.0 < float(args.epsilon_anneal_ratio) <= 1.0):
-        raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
     if args.eval_episodes < 0:
         raise ValueError("--eval-episodes must be non-negative.")
     if args.live_capture_eval_episodes < 0:
@@ -1307,7 +1362,9 @@ def main() -> None:
             pacman_curriculum_frame_offset=0,
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
-            epsilon_anneal_ratio=args.epsilon_anneal_ratio,
+            epsilon_anneal_ratio=resolved_epsilon_anneal_ratio,
+            epsilon_init=args.epsilon_init,
+            epsilon_end=args.epsilon_end,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,

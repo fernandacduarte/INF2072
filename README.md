@@ -189,6 +189,7 @@ Useful optional parameters for training (`benchmarl_setup\run_pacman_benchmarl.p
 --pacman-random-action-prob 0.0
 --pacman-safe-distance 1
 --pacman-curriculum off|easy-medium-hard|mixed-easy-medium-hard --pacman-curriculum-max-frames 60000
+--epsilon-init 1.0 --epsilon-end 0.08 --epsilon-anneal-ratio 0.40
 --randomize-spawns|--no-randomize-spawns --randomize-spawns-min-distance 4
 ```
 
@@ -231,6 +232,12 @@ remaining `60%`:
 Transition boundaries use exact thirds of `--max-frames`.
 With `--pacman-curriculum off`, the previous global schedule remains unchanged
 (`1.00 -> 0.10` over 95% of `--max-frames`).
+
+Explicit epsilon override rule: pass `--epsilon-init`, `--epsilon-end`, and
+`--epsilon-anneal-ratio` together (all three) to override epsilon schedule
+values. Partial epsilon overrides are rejected. With curriculum enabled, this
+override keeps curriculum piecewise structure (third boundaries and stage
+resets) while applying the provided epsilon values/decay fraction.
 
 Examples:
 
@@ -440,6 +447,7 @@ Useful optional parameters:
 ```bash
 --algorithms iql,vdn,qmixlocal,qmixglobal --frames-per-batch 200 --optimizer-steps 10 --train-batch-size 128 --memory-size 10000 --init-random-frames 5000
 --ghost-view-size 3|5|7
+--epsilon-init 1.0 --epsilon-end 0.08 --epsilon-anneal-ratio 0.40
 --devices cpu,cuda --allow-cpu-fallback --jobs-out benchmarl_setup\runs\benchmark_jobs_myhost.csv --machine-id myhost
 ```
 
@@ -734,6 +742,8 @@ from merged `live_progress*.csvl` metadata (`max_frames`, `epsilon_init`,
 `epsilon_end`, `epsilon_anneal_ratio`) with optional `--epsilon-*` overrides.
 There are no built-in epsilon fallback defaults in this script; if metadata is
 missing/incomplete, pass all required `--epsilon-*` values explicitly.
+When metadata indicates curriculum piecewise epsilon, `--epsilon-*` overrides
+now preserve curriculum piecewise shape instead of forcing a global curve.
 
 Capture metric note: this plot reads capture values from merged
 `live_progress*.csvl` files (unless `--progress-file` is provided).

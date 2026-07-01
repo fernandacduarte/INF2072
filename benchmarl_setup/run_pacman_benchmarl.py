@@ -60,6 +60,8 @@ def _tune_shared_experiment(
     maze: str,
     pacman_curriculum: str,
     epsilon_anneal_ratio: float = 0.95,
+    epsilon_init: float | None = None,
+    epsilon_end: float | None = None,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
     schedule = training_exploration_schedule(
@@ -68,6 +70,8 @@ def _tune_shared_experiment(
         max_frames,
         pacman_curriculum=pacman_curriculum,
         anneal_ratio=float(epsilon_anneal_ratio),
+        epsilon_init=epsilon_init,
+        epsilon_end=epsilon_end,
     )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
@@ -231,13 +235,30 @@ def parse_args() -> argparse.Namespace:
         help="Fall back to CPU when CUDA is requested but unavailable.",
     )
     parser.add_argument(
+        "--epsilon-init",
+        type=float,
+        default=None,
+        help=(
+            "Optional exploration epsilon start value. Must be passed together with "
+            "--epsilon-end and --epsilon-anneal-ratio."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=None,
+        help=(
+            "Optional exploration epsilon end value. Must be passed together with "
+            "--epsilon-init and --epsilon-anneal-ratio."
+        ),
+    )
+    parser.add_argument(
         "--epsilon-anneal-ratio",
         type=float,
-        default=0.95,
+        default=None,
         help=(
-            "Fraction of training over which exploration epsilon anneals from 1.0 "
-            "to 0.1 (default 0.95). Lower values give the greedy policy a longer "
-            "low-epsilon phase to converge."
+            "Optional anneal fraction in (0,1]. Must be passed together with "
+            "--epsilon-init and --epsilon-end to activate explicit epsilon override."
         ),
     )
     return parser.parse_args()
@@ -252,6 +273,30 @@ def main() -> None:
         raise ValueError("--pacman-curriculum-max-frames must be >= 0.")
     if int(args.pacman_curriculum_frame_offset) < 0:
         raise ValueError("--pacman-curriculum-frame-offset must be >= 0.")
+    epsilon_override_count = sum(
+        value is not None
+        for value in (
+            args.epsilon_init,
+            args.epsilon_end,
+            args.epsilon_anneal_ratio,
+        )
+    )
+    if epsilon_override_count not in {0, 3}:
+        raise ValueError(
+            "Explicit epsilon override requires all three flags together: "
+            "--epsilon-init, --epsilon-end, --epsilon-anneal-ratio."
+        )
+    if epsilon_override_count == 3 and not (
+        0.0 <= float(args.epsilon_end) <= float(args.epsilon_init) <= 1.0
+    ):
+        raise ValueError("--epsilon values must satisfy 0 <= epsilon-end <= epsilon-init <= 1")
+    resolved_epsilon_anneal_ratio = (
+        float(args.epsilon_anneal_ratio)
+        if args.epsilon_anneal_ratio is not None
+        else 0.95
+    )
+    if not (0.0 < resolved_epsilon_anneal_ratio <= 1.0):
+        raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
     algorithm = normalize_algorithm(args.algorithm)
     resolved_reward_class = (
         str(args.reward_class).strip()
@@ -347,7 +392,9 @@ def main() -> None:
         args.max_frames,
         args.maze,
         args.pacman_curriculum,
-        float(args.epsilon_anneal_ratio),
+        resolved_epsilon_anneal_ratio,
+        epsilon_init=args.epsilon_init,
+        epsilon_end=args.epsilon_end,
     )
 
     experiment = Experiment(
