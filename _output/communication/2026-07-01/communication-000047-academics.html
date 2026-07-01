@@ -38,7 +38,7 @@ a { color: #0366d6; }
 <p>O objetivo especifico deste branch (<code>capture_v0_pure_potential_shaping</code>) e fazer os fantasmas efetivamente <strong>perseguirem e capturarem</strong> um Pacman dificil e evasivo -- ou seja, resolver um problema de <strong>pursuit-evasion</strong>, e nao apenas de coleta de reward. Ate o marco descrito aqui, o comportamento de perseguicao (following) nunca havia sido observado.</p>
 <h3 id="setup-experimental">Setup experimental</h3>
 <ul>
-<li><strong>Agentes:</strong> 2 fantasmas cooperativos (joint reward), Pacman como adversario controlado por politica fixa.</li>
+<li><strong>Agentes:</strong> fantasmas cooperativos que compartilham um joint reward; Pacman como adversario com politica fixa. A configuracao consolidada (Etapa 2) usa <strong>3 fantasmas</strong> (maze <code>pinklike3</code>); a Etapa 1 (PBRS) rodou com <strong>2 fantasmas</strong> (maze <code>pinklike</code>) -- ver secao 3.2.</li>
 <li><strong>Ambiente:</strong> labirinto ciclico de aproximadamente 20x20 celulas.</li>
 <li><strong>Captura:</strong> por co-localizacao (<code>capture_radius = 0</code>) -- um fantasma precisa ocupar a mesma celula do Pacman.</li>
 <li><strong>Adversario (evader):</strong> politica BFS <code>defense-first</code> (survival primeiro, coleta de pellets secundaria), com <code>safe_distance = 3</code>. O Pacman <strong>move primeiro</strong> a cada passo, o que lhe da vantagem estrutural de fuga.</li>
@@ -59,7 +59,7 @@ a { color: #0366d6; }
 <p>A verificacao formal (research-000038) confirmou que a implementacao e <strong>PBRS puro</strong>: apenas o delta <code>Phi(s') - Phi(s)</code> entra no reward; o potencial absoluto nunca e somado diretamente.</p>
 <h3 id="22-a-falha-diagnosticada-causalmente-research-000035">2.2 A falha, diagnosticada causalmente (research-000035)</h3>
 <p>Contra um evader quase-perfeito que mantem a distancia de equipe aproximadamente <strong>constante</strong>, a soma telescopica colapsa para aproximadamente zero. O resultado e <strong>pressao de perseguicao liquida nula</strong> ao longo do episodio.</p>
-<p>Simultaneamente, o terminal de captura <code>+100</code> quase nunca dispara: dois fantasmas de mesma velocidade em um labirinto ciclico <strong>nao conseguem forcar</strong> a captura de um evader <code>defense-first</code>. Trata-se de um teto estrutural de pursuit-evasion (cop-number / endgame), documentado em research-000033.</p>
+<p>Simultaneamente, o terminal de captura <code>+100</code> quase nunca dispara: <strong>dois</strong> fantasmas de mesma velocidade (maze <code>pinklike</code>) em um labirinto ciclico <strong>nao conseguem forcar</strong> a captura de um evader <code>defense-first</code>. Trata-se de um teto estrutural de pursuit-evasion (cop-number / endgame), documentado em research-000033 -- e um dos motivos pelos quais a Etapa 2 passa a usar um terceiro fantasma.</p>
 <p>Assim, o sinal dominante remanescente e o <code>timestep = -0.05</code> por passo somado ao <code>-100</code> de timeout. A licao racional que o agente aprende e: <em>"perco -100 de qualquer forma; entao minimizo o custo por passo"</em> -- o que produz <strong>passividade</strong>. Os fantasmas nunca aprenderam a seguir.</p>
 <p>Fatores secundarios contribuintes (registrados para transparencia metodologica):</p>
 <ul>
@@ -79,8 +79,10 @@ a { color: #0366d6; }
 <p>sobre a distancia BFS <strong>media</strong> (mean) da equipe ao Pacman, com <code>closing_weight = 2.0</code> e <code>closing_clip = 2.0</code>.</p>
 <p>O ponto de design e explicito: essa reward <strong>nao</strong> e potential-based, portanto <strong>nao telescopa</strong> ao longo do episodio. A equipe e paga a cada passo em que se aproxima e cobrada a cada passo em que recua. Uma oscilacao no lugar continua somando aproximadamente zero (celulas positivas e negativas se cancelam), e o <code>clip</code> limita qualquer tentativa de orbit-farming (risco RC4, research-000022).</p>
 <p>O enquadramento teorico deve ser tornado explicito: esta estrategia <strong>troca a invariancia de politica do PBRS por um pursuit bias explicito</strong> -- que e precisamente o objetivo, ja que foi a invariancia que preservou a passividade que se busca corrigir. Isso implementa diretamente a recomendacao R2 de research-000035.</p>
-<p>Um pequeno <strong>termo de containment</strong> (<code>pacman_legal_moves_reduced = 0.5</code>) recompensa a reducao do numero de movimentos legais do Pacman enquanto ele esta visivel -- ou seja, empurra o Pacman (herding) para cantos e becos sem saida. E este termo que <strong>converte perseguicao em captura</strong> contra um evader. Mantem-se os mesmos terminais esparsos <code>+100/-100</code>. Novamente <strong>mean</strong> (nao min), para que todo fantasma receba gradiente; <code>closing_weight = 2.0</code> compensa a escala por fantasma reduzida a metade no caso de 2 fantasmas.</p>
-<h3 id="32-correcoes-de-substrato-research-000042-plan-000043-agora-defaults-no-codigo">3.2 Correcoes de substrato (research-000042 -&gt; plan-000043, agora defaults no codigo)</h3>
+<p>Um pequeno <strong>termo de containment</strong> (<code>pacman_legal_moves_reduced = 0.5</code>) recompensa a reducao do numero de movimentos legais do Pacman enquanto ele esta visivel -- ou seja, empurra o Pacman (herding) para cantos e becos sem saida. E este termo que <strong>converte perseguicao em captura</strong> contra um evader. Mantem-se os mesmos terminais esparsos <code>+100/-100</code>. Novamente <strong>mean</strong> (nao min), para que cada fantasma receba gradiente rumo ao Pacman; <code>closing_weight = 2.0</code> amplifica o sinal de closing para mante-lo comparavel em magnitude aos demais termos.</p>
+<h3 id="32-captura-atingivel-terceiro-fantasma-maze-pinklike3">3.2 Captura atingivel: terceiro fantasma (maze <code>pinklike3</code>)</h3>
+<p>Alem da reward, a configuracao consolidada troca o maze <code>pinklike</code> (2 fantasmas) pelo <code>pinklike3</code> (<strong>3 fantasmas</strong>), implementando a alavanca L3 de research-000035: tornar a captura <strong>mecanicamente atingivel</strong>. Isso e a contrapartida direta do diagnostico da Etapa 1. Onde aquele diagnostico previa que bastaria corrigir <strong>um</strong> dos dois lados do loop quebrado (perseguicao OU captura atingivel), a Etapa 2 corrige <strong>os dois</strong> de uma vez: a closing reward persistente fornece a pressao de perseguicao, e o terceiro fantasma torna o cerco (surround) capaz de forcar a captura de um evader <code>defense-first</code>. A troca de maze acompanhou a introducao da nova classe de reward (commit <code>ae4da68</code>).</p>
+<h3 id="33-correcoes-de-substrato-research-000042-plan-000043-agora-defaults-no-codigo">3.3 Correcoes de substrato (research-000042 -&gt; plan-000043, agora defaults no codigo)</h3>
 <table>
 <thead>
 <tr>
@@ -124,9 +126,9 @@ a { color: #0366d6; }
 </tbody>
 </table>
 <p>O treino foi escalado para <strong>1.000.000 de frames</strong>. O oponente de treino usou <code>CURRICULUM = off</code>, Pacman <code>hard</code> com <code>PACMAN_RANDOM_ACTION_PROB = 0.2</code> (20% de acoes aleatorias).</p>
-<h3 id="33-resultado">3.3 Resultado</h3>
+<h3 id="34-resultado">3.4 Resultado</h3>
 <p><strong>O IQL atinge uma capture rate de quase 80% apos 1M de frames.</strong> O comportamento de perseguicao/following finalmente emerge.</p>
-<p>Este resultado valida empiricamente a predicao central do diagnostico da Etapa 1: <strong>corrigir qualquer um dos dois lados do loop quebrado</strong> -- uma reward de perseguicao persistente OU uma captura atingivel -- faz o following aparecer. Registra-se com precisao: <strong>os aproximadamente 80% sao o resultado observado para um algoritmo (IQL) sob a configuracao consolidada, e nao ainda o agregado multi-seed do benchmark completo.</strong></p>
+<p>Este resultado valida empiricamente a predicao central do diagnostico da Etapa 1: <strong>corrigir qualquer um dos dois lados do loop quebrado</strong> -- uma reward de perseguicao persistente OU uma captura atingivel -- faz o following aparecer. Na pratica, a Etapa 2 corrigiu <strong>os dois</strong> lados simultaneamente (closing reward + terceiro fantasma via <code>pinklike3</code>), de modo que o comportamento observado e plenamente consistente com o diagnostico. Registra-se com precisao: <strong>os aproximadamente 80% sao o resultado observado para um algoritmo (IQL) sob a configuracao consolidada, e nao ainda o agregado multi-seed do benchmark completo.</strong></p>
 <hr />
 <h2 id="4-metodologia-e-reprodutibilidade">4. Metodologia e reprodutibilidade</h2>
 <p>O padrao de benchmarking adotado segue a Decisao <strong>D-003</strong> do projeto, alinhada a <strong>Papoudakis et al. (2021, EPyMARL)</strong>:</p>
@@ -151,6 +153,7 @@ make eval-report EVASIVENESS=1.0
 <li>Os aproximadamente <strong>80% sao IQL</strong> sob <strong>uma</strong> configuracao consolidada; o agregado completo de 5 seeds para IQL/VDN/QMIX com intervalos de confianca e o proximo artefato.</li>
 <li>A closing reward <strong>sacrifica intencionalmente</strong> a invariancia de politica do PBRS em troca de um pursuit bias -- essa e uma escolha de design, nao uma propriedade teoricamente neutra.</li>
 <li>Os resultados sao para <strong>captura por co-localizacao</strong> (<code>capture_radius = 0</code>) no regime de evader dificil (hard-evader); a generalizacao para outros regimes nao esta demonstrada.</li>
+<li>O comentario de calibracao de <code>closing_weight = 2.0</code> no codigo ainda referencia <strong>2 fantasmas</strong>, enquanto a config consolidada usa <strong>3</strong> (<code>pinklike3</code>); o peso funciona empiricamente, mas essa calibracao de escala merece revisao.</li>
 <li><strong>Intervalos de confianca largos sao esperados em n = 5</strong> e serao apresentados de forma honesta (D-003), sem estreitamento artificial.</li>
 </ul>
 <h3 id="status-epistemico-das-afirmacoes">Status epistemico das afirmacoes</h3>
