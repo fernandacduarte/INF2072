@@ -6,7 +6,7 @@ Execution log of all skill invocations.
 
 STARTED | 2026-07-02 03:53 UTC | communicate | 1 slide HTML com gráfico do resultado do treino, plotando estatísticas dos 5 seeds (benchmark pinklike3 capture_v0_closing) + levantar com UI/UX o que o gráfico precisa ter
 
-STARTED | 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS); 1 slide para apresentar amanhã
+DONE | 2026-07-02 03:57 UTC | STARTED | 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS); 1 slide para apresentar amanhã
 
 DONE | 2026-07-02 03:57 UTC | STARTED | 2026-07-02 03:48 UTC | communicate | 3 slides para falar sobre o necessário para o professor de RL entender o que fizemos
 
