@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communication 000050 Academics</title>
+  <style>
+body {
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+}
+h1, h2, h3 { margin-top: 1.4em; }
+code { background: #f4f4f4; padding: 0.15em 0.3em; border-radius: 3px; }
+pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ddd; padding: 0.5em 0.75em; text-align: left; }
+th { background: #f8f8f8; }
+blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #555; }
+a { color: #0366d6; }
+
+  </style>
+</head>
+<body>
+
+<!-- Communication 000050 | ACD | 2026-07-02 03:55 UTC | Academicos (professor de RL) -->
+<hr />
+<p>marp: true
+paginate: true</p>
+<hr />
+<h1 id="pursuit-cooperativo-num-pacman-multiagente">Pursuit cooperativo num Pacman multiagente</h1>
+<h3 id="o-problema-e-o-setup">O problema e o setup</h3>
+<p><strong>Objetivo:</strong> fazer fantasmas cooperativos efetivamente PERSEGUIREM (following) um evader dificil -- nao apenas coletar reward. Following nunca havia sido observado.</p>
+<ul>
+<li>Ambiente Pacman customizado, interface <strong>PettingZoo AEC</strong>; labirinto ciclico ~20x20.</li>
+<li>Fantasmas = agentes cooperativos com <strong>joint reward</strong>; algoritmos <strong>IQL / VDN / QMIX</strong> via <strong>BenchMARL</strong> (TorchRL).</li>
+<li>Regime <strong>CTDE</strong>, observabilidade parcial (<strong>POMDP</strong>); reward de treino le a distancia BFS verdadeira, politicas em execucao veem so a visao local.</li>
+<li>Captura por <strong>co-localizacao</strong> (<code>capture_radius = 0</code>).</li>
+<li>Evader: Pacman <code>defense-first</code> (BFS survival-first, <code>safe_distance = 3</code>) que <strong>move primeiro</strong> -- vantagem estrutural de fuga.</li>
+</ul>
+<p>Branch: <code>capture_v0_pure_potential_shaping</code></p>
+<hr />
+<h2 id="etapa-1-pbrs-e-por-que-falhou-insight-central">Etapa 1 -- PBRS e por que falhou (insight central)</h2>
+<p><strong>Potential-Based Reward Shaping</strong> (Ng, Harada &amp; Russell 1999), forma telescopica episodica nao descontada:</p>
+<p><code>F = Phi(s') - Phi(s)</code>,  com  <code>Phi = -alpha * mean_BFS_dist</code> (<code>alpha = 0.7</code>, media sobre os fantasmas). Terminais esparsos: <code>+100</code> captura, <code>-100</code> timeout/pellets, <code>-0.05</code> por passo.</p>
+<ul>
+<li>Contra um evader que mantem a distancia ~constante, a <strong>soma telescopica colapsa para ~0</strong> =&gt; pressao de perseguicao liquida nula.</li>
+<li>A captura <code>+100</code> quase nunca dispara: <strong>2 fantasmas</strong> de mesma velocidade nao forcam captura -- teto estrutural de pursuit-evasion (cop-number).</li>
+<li>Sinal dominante remanescente = <code>-0.05/passo</code> + <code>-100</code> de timeout =&gt; o agente aprende <strong>passividade</strong> ("perco -100 de qualquer jeito; minimizo custo").</li>
+</ul>
+<p><strong>Insight teorico:</strong> a <strong>invariancia de politica</strong> do PBRS -- sua virtude -- e exatamente o que <strong>preservou a passividade</strong>. Um shaping invariante NAO pode fabricar o pursuit bias necessario.</p>
+<hr />
+<h2 id="etapa-2-closing-reward-resultado-metodologia">Etapa 2 -- closing reward + resultado + metodologia</h2>
+<p>Nova reward persistente e <strong>nao-telescopica</strong> (<code>CaptureV0ClosingReward</code>):</p>
+<p><code>closing_reward = closing_weight * clip(prev_dist - cur_dist, -c, +c)</code> sobre mean BFS, <code>closing_weight = 2.0</code>.</p>
+<ul>
+<li>Troca <strong>deliberadamente</strong> a invariancia por um <strong>pursuit bias explicito</strong> (R2 de research-000035). Paga a cada passo de aproximacao; oscilar no lugar ainda soma ~0; <code>clip</code> barra orbit-farming.</li>
+<li><strong>Containment</strong> (<code>pacman_legal_moves_reduced = 0.5</code>): herding para cantos -- converte perseguicao em captura.</li>
+<li><strong>3o fantasma</strong> (maze <code>pinklike3</code>): torna a captura mecanicamente atingivel.</li>
+<li>Substrato corrigido: buffer 10k-&gt;25k, UTD 10-&gt;4, epsilon-end 0.10-&gt;0.05; <strong>1M frames</strong>.</li>
+</ul>
+<p><strong>Resultado: IQL atinge ~80% de capture rate; following finalmente emerge.</strong></p>
+<p><strong>Honestidade:</strong> ~80% e UM algoritmo (IQL) sob UMA config -- nao o agregado multi-seed. Benchmark segue D-003: &gt;=5 seeds, media +/- 95% CI, estimadores rliable/IQM + bootstrap, teste-t bicaudal, greedy eval desacoplado (Papoudakis 2021, Agarwal 2021). Estado: commit <code>43caa91</code>.</p>
+
+</body>
+</html>

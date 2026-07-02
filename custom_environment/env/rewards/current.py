@@ -992,6 +992,90 @@ class CaptureV0ClosingReward(CaptureV0Reward):
             terms.append(RewardTerm("PACMAN_WIN_PALLETS", w.pacman_win_pellets, "terminal"))
 
         return RewardResult(tuple(terms))
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureV0ClosingShapedWeights:
+    # Base closing terms: identical to CaptureV0ClosingRewardWeights so the A/B
+    # against capture_v0_closing isolates the added movement/perception shaping.
+    get_pacman: float = 100.0
+    pacman_timeout_win: float = -100.0
+    pacman_win_pellets: float = -100.0
+    timestep: float = -0.05
+    closing_weight: float = 2.0
+    closing_clip: float = 2.0
+    pacman_legal_moves_reduced: float = 0.5
+    # Movement/perception shaping (values from the part-1 reward table).
+    valid_move: float = 0.01
+    invalid_move: float = -0.08
+    stay_still: float = -0.03
+    reveal_unseen_local_cells: float = 0.05
+    # Per-pellet penalty: charge the team every pellet Pacman eats, giving a
+    # dense urgency signal long before the terminal PACMAN_WIN_PALLETS fires.
+    pellet_eaten: float = -0.5
+
+
+class CaptureV0ClosingShaped(CaptureV0ClosingReward):
+    """capture_v0_closing + dense movement/perception shaping.
+
+    A/B variant over ``CaptureV0ClosingReward`` (identical closing/containment/
+    terminal weights) that adds the early-learning shaping terms from the part-1
+    reward design: per-ghost ``valid_move``/``invalid_move``/``stay_still``,
+    ``reveal_unseen_local_cells`` (exploration), and a per-pellet ``PELLET_EATEN``
+    penalty. Hypothesis: the dense per-step signal accelerates initial learning
+    (sample efficiency at ~100k frames) before the closing reward takes over.
+    """
+
+    strategy_id = "capture_v0_closing_shaped"
+
+    def __init__(
+        self,
+        weights: CaptureV0ClosingShapedWeights | None = None,
+    ) -> None:
+        super().__init__()
+        self.weights = weights or CaptureV0ClosingShapedWeights()
+        # State for _reveals_unseen_cells (the CaptureV0* chain does not init it).
+        self._seen_local_cells: dict[str, set[Position]] = {}
+
+    def reset(self, initial_context: RewardContext) -> None:
+        super().reset(initial_context)
+        self._seen_local_cells = {
+            ghost.ghost_id: self._local_cells(
+                ghost.current_position,
+                initial_context.ghost_view_radius,
+            )
+            for ghost in initial_context.ghosts
+        }
+
+    def compute(self, context: RewardContext) -> RewardResult:
+        result = super().compute(context)
+        w = self.weights
+        terms = list(result.terms)
+
+        for ghost in context.ghosts:
+            moved = ghost.previous_position != ghost.current_position
+            if not moved:
+                if ghost.invalid_move:
+                    terms.append(RewardTerm("invalid_move", w.invalid_move))
+                else:
+                    terms.append(RewardTerm("stay_still", w.stay_still))
+            else:
+                terms.append(RewardTerm("valid_move", w.valid_move))
+            if self._reveals_unseen_cells(ghost, context.ghost_view_radius):
+                terms.append(
+                    RewardTerm(
+                        "reveal_unseen_local_cells",
+                        w.reveal_unseen_local_cells,
+                    )
+                )
+
+        pellets = context.pellets_eaten_this_step
+        if pellets > 0:
+            terms.append(RewardTerm("PELLET_EATEN", w.pellet_eaten * pellets))
+
+        return RewardResult(tuple(terms))
+
+
 class CaptureV0PurePotentialShapingPellets(CaptureV0PurePotentialShaping):
     """Pure potential shaping variant with a per-pellet Pacman penalty."""
 

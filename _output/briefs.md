@@ -7,6 +7,19 @@ Execution log of all skill invocations.
 DONE | 2026-07-01 20:08 UTC | STARTED | 2026-07-01 20:03 UTC | communicate | explique a politica de reward capture_v0_closing
 
 DONE | 2026-07-01 20:07 UTC | STARTED | 2026-07-01 20:02 UTC | communicate | explicar o PBRS para colegas de turma
+DONE | 2026-07-02 04:12 UTC | STARTED | 2026-07-02 03:53 UTC | communicate | 1 slide HTML com gráfico do resultado do treino, plotando estatísticas dos 5 seeds (benchmark pinklike3 capture_v0_closing) + levantar com UI/UX o que o gráfico precisa ter
+
+DONE | 2026-07-02 03:57 UTC | STARTED | 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS); 1 slide para apresentar amanhã
+
+DONE | 2026-07-02 03:57 UTC | STARTED | 2026-07-02 03:48 UTC | communicate | 3 slides para falar sobre o necessário para o professor de RL entender o que fizemos
+
+DONE | 2026-07-02 02:36 UTC | STARTED | 2026-07-02 02:30 UTC | communicate | exportar o necessário para colegas reproduzirem a avaliação (make eval-latest / eval.py iql pinklike3 capture_v0_closing, capture_rate=0.70, checkpoint_1000000.pt)
+
+DONE | 2026-07-01 13:36 UTC | STARTED | 2026-07-01 13:31 UTC | research | closing_weight=2.0 esta calibrado para o default de 3 fantasmas (pinklike3)? a escala mean-BFS depende de N (1/2 vs 1/3); sinal de closing sub/superponderado vs terminais/timestep/containment; importa para o ~80% do IQL e o benchmark final?
+
+DONE | 2026-07-01 13:11 UTC | STARTED | 2026-07-01 13:01 UTC | communicate | o trabalho que foi feito aqui nesta branch para meus colegas e professores. quero dividir nas 2 principais etapas: tentativas com potential reward shaping e a nova politica de reward recente, que agora fez o iql ter uma taxa de captura de quase 80% depois de 1M frames
+
+DONE | 2026-07-01 04:10 UTC | STARTED | 2026-07-01 04:05 UTC | research | check current makefile presets. i want to run a full benchmark with the new parameters weve explored in last research.
 
 DONE | 2026-06-30 22:13 UTC | STARTED | 2026-06-30 22:11 UTC | research | how PACMAN_RANDOM_ACTION_PROB and EVASIVENESS are being used and how affect make pipeline
 

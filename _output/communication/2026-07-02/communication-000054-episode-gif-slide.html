@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Melhor IQL em acao -- episodio</title>
+<style>
+  :root { color-scheme: light; }
+  html,body { margin:0; background:#f1f5f9; font-family:'Segoe UI',system-ui,Arial,sans-serif; color:#0f172a; }
+  .slide { width:1280px; height:720px; margin:24px auto; background:#fff; border-radius:16px;
+           box-shadow:0 10px 40px rgba(15,23,42,.15); position:relative; overflow:hidden; }
+  .hdr { padding:26px 40px 0 40px; }
+  h1 { margin:0; font-size:33px; letter-spacing:-.5px; }
+  .sub { margin:6px 0 0; font-size:18px; color:#64748b; }
+  .stage { display:flex; gap:32px; padding:16px 40px 0; align-items:center; }
+  .gifbox { flex:0 0 auto; }
+  .gifbox img { height:452px; width:auto; border-radius:10px; border:1px solid #e2e8f0;
+                box-shadow:0 6px 20px rgba(15,23,42,.18); display:block; }
+  .notes { flex:1; }
+  .notes h2 { margin:0 0 14px; font-size:24px; }
+  .kpi { display:flex; gap:14px; margin:14px 0; }
+  .card { flex:1; background:#eff6ff; border-radius:10px; padding:14px 16px; }
+  .card .n { font-size:34px; font-weight:800; color:#2563eb; }
+  .card .l { font-size:15px; color:#64748b; }
+  .notes ul { font-size:20px; line-height:1.5; padding-left:22px; margin:12px 0 0; }
+  .foot { position:absolute; left:40px; right:40px; bottom:18px; font-size:14px; color:#64748b;
+          display:flex; justify-content:space-between; }
+  @media print { body{background:#fff} .slide{box-shadow:none;margin:0} }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="hdr">
+      <h1>Melhor IQL em acao: os fantasmas encurralam o Pac-Man</h1>
+      <p class="sub">Pacman MARL -- maze <b>pinklike3</b> (3 fantasmas) -- reward <b>capture_v0_closing</b> -- checkpoint de 1.000.000 frames -- Pacman 80% evasivo (greedy)</p>
+    </div>
+    <div class="stage">
+      <div class="gifbox">
+        <img src="best-iql-episode.gif" alt="Episodio do melhor IQL: os 3 fantasmas capturam o Pac-Man">
+      </div>
+      <div class="notes">
+        <h2>Um episodio, do inicio a captura</h2>
+        <div class="kpi">
+          <div class="card"><div class="n">78%</div><div class="l">taxa de captura (50 eps)</div></div>
+          <div class="card"><div class="n">161</div><div class="l">passos ate a captura</div></div>
+        </div>
+        <ul>
+          <li>Os 3 fantasmas <b>coordenam</b>: cercam o Pac-Man por lados opostos em vez de perseguir em fila.</li>
+          <li>Politica <b>greedy</b> (sem exploracao) do melhor checkpoint, seed 1.</li>
+          <li>Recompensa de <b>aproximacao</b> (capture_v0_closing) faz os fantasmas fecharem a distancia a cada passo.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot">
+      <span>Gerado com: make eval-gif LEARNER=iql (custom_environment/eval.py --render-mode rgb_array --gif-out ...)</span>
+      <span>fernanda-INF2072 -- branch capture_v0_pure_potential_shaping</span>
+    </div>
+  </div>
+</body>
+</html>

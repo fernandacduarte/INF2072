@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communication 000049 End Users</title>
+  <style>
+body {
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+}
+h1, h2, h3 { margin-top: 1.4em; }
+code { background: #f4f4f4; padding: 0.15em 0.3em; border-radius: 3px; }
+pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ddd; padding: 0.5em 0.75em; text-align: left; }
+th { background: #f8f8f8; }
+blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #555; }
+a { color: #0366d6; }
+
+  </style>
+</head>
+<body>
+
+<h1 id="communication-000049-usr-2026-07-02-0000-utc-end-users">Communication 000049 | USR | 2026-07-02 00:00 UTC | End Users</h1>
+<h1 id="guia-pratico-reproduza-a-avaliacao-dos-fantasmas-treinados">Guia pratico: reproduza a avaliacao dos fantasmas treinados</h1>
+<p>Este guia mostra, passo a passo, como um colega reproduzir na propria maquina o resultado recente de avaliacao do nosso ambiente Pacman multi-agente. Ao final voce tera:</p>
+<ol>
+<li>Assistido aos 3 fantasmas treinados coordenarem e capturarem o Pacman em uma partida ao vivo.</li>
+<li>Reproduzido o mesmo numero relatado de taxa de captura (capture_rate 0.70).</li>
+<li>Aprendido a abrir o monitor de recompensa ao vivo (liveplot) com exatamente 10 checkpoints durante um treino.</li>
+</ol>
+<p>Publico: colegas de pos-graduacao com familiaridade em Python e RL, mas talvez novos neste repositorio. Todos os comandos abaixo sao executados a partir da raiz do projeto.</p>
+<hr />
+<h2 id="o-que-voce-vai-reproduzir">O que voce vai reproduzir</h2>
+<p>O ambiente e um Pacman customizado onde os fantasmas sao agentes cooperativos: eles compartilham uma unica recompensa de time e precisam coordenar para encurralar o Pacman. A configuracao alvo deste guia e:</p>
+<ul>
+<li>Labirinto: <code>pinklike3</code> (variante com 3 spawns de fantasma, ou seja, 3 fantasmas cooperativos).</li>
+<li>Estrategia de recompensa: <code>capture_v0_closing</code> (recompensa de aproximacao persistente que premia reduzir a distancia ate o Pacman a cada passo, mais o bonus grande de captura no final).</li>
+<li>Algoritmo: IQL.</li>
+</ul>
+<hr />
+<h2 id="pre-requisitos">Pre-requisitos</h2>
+<ul>
+<li>Sistema operacional: Windows (os comandos usam o interpretador <code>.venv/Scripts/python.exe</code>).</li>
+<li>Python 3.11 e obrigatorio. Verifique com:</li>
+</ul>
+<p><code>bash
+  py -3.11 --version</code></p>
+<ul>
+<li>GPU (CUDA) foi usada na execucao de referencia (<code>--device cuda</code>). Nao ter GPU nao e impedimento: tudo funciona em CPU trocando <code>--device cuda</code> por <code>--device cpu</code> (veja Solucao de problemas no final).</li>
+</ul>
+<hr />
+<h2 id="passo-1-preparar-o-ambiente">Passo 1 - Preparar o ambiente</h2>
+<ol>
+<li>Crie o ambiente virtual com Python 3.11 (uma unica vez):</li>
+</ol>
+<p><code>bash
+   py -3.11 -m venv venv</code></p>
+<ol>
+<li>Ative o ambiente virtual (Windows PowerShell):</li>
+</ol>
+<p><code>bash
+   .\venv\Scripts\Activate.ps1</code></p>
+<p>Ou, no Prompt de Comando (cmd):</p>
+<p><code>bash
+   venv\Scripts\activate</code></p>
+<ol>
+<li>Instale as dependencias:</li>
+</ol>
+<p><code>bash
+   pip install -r requirements.txt</code></p>
+<p>Observacao sobre o interpretador: os comandos deste guia (e o Makefile) usam o caminho <code>.venv/Scripts/python.exe</code>. Se o seu ambiente virtual se chama <code>venv</code> em vez de <code>.venv</code>, use <code>venv\Scripts\python.exe</code> ou execute os comandos explicitos abaixo trocando o caminho do Python.</p>
+<hr />
+<h2 id="passo-2-reproduzir-a-avaliacao-assistir-aos-fantasmas-treinados">Passo 2 - Reproduzir a avaliacao (assistir aos fantasmas treinados)</h2>
+<p>A forma mais simples e usar o atalho do Makefile:</p>
+<pre><code class="language-bash">make eval-latest
+</code></pre>
+<p>Esse atalho executa exatamente o comando abaixo. Se voce preferir rodar sem o <code>make</code>, use a versao explicita:</p>
+<pre><code class="language-bash">.venv/Scripts/python.exe custom_environment/eval.py --learner iql --checkpoint-select best --device cuda --maze pinklike3 --reward-id capture_v0_closing --pacman-evasiveness 0.8
+</code></pre>
+<p>O que cada parte significa:</p>
+<ul>
+<li><code>--checkpoint-select best</code>: seleciona automaticamente a melhor execucao pela taxa de captura, entao voce nao precisa apontar o arquivo do checkpoint manualmente.</li>
+<li><code>--pacman-evasiveness 0.8</code>: define um Pacman dificil. Isso corresponde a uma probabilidade de acao aleatoria de 0.2 (ou seja, o Pacman age de forma evasiva em 80% dos passos).</li>
+<li><code>--maze pinklike3</code> e <code>--reward-id capture_v0_closing</code>: garantem que a avaliacao leia da subpasta correta de resultados.</li>
+</ul>
+<p>Uma janela do Pygame abre e roda uma partida completa controlada pela politica treinada.</p>
+<hr />
+<h2 id="passo-3-resultado-esperado-e-como-interpretar">Passo 3 - Resultado esperado e como interpretar</h2>
+<p>Antes da partida comecar, o <code>eval.py</code> imprime a estatistica do checkpoint selecionado. Voce deve ver algo consistente com:</p>
+<ul>
+<li>Melhor execucao selecionada: <code>iql_pacman_mlp__884a90e3_...</code>, seed 1, checkpoint <code>checkpoint_1000000.pt</code> (isto e, apos 1.000.000 de frames de treino).</li>
+<li>Metrica relatada: capture_rate = 0.70 (70%). matched_runs 4/4.</li>
+</ul>
+<p>Na partida ao vivo:</p>
+<ul>
+<li>Os 3 fantasmas coordenam e capturam o Pacman por volta do passo ~161.</li>
+<li>No momento da captura ha uma recompensa terminal grande e positiva (cerca de +101) compartilhada por todos os fantasmas.</li>
+<li>Antes da captura, as recompensas oscilam de passo para passo. Isso e esperado: a estrategia <code>capture_v0_closing</code> da recompensa por aproximacao (fechar a distancia), entao o sinal sobe e desce conforme os fantasmas manobram. Nao interprete essa oscilacao como falha; o indicador de sucesso e a captura no final.</li>
+</ul>
+<p>Onde ficam os resultados: as saidas vivem sob <code>benchmarl_setup/runs/pinklike3/capture_v0_closing/&lt;device&gt;/</code> (por exemplo, <code>cuda</code> ou <code>cpu</code> conforme o dispositivo que voce usou).</p>
+<p>Como saber que deu certo:</p>
+<ul>
+<li>A janela final mostra o desfecho da partida (vitoria dos fantasmas) com o numero de passos, a recompensa do time e o tempo decorrido.</li>
+<li>O numero de capture_rate impresso antes da partida deve bater com 0.70.</li>
+</ul>
+<hr />
+<h2 id="passo-4-reproduzir-o-liveplot-com-exatamente-10-checkpoints">Passo 4 - Reproduzir o liveplot com exatamente 10 checkpoints</h2>
+<p>O <code>make liveplot</code> abre um monitor ao vivo da recompensa media (com banda de desvio padrao). Ele foi feito para rodar em um SEGUNDO terminal ENQUANTO um benchmark treina, pois ele fica lendo o arquivo de progresso do treino em andamento.</p>
+<p>O comando que ele executa por baixo e:</p>
+<pre><code class="language-bash">python benchmarl_setup/liveplot.py --algorithms iql --maze pinklike3 --device all
+</code></pre>
+<h3 id="a-regra-dos-checkpoints">A regra dos checkpoints</h3>
+<p>O numero de checkpoints gerados durante o treino segue uma regra simples:</p>
+<pre><code class="language-text">numero de checkpoints = FRAMES / CHECKPOINT_INTERVAL
+</code></pre>
+<p>Para obter exatamente 10 checkpoints, basta definir o intervalo de checkpoint como <code>FRAMES / 10</code>. Com o padrao de 1.000.000 de frames, isso da <code>CHECKPOINT_INTERVAL=100000</code>, produzindo checkpoints em 100k, 200k, ... ate 1M frames (10 pontos igualmente espacados).</p>
+<h3 id="como-rodar-dois-terminais">Como rodar (dois terminais)</h3>
+<p>Terminal 1 - inicie o benchmark com o intervalo ajustado para 10 checkpoints:</p>
+<pre><code class="language-bash">make benchmark ALGOS=iql MAZE=pinklike3 REWARD_ID=capture_v0_closing FRAMES=1000000 CHECKPOINT_INTERVAL=100000
+</code></pre>
+<p>Terminal 2 - logo em seguida, abra o monitor ao vivo:</p>
+<pre><code class="language-bash">make liveplot ALGOS=iql MAZE=pinklike3
+</code></pre>
+<p>Isso gera 10 checkpoints igualmente espacados e uma curva ao vivo que se atualiza conforme o treino avanca.</p>
+<h3 id="versao-mais-rapida-e-barata-ainda-10-checkpoints">Versao mais rapida e barata (ainda 10 checkpoints)</h3>
+<p>Um treino de 1.000.000 de frames leva bastante tempo. Para uma demonstracao mais rapida, reduza os frames e mantenha a regra <code>CHECKPOINT_INTERVAL = FRAMES / 10</code>. Por exemplo, com 100.000 frames:</p>
+<pre><code class="language-bash">make benchmark ALGOS=iql MAZE=pinklike3 REWARD_ID=capture_v0_closing FRAMES=100000 CHECKPOINT_INTERVAL=10000
+</code></pre>
+<p>Isso ainda produz 10 checkpoints, so que muito mais rapido. Lembre-se: um treino curto nao vai atingir a mesma qualidade do resultado de referencia (que usou 1M de frames); use a versao curta apenas para ver o mecanismo do liveplot funcionando.</p>
+<hr />
+<h2 id="solucao-de-problemas">Solucao de problemas</h2>
+<p>CPU em vez de CUDA. Se voce nao tem GPU ou o CUDA nao esta disponivel, troque <code>--device cuda</code> por <code>--device cpu</code> no comando explicito, ou passe <code>DEVICE=cpu</code> para os atalhos do make:</p>
+<pre><code class="language-bash">make eval-latest DEVICE=cpu
+</code></pre>
+<p>Os resultados passam a ficar sob a subpasta <code>cpu</code> (por exemplo <code>benchmarl_setup/runs/pinklike3/capture_v0_closing/cpu/</code>).</p>
+<p>Caminho do interpretador (venv). O Makefile assume o interpretador em <code>.venv/Scripts/python.exe</code>. Se o seu ambiente virtual se chama <code>venv</code>, ajuste o comando explicito para <code>venv\Scripts\python.exe</code>, ou informe o caminho ao make com a variavel <code>PYTHON</code>:</p>
+<pre><code class="language-bash">make eval-latest PYTHON=venv/Scripts/python.exe
+</code></pre>
+<p>Versao errada do Python. Se algo falhar na instalacao ou na importacao das bibliotecas, confirme que voce esta em Python 3.11 com <code>py -3.11 --version</code> e que o ambiente virtual foi criado com essa versao.</p>
+<p>Nao encontra o checkpoint. A selecao <code>--checkpoint-select best</code> procura pela melhor execucao no dispositivo indicado. Se voce treinou em CPU mas avaliou pedindo <code>--device cuda</code> (ou vice-versa), a avaliacao vai olhar a subpasta errada. Use o mesmo dispositivo no treino e na avaliacao, ou ajuste <code>DEVICE=</code> de acordo.</p>
+<hr />
+<p>Fonte de verdade dos comandos: <code>README.md</code> e <code>Makefile</code> do projeto. Todos os comandos deste guia sao os mesmos definidos nesses arquivos.</p>
+
+</body>
+</html>
