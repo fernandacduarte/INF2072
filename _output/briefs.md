@@ -4,6 +4,10 @@ Execution log of all skill invocations.
 
 ---
 
+STARTED | 2026-07-02 11:51 UTC | plan | como seria a junção do pbrs da politica de reward atual ?
+
+DONE | 2026-07-02 11:52 UTC | STARTED | 2026-07-02 11:41 UTC | communicate | 2 slides contando a estória do Closing Distance: por que capture_v0_closing substitui a estratégia PBRS (telescoping shaping ~zero contra Pacman evasivo, causando passividade dos fantasmas) — explicar PBRS e para onde fomos no ClosingDistance
+
 DONE | 2026-07-01 20:08 UTC | STARTED | 2026-07-01 20:03 UTC | communicate | explique a politica de reward capture_v0_closing
 
 DONE | 2026-07-01 20:07 UTC | STARTED | 2026-07-01 20:02 UTC | communicate | explicar o PBRS para colegas de turma

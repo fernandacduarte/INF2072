@@ -7,3 +7,4 @@
 - 000053 | Training curve slide (HTML) -- recompensa media +/- desvio por algoritmo vs frames (estilo liveplot) | [communication-000053-training-curve-slide.html](communication-000053-training-curve-slide.html)
 - 000054 | Episode GIF slide (HTML) -- melhor IQL captura o Pac-Man (GIF animado embutido) | [communication-000054-episode-gif-slide.html](communication-000054-episode-gif-slide.html)
 - 000055 | Reward table slide (HTML) -- componentes de recompensa do capture_v0_closing (estilo Fred, inclui PELLET_EATEN) | [communication-000055-reward-table-slide.html](communication-000055-reward-table-slide.html)
+- 000056 | Academics (ACD) -- texto para 2 slides: historia do ClosingDistance (PBRS -> capture_v0_closing), bullets + notas do apresentador | [communication-000056-academics.md](communication-000056-academics.md)
