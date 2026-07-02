@@ -29,3 +29,4 @@
 {"created_at": "2026-06-29T21:41:32Z", "description": "Run manual tests per plan-000036's Test plan (ceiling_eval ceiling, capture_v0_closing smoke-train, --capture-radius 1 smoke-train)", "id": "pa-000019", "last_reminded_at": null, "snooze_until": null, "source": "plan-000036", "status": "pending", "type": "test-implementation"}
 {"created_at": "2026-06-30T21:39:50Z", "description": "Execute plan-000043 iql hyperparameter defaults", "id": "pa-000020", "last_reminded_at": null, "snooze_until": null, "source": "plan-000043", "status": "pending", "type": "implement"}
 {"closed_at": "2026-06-30T21:48:48Z", "id": "pa-000020", "status": "done"}
+{"created_at": "2026-07-02T12:01:16Z", "description": "Execute plan-000057 Jun\u00e7\u00e3o PBRS + capture_v0_closing", "id": "pa-000021", "last_reminded_at": null, "snooze_until": null, "source": "plan-000057", "status": "pending", "type": "implement"}

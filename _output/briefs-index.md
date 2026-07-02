@@ -5,7 +5,7 @@
 
 | Date | Skill | Brief | Status | Plan | Head SHA | Generated |
 |------|-------|-------|--------|------|----------|-----------|
-| 2026-07-02 11:51 UTC | plan | como seria a junção do pbrs da politica de reward atual ? | STARTED |  |  |  |
+| 2026-07-02 11:51 UTC | plan | como seria a junção do pbrs da politica de reward atual ? | DONE | 000057 |  |  |
 | 2026-07-02 11:41 UTC | communicate | 2 slides contando a estória do Closing Distance: por que capture_v0_closing sub… | DONE |  |  |  |
 | 2026-07-01 20:03 UTC | communicate | explique a politica de reward capture_v0_closing | DONE |  |  |  |
 | 2026-07-01 20:02 UTC | communicate | explicar o PBRS para colegas de turma | DONE |  |  |  |
