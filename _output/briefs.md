@@ -4,6 +4,12 @@ Execution log of all skill invocations.
 
 ---
 
+STARTED | 2026-07-02 03:53 UTC | communicate | 1 slide HTML com gráfico do resultado do treino, plotando estatísticas dos 5 seeds (benchmark pinklike3 capture_v0_closing) + levantar com UI/UX o que o gráfico precisa ter
+
+STARTED | 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS); 1 slide para apresentar amanhã
+
+DONE | 2026-07-02 03:57 UTC | STARTED | 2026-07-02 03:48 UTC | communicate | 3 slides para falar sobre o necessário para o professor de RL entender o que fizemos
+
 DONE | 2026-07-02 02:36 UTC | STARTED | 2026-07-02 02:30 UTC | communicate | exportar o necessário para colegas reproduzirem a avaliação (make eval-latest / eval.py iql pinklike3 capture_v0_closing, capture_rate=0.70, checkpoint_1000000.pt)
 
 DONE | 2026-07-01 13:36 UTC | STARTED | 2026-07-01 13:31 UTC | research | closing_weight=2.0 esta calibrado para o default de 3 fantasmas (pinklike3)? a escala mean-BFS depende de N (1/2 vs 1/3); sinal de closing sub/superponderado vs terminais/timestep/containment; importa para o ~80% do IQL e o benchmark final?
