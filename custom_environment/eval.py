@@ -99,6 +99,38 @@ def save_rgb_frame(frame: np.ndarray, output_path: Path) -> None:
     pygame.image.save(surface, str(output_path))
 
 
+def save_gif(frames: list, output_path: Path, fps: int = 12, max_width: int = 640) -> None:
+    """Assemble captured rgb frames (np.ndarray HxWx3, uint8) into an animated GIF."""
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Pillow is required to save GIFs. Install it with `uv add pillow` "
+            "(or `python -m pip install pillow`)."
+        ) from exc
+
+    if not frames:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    images = []
+    for frame in frames:
+        img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
+        if max_width and img.width > max_width:
+            new_h = int(round(img.height * max_width / img.width))
+            img = img.resize((max_width, new_h))
+        images.append(img.convert("P", palette=Image.ADAPTIVE, colors=128))
+    duration_ms = int(round(1000 / max(1, fps)))
+    images[0].save(
+        str(output_path),
+        save_all=True,
+        append_images=images[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
+        disposal=2,
+    )
+
+
 def _read_scalar_values(csv_path: Path) -> list[float]:
     values = []
     with csv_path.open("r", newline="") as f:
@@ -807,6 +839,10 @@ def run_episode(
     ascii_step_json: bool,
     allow_non_hard_checkpoint: bool,
     pacman_evasiveness: float = 0.8,
+    gif_out: Path | None = None,
+    gif_fps: int = 12,
+    gif_stride: int = 1,
+    gif_width: int = 640,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -879,6 +915,7 @@ def run_episode(
     done = False
     step = 0
     last_frame = None
+    gif_frames: list = []
     last_action_info = None
     last_reward_info = None
     final_result = None
@@ -908,6 +945,11 @@ def run_episode(
                             total_reward=total_reward,
                             done=done,
                         )
+
+                if gif_out is not None:
+                    gif_frames.append(
+                        raw_env.capture_frame(learner=learner, total_reward=total_reward, done=done)
+                    )
 
                 while not done and step < max_steps:
                     step += 1
@@ -974,6 +1016,17 @@ def run_episode(
                                 last_reward_by_agent=reward_info,
                             )
 
+                    if gif_out is not None and (step % max(1, gif_stride) == 0 or done):
+                        gif_frames.append(
+                            raw_env.capture_frame(
+                                learner=learner,
+                                total_reward=total_reward,
+                                done=done,
+                                last_action_by_agent=action_info,
+                                last_reward_by_agent=reward_info,
+                            )
+                        )
+
                     if show_reward_breakdown:
                         breakdown = getattr(raw_env, "last_team_reward_breakdown", None)
                         if breakdown is not None:
@@ -1018,6 +1071,18 @@ def run_episode(
                             last_reward_by_agent=last_reward_info,
                             final_result=final_result,
                         )
+                    if gif_out is not None:
+                        final_frame = raw_env.capture_frame(
+                            learner=learner,
+                            total_reward=total_reward,
+                            done=final_done,
+                            last_action_by_agent=last_action_info,
+                            last_reward_by_agent=last_reward_info,
+                            final_result=final_result,
+                        )
+                        for _ in range(max(1, gif_fps)):  # linger ~1s on the outcome
+                            gif_frames.append(final_frame)
+
                     if render_mode == "human":
                         raw_env.wait_for_close(
                             learner=learner,
@@ -1031,6 +1096,9 @@ def run_episode(
             if screenshot_out is not None and last_frame is not None:
                 save_rgb_frame(last_frame, screenshot_out)
                 print(f"Saved screenshot: {screenshot_out}")
+            if gif_out is not None and gif_frames:
+                save_gif(gif_frames, gif_out, fps=gif_fps, max_width=gif_width)
+                print(f"Saved GIF: {gif_out} ({len(gif_frames)} frames)")
     finally:
         raw_env.close()
         experiment.close()
@@ -1154,6 +1222,30 @@ def main() -> None:
         help="Optional PNG path for the last rendered frame.",
     )
     parser.add_argument(
+        "--gif-out",
+        type=Path,
+        default=None,
+        help="Optional path to save the whole episode as an animated GIF (works in any render mode).",
+    )
+    parser.add_argument(
+        "--gif-fps",
+        type=int,
+        default=12,
+        help="Frames per second for the --gif-out animation (default 12).",
+    )
+    parser.add_argument(
+        "--gif-stride",
+        type=int,
+        default=1,
+        help="Record one frame every N steps for --gif-out (default 1 = every step; higher = smaller GIF).",
+    )
+    parser.add_argument(
+        "--gif-width",
+        type=int,
+        default=640,
+        help="Max width in px for the --gif-out animation (frames are downscaled to fit; default 640).",
+    )
+    parser.add_argument(
         "--hide-observations",
         action="store_true",
         help="Disable the translucent local-observation overlays in Pygame renders.",
@@ -1222,6 +1314,10 @@ def main() -> None:
         ascii_step_json=args.ascii_step_json,
         allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
         pacman_evasiveness=args.pacman_evasiveness,
+        gif_out=args.gif_out,
+        gif_fps=args.gif_fps,
+        gif_stride=args.gif_stride,
+        gif_width=args.gif_width,
     )
 
 
