@@ -27,6 +27,9 @@ _REWARD_CLASS_BY_ID = {
     "capture_v0_closing": (
         "custom_environment.env.rewards.current:CaptureV0ClosingReward"
     ),
+    "capture_v0_closing_pellets": (
+        "custom_environment.env.rewards.current:CaptureV0ClosingRewardPellets"
+    ),
     "capture_v0_sparse_control": (
         "custom_environment.env.rewards.current:CaptureV0SparseControl"
     ),

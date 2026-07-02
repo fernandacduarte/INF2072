@@ -326,6 +326,9 @@ a *non-telescoping* reward for reducing the team's min-BFS distance to Pacman ea
 moves. Unlike the telescoping PBRS (`capture_v0_pure_potential_shaping`), it does not net to
 zero against an evader, so it persistently rewards pursuit.
 
+`capture_v0_closing_pellets` is identical to `capture_v0_closing` and additionally applies
+`pacman_eats_pellet = -0.5 * pellets_eaten_this_step`.
+
 ```bash
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --pacman-difficulty hard --reward-id capture_v0_closing
 ```
@@ -975,6 +978,7 @@ py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id cur
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_pure_potential_shaping_pellets
+py -3.11 benchmarl_setup\run_pacman_benchmarl.py --algorithm iql --reward-id capture_v0_closing_pellets
 ```
 
 </details>
@@ -1003,6 +1007,9 @@ python benchmarl_setup/run_pacman_benchmarl.py \
 python benchmarl_setup/run_pacman_benchmarl.py \
   --algorithm iql \
   --reward-id capture_v0_pure_potential_shaping_pellets
+python benchmarl_setup/run_pacman_benchmarl.py \
+  --algorithm iql \
+  --reward-id capture_v0_closing_pellets
 ```
 
 </details>
@@ -1062,6 +1069,7 @@ py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql,vdn --seeds 0,1,2 --r
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids current_git,capture_v0
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0,capture_v0_improve_legal_moves_increase_terminal_rewards_reverse_action
 py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
+py -3.11 benchmarl_setup\run_benchmark.py --algorithms iql --seeds 0,1,2 --reward-ids capture_v0_closing,capture_v0_closing_pellets
 ```
 
 </details>
@@ -1095,6 +1103,10 @@ python benchmarl_setup/run_benchmark.py \
   --algorithms iql \
   --seeds 0,1,2 \
   --reward-ids capture_v0_pure_potential_shaping,capture_v0_pure_potential_shaping_pellets
+python benchmarl_setup/run_benchmark.py \
+  --algorithms iql \
+  --seeds 0,1,2 \
+  --reward-ids capture_v0_closing,capture_v0_closing_pellets
 ```
 
 </details>

@@ -4,7 +4,10 @@ import math
 
 from custom_environment.env.rewards import load_reward_strategy
 from custom_environment.env.rewards.base import GhostTransition, RewardContext
-from custom_environment.env.rewards.current import CaptureV0ClosingReward
+from custom_environment.env.rewards.current import (
+    CaptureV0ClosingReward,
+    CaptureV0ClosingRewardPellets,
+)
 from custom_environment.env.rewards.loader import reward_class_from_id
 
 
@@ -60,6 +63,17 @@ def test_registered_id_resolves():
     assert isinstance(strategy, CaptureV0ClosingReward)
 
 
+def test_registered_pellets_id_resolves():
+    assert (
+        reward_class_from_id("capture_v0_closing_pellets")
+        == "custom_environment.env.rewards.current:CaptureV0ClosingRewardPellets"
+    )
+    strategy = load_reward_strategy(
+        "custom_environment.env.rewards.current:CaptureV0ClosingRewardPellets"
+    )
+    assert isinstance(strategy, CaptureV0ClosingRewardPellets)
+
+
 def test_closing_in_pays_positive():
     r = CaptureV0ClosingReward()
     r.reset(_context(ghost_col=10, pacman_col=0))  # establishes prev distance = 10
@@ -93,3 +107,51 @@ def test_in_place_oscillation_nets_zero():
     closing_total += _closing_term(r.compute(_context(ghost_col=9, pacman_col=0)))  # -> 9 (+1)
     closing_total += _closing_term(r.compute(_context(ghost_col=10, pacman_col=0)))  # -> 10 (-1)
     assert math.isclose(closing_total, 0.0, abs_tol=1e-9)
+
+
+def test_closing_pellets_matches_base_without_pellets():
+    base = CaptureV0ClosingReward()
+    pellets = CaptureV0ClosingRewardPellets()
+
+    baseline_context = _context(ghost_col=10, pacman_col=0)
+    base.reset(baseline_context)
+    pellets.reset(baseline_context)
+
+    # Prime both with identical internal baseline.
+    base.compute(baseline_context)
+    pellets.compute(baseline_context)
+
+    next_context = _context(ghost_col=8, pacman_col=0)
+    base_result = base.compute(next_context)
+    pellets_result = pellets.compute(next_context)
+
+    assert pellets_result.terms == base_result.terms
+
+
+def test_closing_pellets_adds_per_pellet_penalty():
+    strategy = CaptureV0ClosingRewardPellets()
+    baseline_context = _context(ghost_col=10, pacman_col=0)
+    strategy.reset(baseline_context)
+    strategy.compute(baseline_context)
+
+    pellet_context = RewardContext(
+        step_count=2,
+        max_steps=200,
+        board_shape=_BOARD,
+        ghost_view_radius=5,
+        wall_positions=_WALLS,
+        ghosts=(_ghost(9),),
+        pacman_previous_position=(0, 1),
+        pacman_position=(0, 1),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=7,
+        pellets_remaining=4,
+        total_pellets=7,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+    result = strategy.compute(pellet_context)
+    assert math.isclose(result.breakdown.get("pacman_eats_pellet", 0.0), -1.5)
