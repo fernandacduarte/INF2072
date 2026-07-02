@@ -144,6 +144,9 @@ def save_gif(
     durations = [base] * len(paletted)
     durations[-1] = max(base, end_hold_ms)
 
+    # Full opaque frames: no disposal (disposal=2 clears the canvas between
+    # frames and reads as flicker/stutter in several viewers) and no
+    # transparency/optimize passes that could drop or merge frames.
     paletted[0].save(
         str(output_path),
         save_all=True,
@@ -151,7 +154,6 @@ def save_gif(
         duration=durations,
         loop=0,
         optimize=False,
-        disposal=2,
     )
 
 

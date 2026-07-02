@@ -135,7 +135,7 @@ eval-report-iql: ## Headless capture-rate report for the BEST IQL checkpoint (va
 # GIF export knobs for `make eval-gif` (one episode of the best $(LEARNER)).
 GIF_OUT    ?= _output/$(LEARNER)-episode.gif
 GIF_FPS    ?= 12
-GIF_STRIDE ?= 2
+GIF_STRIDE ?= 1
 GIF_WIDTH  ?= 480
 eval-gif: ## Save ONE episode of the best learner as an animated GIF (GIF_OUT, GIF_STRIDE, GIF_WIDTH; CKPT= for CPU)
 	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) $(if $(CKPT),--checkpoint $(CKPT),--checkpoint-select best) --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID) --pacman-evasiveness $(EVASIVENESS) --render-mode rgb_array --gif-out $(GIF_OUT) --gif-fps $(GIF_FPS) --gif-stride $(GIF_STRIDE) --gif-width $(GIF_WIDTH)
