@@ -6,7 +6,7 @@
 | Date | Skill | Brief | Status | Plan | Head SHA | Generated |
 |------|-------|-------|--------|------|----------|-----------|
 | 2026-07-02 03:53 UTC | communicate | 1 slide HTML com gráfico do resultado do treino, plotando estatísticas dos 5 se… | STARTED |  |  |  |
-| 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS)… | STARTED |  |  |  |
+| 2026-07-02 03:49 UTC | communicate | to Fernanda e Erick: como foi explorado o potential-based reward shaping (PBRS)… | DONE |  |  |  |
 | 2026-07-02 03:48 UTC | communicate | 3 slides para falar sobre o necessário para o professor de RL entender o que fi… | DONE |  |  |  |
 | 2026-07-02 02:30 UTC | communicate | exportar o necessário para colegas reproduzirem a avaliação (make eval-latest /… | DONE |  |  |  |
 | 2026-07-01 13:31 UTC | research | closing_weight=2.0 esta calibrado para o default de 3 fantasmas (pinklike3)? a … | DONE |  |  |  |
