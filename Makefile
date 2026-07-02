@@ -91,7 +91,7 @@ R1_FRAMES        ?= 60000
 R1_EVAL_EPISODES ?= 40
 R1_SAVE          ?= benchmarl_setup/runs/r1
 
-.PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark pipeline summarize eval-report liveplot eval-best r1-positive-control ceiling ceiling-eval
+.PHONY: help demo demo-ascii demo-clear demo-clear-ascii demo-hard screenshot smoke test benchmark pipeline summarize eval-report eval-report-iql liveplot eval-best r1-positive-control ceiling ceiling-eval
 
 help: ## Show this help
 	@$(PYTHON) -c "print('\n'.join(['Pacman MARL demos - available targets:','','  make demo             Live Pygame window (defense-first Pacman vs random ghosts)','  make demo-ascii       Same episode rendered as ASCII in the terminal','  make demo-clear       Live window, runs until every pellet is eaten','  make demo-clear-ascii Clear-the-board run, ASCII (no window)','  make demo-hard        Live window on the default maze for more pressure','  make screenshot       Save a PNG of the last frame to _output/','  make benchmark        Multi-seed reward/algorithm benchmark matrix','  make pipeline         Full pipeline: benchmark -> summarize -> eval-report','  make summarize        Aggregate per-seed runs into benchmark_summary.csv','  make eval-report      Headless greedy capture-rate report (EVAL_EPISODES eps)','  make ceiling          Scripted-pursuit capture-ceiling diagnostic (no training)','  make ceiling-eval     Watch the scripted-pursuit ghosts play one episode','  make r1-positive-control  R1 sanity battery: random opponent vs curriculum + verdict','  make liveplot         Live mean+/-std reward monitor (run in a second terminal)','  make eval-best        Watch trained ghosts (best checkpoint) in a Pygame window','  make smoke            PettingZoo parallel-API compliance test (no pytest needed)','  make test             Run the pytest suite (requires: pip install pytest)','','Demo vars: PYTHON DELAY SEED MAZE         (e.g. make demo DELAY=0.2 MAZE=default)','Bench vars: ALGOS SEEDS FRAMES MAZE DEVICE REWARD_ID CURRICULUM EPSILON_ANNEAL_RATIO EPSILON_END','            PACMAN_DIFFICULTY PACMAN_RANDOM_ACTION_PROB PACMAN_SAFE_DISTANCE','            RANDOMIZE_SPAWNS RANDOMIZE_SPAWNS_MIN_DISTANCE','            (dumber Pacman: make benchmark CURRICULUM=off PACMAN_DIFFICULTY=easy)','            (stabler curve: make benchmark EPSILON_ANNEAL_RATIO=0.4 EPSILON_END=0.05)','            (fixed spawns: make benchmark RANDOMIZE_SPAWNS=0)','            (adjacency capture: make benchmark CAPTURE_RADIUS=1)','Ceiling vars: MAZE CEILING_DIFFICULTY CEILING_EPISODES CEILING_SEEDS CAPTURE_RADIUS','Eval vars:  LEARNER DEVICE REWARD_ID EVASIVENESS EVAL_EPISODES  (e.g. make eval-report EVAL_EPISODES=100)']))"
@@ -128,6 +128,9 @@ summarize: ## Aggregate per-seed run CSVs into benchmark_summary.csv (+ printed 
 
 eval-report: ## Headless quantitative eval: greedy capture-rate report over EVAL_EPISODES episodes
 	$(PYTHON) custom_environment/eval_report.py --algorithms $(ALGOS) --maze $(MAZE) --reward-id $(REWARD_ID) --device $(DEVICE) --checkpoint-select best --episodes $(EVAL_EPISODES) --pacman-evasiveness $(EVASIVENESS)
+
+eval-report-iql: ## Headless capture-rate report for the BEST IQL checkpoint (vary EVASIVENESS/EVAL_EPISODES)
+	$(PYTHON) custom_environment/eval_report.py --algorithms iql --maze $(MAZE) --reward-id $(REWARD_ID) --device $(DEVICE) --checkpoint-select best --episodes $(EVAL_EPISODES) --pacman-evasiveness $(EVASIVENESS)
 
 ceiling: ## Scripted-pursuit capture-ceiling diagnostic vs the configured Pacman
 	$(PYTHON) custom_environment/ceiling_eval.py --maze $(MAZE) --pacman-difficulty $(CEILING_DIFFICULTY) --episodes $(CEILING_EPISODES) --seeds $(CEILING_SEEDS) --capture-radius $(CAPTURE_RADIUS)
