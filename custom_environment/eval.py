@@ -99,8 +99,19 @@ def save_rgb_frame(frame: np.ndarray, output_path: Path) -> None:
     pygame.image.save(surface, str(output_path))
 
 
-def save_gif(frames: list, output_path: Path, fps: int = 12, max_width: int = 640) -> None:
-    """Assemble captured rgb frames (np.ndarray HxWx3, uint8) into an animated GIF."""
+def save_gif(
+    frames: list,
+    output_path: Path,
+    fps: int = 12,
+    max_width: int = 640,
+    end_hold_ms: int = 1200,
+) -> None:
+    """Assemble captured rgb frames (np.ndarray HxWx3, uint8) into an animated GIF.
+
+    Uses a single shared palette (no per-frame palette swaps -> no flicker/stutter)
+    and per-frame durations (uniform playback with a clean hold on the final frame,
+    instead of duplicated end frames that make the loop feel like it stalls).
+    """
     try:
         from PIL import Image
     except ModuleNotFoundError as exc:
@@ -112,21 +123,34 @@ def save_gif(frames: list, output_path: Path, fps: int = 12, max_width: int = 64
     if not frames:
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    images = []
+
+    rgb = []
     for frame in frames:
-        img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
+        img = Image.fromarray(np.asarray(frame, dtype=np.uint8)).convert("RGB")
         if max_width and img.width > max_width:
             new_h = int(round(img.height * max_width / img.width))
             img = img.resize((max_width, new_h))
-        images.append(img.convert("P", palette=Image.ADAPTIVE, colors=128))
-    duration_ms = int(round(1000 / max(1, fps)))
-    images[0].save(
+        rgb.append(img)
+
+    # One shared palette for every frame (the capture frame is the most colourful).
+    try:
+        no_dither = Image.Dither.NONE
+    except AttributeError:  # older Pillow
+        no_dither = Image.NONE
+    master = rgb[-1].convert("P", palette=Image.ADAPTIVE, colors=128)
+    paletted = [im.quantize(palette=master, dither=no_dither) for im in rgb]
+
+    base = int(round(1000 / max(1, fps)))
+    durations = [base] * len(paletted)
+    durations[-1] = max(base, end_hold_ms)
+
+    paletted[0].save(
         str(output_path),
         save_all=True,
-        append_images=images[1:],
-        duration=duration_ms,
+        append_images=paletted[1:],
+        duration=durations,
         loop=0,
-        optimize=True,
+        optimize=False,
         disposal=2,
     )
 
@@ -1072,16 +1096,18 @@ def run_episode(
                             final_result=final_result,
                         )
                     if gif_out is not None:
-                        final_frame = raw_env.capture_frame(
-                            learner=learner,
-                            total_reward=total_reward,
-                            done=final_done,
-                            last_action_by_agent=last_action_info,
-                            last_reward_by_agent=last_reward_info,
-                            final_result=final_result,
+                        # Single final frame; save_gif holds it via a longer
+                        # per-frame duration (no duplicated frames -> no stall).
+                        gif_frames.append(
+                            raw_env.capture_frame(
+                                learner=learner,
+                                total_reward=total_reward,
+                                done=final_done,
+                                last_action_by_agent=last_action_info,
+                                last_reward_by_agent=last_reward_info,
+                                final_result=final_result,
+                            )
                         )
-                        for _ in range(max(1, gif_fps)):  # linger ~1s on the outcome
-                            gif_frames.append(final_frame)
 
                     if render_mode == "human":
                         raw_env.wait_for_close(
