@@ -807,6 +807,7 @@ def run_episode(
     ascii_step_json: bool,
     allow_non_hard_checkpoint: bool,
     pacman_evasiveness: float = 0.8,
+    eval_seed: int | None = None,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -886,7 +887,15 @@ def run_episode(
     try:
         try:
             with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
-                tensordict = env.reset()
+                if eval_seed is not None and hasattr(env, "set_seed"):
+                    env.set_seed(int(eval_seed))
+                if eval_seed is None:
+                    tensordict = env.reset()
+                else:
+                    try:
+                        tensordict = env.reset(seed=int(eval_seed))
+                    except TypeError:
+                        tensordict = env.reset()
                 start_time = time.perf_counter()
 
                 if render_mode == "ascii":
@@ -1189,6 +1198,15 @@ def main() -> None:
             "--allow-non-hard-checkpoint is set."
         ),
     )
+    parser.add_argument(
+        "--eval-seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional deterministic environment reset seed for eval replay. "
+            "Useful in human mode to reproduce the same episode layout."
+        ),
+    )
     args = parser.parse_args()
     if not (0.0 <= args.pacman_evasiveness <= 1.0):
         parser.error("--pacman-evasiveness must be in [0, 1]")
@@ -1222,6 +1240,7 @@ def main() -> None:
         ascii_step_json=args.ascii_step_json,
         allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
         pacman_evasiveness=args.pacman_evasiveness,
+        eval_seed=args.eval_seed,
     )
 
 

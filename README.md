@@ -222,6 +222,7 @@ Useful optional parameters for evaluation (`custom_environment\eval.py`):
 --render-mode ascii|human|rgb_array --tile-size 28 --fps 12 --screenshot-out path\to\frame.png
 --hide-observations --device cpu|cuda|cuda:0|auto --allow-cpu-fallback
 --allow-non-hard-checkpoint
+--eval-seed 42
 --ghost-view-size 3|5|7
 --checkpoint-best-metric capture_rate|reward
 ```
