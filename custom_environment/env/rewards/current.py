@@ -929,10 +929,14 @@ class CaptureV0ClosingReward(CaptureV0Reward):
     ) -> None:
         self.weights = weights or CaptureV0ClosingRewardWeights()
         self._prev_distance: float | None = None
+        # Seam for subclasses: current step's team mean-BFS distance, so they
+        # can add distance-conditioned terms without recomputing the BFS.
+        self._step_mean_distance: float | None = None
 
     def reset(self, initial_context: RewardContext) -> None:
         _ = initial_context
         self._prev_distance = None
+        self._step_mean_distance = None
 
     def _mean_distance(self, context: RewardContext) -> float | None:
         distances = [
@@ -958,6 +962,7 @@ class CaptureV0ClosingReward(CaptureV0Reward):
 
         # Persistent (non-telescoping) closing reward on team MEAN-BFS distance.
         mean_distance = self._mean_distance(context)
+        self._step_mean_distance = mean_distance
         if mean_distance is not None:
             if self._prev_distance is not None:
                 delta = self._prev_distance - mean_distance
