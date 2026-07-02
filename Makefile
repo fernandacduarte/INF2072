@@ -27,6 +27,12 @@ CURRICULUM_MAX_FRAMES ?= $(FRAMES)
 # Eval-time Pacman evasiveness in [0,1] (1.0 = deterministic hard evader, 0.0 =
 # fully random). Default 0.8 = 80% evasive. Used by `make eval-latest`.
 EVASIVENESS ?= 0.8
+# Optional explicit checkpoint path for `make eval-latest`. When empty (default)
+# eval auto-discovers the best run under runs/$(MAZE)/$(REWARD_ID)/<device>/.
+# Auto-discovery is device-folder specific, so to watch a checkpoint trained on
+# CUDA from a CPU-only machine, pass CKPT=<path> (bypasses discovery). Example:
+#   make eval-latest DEVICE=cpu CKPT=benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/checkpoint_1000000.pt
+CKPT ?=
 # Episodes for the headless quantitative eval (`make eval-report`). 100 matches
 # the per-evaluation episode count used by Papoudakis-2021 (D-003).
 EVAL_EPISODES ?= 100
@@ -109,7 +115,7 @@ screenshot: ## Save a PNG of the last rendered frame into _output/
 	$(PYTHON) custom_environment/render_demo.py --render-mode rgb_array --max-steps 80 --maze $(MAZE) --seed $(SEED) --screenshot-out _output/pacman_demo.png
 
 eval-latest: ## Watch trained ghosts (best checkpoint) in a Pygame window (EVASIVENESS=0.8 default)
-	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) --checkpoint-select best --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID) --pacman-evasiveness $(EVASIVENESS)
+	$(PYTHON) custom_environment/eval.py --learner $(LEARNER) $(if $(CKPT),--checkpoint $(CKPT),--checkpoint-select best) --device $(DEVICE) --maze $(MAZE) --reward-id $(REWARD_ID) --pacman-evasiveness $(EVASIVENESS)
 
 benchmark: ## Multi-seed benchmark training (parallel algorithms, serial seeds)
 	$(PYTHON) benchmarl_setup/run_benchmark.py --algorithms $(ALGOS) --reward-ids $(REWARD_ID) --seeds $(SEEDS) --max-frames $(FRAMES) --maze $(MAZE) --devices $(DEVICE) --checkpoint-interval $(CHECKPOINT_INTERVAL) --pacman-curriculum $(CURRICULUM) --pacman-curriculum-max-frames $(CURRICULUM_MAX_FRAMES) --pacman-difficulty $(PACMAN_DIFFICULTY) --pacman-random-action-prob $(PACMAN_RANDOM_ACTION_PROB) $(PACMAN_SAFE_DISTANCE_ARG) --epsilon-anneal-ratio $(EPSILON_ANNEAL_RATIO) --epsilon-end $(EPSILON_END) $(RANDOMIZE_SPAWNS_ARG) --randomize-spawns-min-distance $(RANDOMIZE_SPAWNS_MIN_DISTANCE) --capture-radius $(CAPTURE_RADIUS)

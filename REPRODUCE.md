@@ -52,22 +52,36 @@ make smoke
 
 ## 3. Reproduzir o resultado na hora (sem treinar)
 
-O checkpoint treinado já está no repositório:
+O checkpoint treinado já está no repositório. Abre uma janela (Pygame)
+mostrando os 3 fantasmas capturando o Pac-Man.
+
+**Com GPU (CUDA):**
 
 ```bash
 make eval-latest
 ```
 
-Abre uma janela (Pygame) mostrando os 3 fantasmas capturando o Pac-Man.
-
-- Sem GPU? Use CPU: `make eval-latest DEVICE=cpu`
-
-**Não tem `make`?** Este comando funciona em qualquer SO (ajuste `--device`
-para `cuda` se tiver GPU):
+**Sem GPU (CPU):** a descoberta automática do melhor run é específica da pasta
+do device (o checkpoint versionado está em `.../cuda/`), então numa máquina sem
+GPU é preciso apontar o checkpoint explicitamente com `CKPT=`:
 
 ```bash
-uv run python custom_environment/eval.py --learner iql --checkpoint-select best --device cpu --maze pinklike3 --reward-id capture_v0_closing --pacman-evasiveness 0.8
+make eval-latest DEVICE=cpu CKPT=benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/checkpoint_1000000.pt
 ```
+
+**Não tem `make`?** Comandos universais (funcionam em Windows, Linux e Mac):
+
+```bash
+# Com GPU:
+uv run python custom_environment/eval.py --learner iql --checkpoint-select best --device cuda --maze pinklike3 --reward-id capture_v0_closing --pacman-evasiveness 0.8
+
+# Sem GPU (checkpoint explícito):
+uv run python custom_environment/eval.py --learner iql --checkpoint benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/checkpoint_1000000.pt --device cpu --maze pinklike3 --reward-id capture_v0_closing --pacman-evasiveness 0.8
+```
+
+> Ambos os caminhos (GPU via descoberta e CPU via `--checkpoint`) foram testados
+> a partir de um clone limpo do repositório: os fantasmas capturam o Pac-Man no
+> passo ~161 (`Ghosts win`).
 
 ## 4. Treinar do zero (opcional, ~1M frames)
 
