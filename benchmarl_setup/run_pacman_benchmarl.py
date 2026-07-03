@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import sys
+import warnings
 
 import torch
 
@@ -28,6 +29,19 @@ from benchmarl_setup.algorithm_utils import (
 from benchmarl_setup.device_utils import resolve_device
 
 
+def _configure_warning_filters() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"^You are using `torch\.load` with `weights_only=False` "
+            r"\(the current default value\), which uses the default pickle "
+            r"module implicitly\."
+        ),
+        category=FutureWarning,
+        module=r"^benchmarl\.experiment\.experiment$",
+    )
+
+
 def _algorithm_config(name: str):
     algorithm = normalize_algorithm(name)
     if algorithm == "iql":
@@ -44,9 +58,13 @@ def _tune_shared_experiment(
     algorithm: str,
     max_frames: int,
     maze: str,
+    epsilon_anneal_ratio: float = 0.95,
+    epsilon_end: float = 0.10,
 ) -> None:
     """Apply one shared exploration/optimization schedule across MARL algorithms."""
-    schedule = training_exploration_schedule(algorithm, maze, max_frames)
+    schedule = training_exploration_schedule(
+        algorithm, maze, max_frames, epsilon_anneal_ratio, epsilon_end
+    )
     overrides = {
         "exploration_eps_init": schedule["epsilon_init"],
         "exploration_eps_end": schedule["epsilon_end"],
@@ -76,13 +94,13 @@ def parse_args() -> argparse.Namespace:
         help="Total collected frames. Default raised to a convergence-scale budget (plan-000008); pass a smaller value for smoke runs.",
     )
     parser.add_argument("--frames-per-batch", type=int, default=200)
-    parser.add_argument("--optimizer-steps", type=int, default=10)
+    parser.add_argument("--optimizer-steps", type=int, default=4)
     parser.add_argument("--train-batch-size", type=int, default=128)
-    parser.add_argument("--memory-size", type=int, default=10000)
+    parser.add_argument("--memory-size", type=int, default=25000)
     parser.add_argument(
         "--init-random-frames",
         type=int,
-        default=5000,
+        default=25000,
         help="Initial random interaction frames before learning starts.",
     )
     parser.add_argument("--grid-size", type=int, default=20)
@@ -153,6 +171,32 @@ def parse_args() -> argparse.Namespace:
         help="Global frame offset used for curriculum when run is part of a benchmark matrix.",
     )
     parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
+    parser.add_argument(
+        "--capture-radius",
+        type=int,
+        default=0,
+        help=(
+            "Capture rule radius. 0 (default) keeps co-location-only capture; >0 "
+            "registers a capture when a ghost is within this BFS distance of Pacman "
+            "(adjacency capture). Changes the task definition -- re-baseline and never "
+            "mix capture rates gathered under different radii."
+        ),
+    )
+    parser.add_argument(
         "--save-folder",
         type=str,
         default=str((PROJECT_ROOT / "benchmarl_setup" / "runs").resolve()),
@@ -187,10 +231,31 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Fall back to CPU when CUDA is requested but unavailable.",
     )
+    parser.add_argument(
+        "--epsilon-anneal-ratio",
+        type=float,
+        default=0.70,
+        help=(
+            "Fraction of training over which exploration epsilon anneals from 1.0 "
+            "to --epsilon-end (default 0.70). Lower values give the greedy policy a "
+            "longer low-epsilon phase to converge."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=0.05,
+        help=(
+            "Exploration epsilon floor reached at the end of the anneal (default "
+            "0.05). Lower values leave less residual exploration so the "
+            "greedy policy converges tighter; eval is always greedy regardless."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
+    _configure_warning_filters()
     args = parse_args()
     if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
         raise ValueError("--pacman-random-action-prob must be in [0,1].")
@@ -242,6 +307,9 @@ def main() -> None:
         "pacman_curriculum": args.pacman_curriculum,
         "pacman_curriculum_max_frames": int(args.pacman_curriculum_max_frames),
         "pacman_curriculum_frame_offset": int(args.pacman_curriculum_frame_offset),
+        "randomize_spawns": bool(args.randomize_spawns),
+        "randomize_spawns_min_distance": int(args.randomize_spawns_min_distance),
+        "capture_radius": int(args.capture_radius),
     }
     if args.ghost_view_size is not None:
         task_config["ghost_view_size"] = int(args.ghost_view_size)
@@ -285,7 +353,14 @@ def main() -> None:
             experiment_config.keep_checkpoints_num = max(current_keep, keep_target)
 
     # Apply one shared schedule so common hyperparameters stay aligned.
-    _tune_shared_experiment(experiment_config, algorithm, args.max_frames, args.maze)
+    _tune_shared_experiment(
+        experiment_config,
+        algorithm,
+        args.max_frames,
+        args.maze,
+        float(args.epsilon_anneal_ratio),
+        float(args.epsilon_end),
+    )
 
     experiment = Experiment(
         task=task,

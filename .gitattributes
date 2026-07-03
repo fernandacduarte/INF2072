@@ -1,0 +1,3 @@
+# Keep patch files byte-stable (LF) so `git am` / `git apply` re-apply cleanly
+# on any platform. These are salvage artifacts under _output/branch-salvage/.
+*.patch -text

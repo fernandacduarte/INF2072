@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resultado do treino -- Taxa de captura por algoritmo</title>
+<style>
+  :root { color-scheme: light; }
+  html,body { margin:0; background:#f1f5f9; font-family:'Segoe UI',system-ui,Arial,sans-serif; color:#0f172a; }
+  .slide { width:1280px; height:720px; margin:24px auto; background:#fff; border-radius:16px;
+           box-shadow:0 10px 40px rgba(15,23,42,.15); position:relative; overflow:hidden; }
+  .hdr { padding:26px 40px 0 40px; }
+  h1 { margin:0; font-size:33px; letter-spacing:-.5px; }
+  .sub { margin:6px 0 0; font-size:18px; color:#64748b; }
+  .row { display:flex; align-items:flex-start; gap:24px; padding:10px 40px 0; }
+  .chart { flex:0 0 640px; }
+  .side { flex:1; }
+  .diff { margin-top:20px; }
+  .dh { font-size:19px; font-weight:700; margin-bottom:10px; }
+  .brow { display:flex; align-items:center; gap:10px; margin:9px 0; }
+  .bl { flex:0 0 210px; font-size:16px; }
+  .bt { flex:1; height:22px; background:#eef2f7; border-radius:6px; overflow:hidden; }
+  .bf { display:block; height:100%; border-radius:6px; }
+  .bv { flex:0 0 100px; text-align:right; font-size:18px; font-weight:700; }
+  .bret { color:#64748b; font-size:14px; font-weight:400; }
+  .dc { font-size:13px; color:#64748b; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:21px; border-radius:10px; overflow:hidden;
+          box-shadow:0 2px 10px rgba(15,23,42,.10); }
+  caption { text-align:left; font-size:22px; font-weight:700; padding-bottom:10px; }
+  th,td { padding:13px 14px; text-align:right; border-bottom:1px solid #e2e8f0; }
+  th:first-child, td.alg { text-align:left; font-weight:700; }
+  thead th { font-size:16px; color:#fff; font-weight:700; background:#0f2c52; border:none; }
+  tbody tr:nth-child(even) { background:#f8fafc; }
+  tr.hi { background:#eff6ff !important; box-shadow: inset 4px 0 0 #2563eb; }
+  td.pos { color:#1a7f37; font-weight:700; }
+  td.neg { color:#d1242f; font-weight:700; }
+  .ci { color:#64748b; font-size:15px; font-weight:400; }
+  .insight { position:absolute; left:40px; right:40px; bottom:66px; font-size:22px; line-height:1.45;
+             background:#eff6ff; border-left:6px solid #2563eb; padding:14px 18px; border-radius:8px; }
+  .foot { position:absolute; left:40px; right:40px; bottom:18px; font-size:14px; color:#64748b;
+          display:flex; justify-content:space-between; }
+  @media print { body{background:#fff} .slide{box-shadow:none;margin:0} }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="hdr">
+      <h1>Fantasmas cooperativos aprendem a capturar o Pac-Man</h1>
+      <p class="sub">Pacman MARL -- maze <b>pinklike3</b> (3 fantasmas) -- reward <b>capture_v0_closing</b> -- 1.000.000 frames -- Pacman 80% evasivo -- 20 episodios/seed (greedy)</p>
+    </div>
+    <div class="row">
+      <div class="chart">
+        <svg viewBox="0 0 700 470" width="100%" role="img" aria-label="Taxa de captura por algoritmo">
+          <line x1="90" y1="382.0" x2="650" y2="382.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="389.0" text-anchor="end" font-size="22" fill="#64748b">0%</text>
+<line x1="90" y1="322.0" x2="650" y2="322.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="329.0" text-anchor="end" font-size="22" fill="#64748b">20%</text>
+<line x1="90" y1="262.0" x2="650" y2="262.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="269.0" text-anchor="end" font-size="22" fill="#64748b">40%</text>
+<line x1="90" y1="202.0" x2="650" y2="202.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="209.0" text-anchor="end" font-size="22" fill="#64748b">60%</text>
+<line x1="90" y1="142.0" x2="650" y2="142.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="149.0" text-anchor="end" font-size="22" fill="#64748b">80%</text>
+<line x1="90" y1="82.0" x2="650" y2="82.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="76" y="89.0" text-anchor="end" font-size="22" fill="#64748b">100%</text>
+<rect x="123.3" y="202.0" width="120" height="180.0" rx="6" fill="#2563eb" fill-opacity="0.92"/>
+<line x1="183.33333333333331" y1="168.2" x2="183.33333333333331" y2="235.8" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="168.33333333333331" y1="168.2" x2="198.33333333333331" y2="168.2" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="168.33333333333331" y1="235.8" x2="198.33333333333331" y2="235.8" stroke="#0f172a" stroke-width="2.5"/>
+<circle cx="151.3" cy="202.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="167.3" cy="172.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="183.3" cy="217.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="199.3" cy="217.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<text x="183.3" y="186.0" text-anchor="middle" font-size="34" font-weight="800" fill="#0f172a">60%</text>
+<text x="183.3" y="418.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">IQL</text>
+<text x="183.3" y="440.0" text-anchor="middle" font-size="18" fill="#64748b">n=4</text>
+<rect x="310.0" y="328.0" width="120" height="54.0" rx="6" fill="#94a3b8" fill-opacity="0.5"/>
+<line x1="369.99999999999994" y1="299.8" x2="369.99999999999994" y2="356.2" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="354.99999999999994" y1="299.8" x2="384.99999999999994" y2="299.8" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="354.99999999999994" y1="356.2" x2="384.99999999999994" y2="356.2" stroke="#0f172a" stroke-width="2.5"/>
+<circle cx="338.0" cy="307.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="354.0" cy="352.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="370.0" cy="352.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="386.0" cy="322.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="402.0" cy="307.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<text x="370.0" y="312.0" text-anchor="middle" font-size="34" font-weight="800" fill="#0f172a">18%</text>
+<text x="370.0" y="418.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">VDN</text>
+<text x="370.0" y="440.0" text-anchor="middle" font-size="18" fill="#64748b">n=5</text>
+<rect x="496.7" y="310.0" width="120" height="72.0" rx="6" fill="#94a3b8" fill-opacity="0.5"/>
+<line x1="556.6666666666666" y1="237.4" x2="556.6666666666666" y2="382.0" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="541.6666666666666" y1="237.4" x2="571.6666666666666" y2="237.4" stroke="#0f172a" stroke-width="2.5"/>
+<line x1="541.6666666666666" y1="382.0" x2="571.6666666666666" y2="382.0" stroke="#0f172a" stroke-width="2.5"/>
+<circle cx="524.7" cy="337.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="540.7" cy="247.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="556.7" cy="247.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="572.7" cy="367.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<circle cx="588.7" cy="352.0" r="6.5" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+<text x="556.7" y="294.0" text-anchor="middle" font-size="34" font-weight="800" fill="#0f172a">24%</text>
+<text x="556.7" y="418.0" text-anchor="middle" font-size="28" font-weight="700" fill="#0f172a">QMIX</text>
+<text x="556.7" y="440.0" text-anchor="middle" font-size="18" fill="#64748b">n=5</text>
+<line x1="90" y1="382" x2="650" y2="382" stroke="#0f172a" stroke-width="2"/>
+<text x="20" y="42" font-size="24" font-weight="700" fill="#0f172a">Taxa de captura do Pac-Man</text>
+<text x="20" y="64" font-size="17" fill="#64748b">barra = media entre seeds | haste = IC 95% | ponto = seed</text>
+        </svg>
+      </div>
+      <div class="side">
+        <table>
+          <caption>Resumo (media entre seeds)</caption>
+          <thead><tr><th>Algoritmo</th><th>Captura</th><th>Retorno/ep.</th><th>Melhor seed</th><th>Seeds</th></tr></thead>
+          <tbody>
+          <tr class="hi"><td class="alg">IQL</td><td class="pos"><b>60%</b> <span class="ci">+/-11</span></td><td class="pos">+41 <span class="ci">+/-20</span></td><td>70%</td><td>4</td></tr>
+<tr><td class="alg">VDN</td><td class="pos"><b>18%</b> <span class="ci">+/-9</span></td><td class="neg">-47 <span class="ci">+/-18</span></td><td>25%</td><td>5</td></tr>
+<tr><td class="alg">QMIX</td><td class="pos"><b>24%</b> <span class="ci">+/-24</span></td><td class="neg">-34 <span class="ci">+/-54</span></td><td>45%</td><td>5</td></tr>
+          </tbody>
+        </table>
+        <div class="diff"><div class="dh">Robustez do melhor IQL vs evasao do Pac-Man</div><div class="brow"><span class="bl">Pac-Man 80% evasivo</span><span class="bt"><span class="bf" style="width:78%;background:#1a7f37"></span></span><span class="bv">78% <span class="bret">(+76)</span></span></div><div class="brow"><span class="bl">Pac-Man 100% (perfeito)</span><span class="bt"><span class="bf" style="width:36%;background:#d97706"></span></span><span class="bv">36% <span class="bret">(-5)</span></span></div><div class="dc">50 episodios greedy | (valor) = retorno medio do episodio</div></div>
+      </div>
+    </div>
+    <div class="insight">Taxa de captura e retorno andam juntos: o IQL e o unico com retorno medio positivo (+41) e captura ~60% -- cerca de 3.3x o VDN e 2.5x o QMIX. Melhor seed do IQL: 70%.</div>
+    <div class="foot">
+      <span>IQL n=4 seeds (0-3); VDN e QMIX n=5 (0-4). +/- = IC 95% (t). Retorno em unidades de reward do episodio.</span>
+      <span>fernanda-INF2072 -- branch capture_v0_pure_potential_shaping</span>
+    </div>
+  </div>
+</body>
+</html>

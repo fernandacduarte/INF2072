@@ -98,10 +98,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-frames", type=int, default=60000)
     parser.add_argument("--frames-per-batch", type=int, default=200)
-    parser.add_argument("--optimizer-steps", type=int, default=10)
+    parser.add_argument("--optimizer-steps", type=int, default=4)
     parser.add_argument("--train-batch-size", type=int, default=128)
-    parser.add_argument("--memory-size", type=int, default=10000)
-    parser.add_argument("--init-random-frames", type=int, default=5000)
+    parser.add_argument("--memory-size", type=int, default=25000)
+    parser.add_argument("--init-random-frames", type=int, default=25000)
     parser.add_argument("--grid-size", type=int, default=20)
     parser.add_argument(
         "--ghost-view-size",
@@ -248,7 +248,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=20,
         help=(
-            "Deterministic eval_report episodes used to periodically backfill true capture% "
+            "Deterministic eval_report episodes used to periodically backfill true capture%% "
             "in live progress (set 0 to disable)."
         ),
     )
@@ -263,6 +263,51 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Objective evaluation CSV (default: <save-folder>/<maze>/reward_eval.csv).",
+    )
+    parser.add_argument(
+        "--epsilon-anneal-ratio",
+        type=float,
+        default=0.70,
+        help=(
+            "Fraction of training over which exploration epsilon anneals from 1.0 "
+            "to --epsilon-end (default 0.70). Lower values give the greedy "
+            "policy a longer low-epsilon phase to converge and stabilizes the curve."
+        ),
+    )
+    parser.add_argument(
+        "--epsilon-end",
+        type=float,
+        default=0.05,
+        help=(
+            "Exploration epsilon floor reached at the end of the anneal (default "
+            "0.05). Lower values leave less residual exploration so the "
+            "greedy policy converges tighter; eval is always greedy regardless."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Randomize Pacman/ghost spawn cells each episode so the policy cannot "
+            "memorize a fixed route to a fixed start cell and must pursue reactively."
+        ),
+    )
+    parser.add_argument(
+        "--randomize-spawns-min-distance",
+        type=int,
+        default=4,
+        help="Minimum ghost->Pacman BFS clearance enforced when randomizing spawns.",
+    )
+    parser.add_argument(
+        "--capture-radius",
+        type=int,
+        default=0,
+        help=(
+            "Capture rule radius forwarded to each run. 0 (default) keeps "
+            "co-location-only capture; >0 enables adjacency capture. Changes the "
+            "task definition -- re-baseline and never mix capture rates across radii."
+        ),
     )
     return parser.parse_args()
 
@@ -318,6 +363,17 @@ def _build_command(
         command.extend(["--pacman-safe-distance", str(args.pacman_safe_distance)])
     command.extend(["--pacman-curriculum", str(args.pacman_curriculum)])
     command.extend(["--pacman-curriculum-max-frames", str(args.pacman_curriculum_max_frames)])
+    command.extend(["--epsilon-anneal-ratio", str(args.epsilon_anneal_ratio)])
+    command.extend(["--epsilon-end", str(args.epsilon_end)])
+
+    if args.randomize_spawns:
+        command.append("--randomize-spawns")
+    else:
+        command.append("--no-randomize-spawns")
+    command.extend(
+        ["--randomize-spawns-min-distance", str(args.randomize_spawns_min_distance)]
+    )
+    command.extend(["--capture-radius", str(args.capture_radius)])
 
     if args.allow_cpu_fallback:
         command.append("--allow-cpu-fallback")
@@ -603,6 +659,8 @@ class ProgressReporter:
         pacman_curriculum_frame_offset: int,
         machine_id: str,
         epsilon_algorithm: str,
+        epsilon_anneal_ratio: float,
+        epsilon_end: float,
         live_capture_eval_episodes: int,
         eval_seed_base: int,
         allow_cpu_fallback: bool,
@@ -624,6 +682,8 @@ class ProgressReporter:
             self.epsilon_algorithm,
             self.maze,
             self.max_frames,
+            float(epsilon_anneal_ratio),
+            float(epsilon_end),
         )
         self.live_capture_eval_episodes = int(live_capture_eval_episodes)
         self.eval_seed_base = int(eval_seed_base)
@@ -1126,6 +1186,73 @@ def _run_algorithm_serial_seeds(
     return failures, job_records
 
 
+def _git_commit_info() -> str:
+    """Short git SHA plus a clean/dirty flag, or 'unknown' outside a repo."""
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(PROJECT_ROOT),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        dirty = subprocess.call(
+            ["git", "diff", "--quiet", "--ignore-submodules"],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return f"{sha} ({'dirty' if dirty else 'clean'})"
+    except Exception:
+        return "unknown"
+
+
+def _print_run_banner(
+    args: argparse.Namespace,
+    algorithms: list[str],
+    reward_specs: list[tuple[str, str]],
+    seeds: list[int],
+    device_configs: list[dict],
+    machine_id: str,
+) -> None:
+    """Print every resolved run parameter at benchmark start for reproducibility.
+
+    Dumps the full vars(args) so defaults not passed on the command line are
+    captured too, alongside git commit, host, and timestamp. Cite the git
+    commit when reporting results (constitution C1).
+    """
+    bar = "=" * 78
+    sub = "-" * 78
+    devices = ", ".join(
+        f"{c['requested']}->{c['resolved']}({c['label']})" for c in device_configs
+    )
+    lines = [
+        bar,
+        " BENCHMARK RUN - REPRODUCIBILITY BANNER",
+        bar,
+        f" timestamp (UTC) : {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f" git commit      : {_git_commit_info()}",
+        f" host / machine  : {socket.gethostname()} / {machine_id}",
+        f" python          : {sys.version.split()[0]}",
+        sub,
+        f" algorithms      : {', '.join(algorithms)}",
+        f" reward ids      : {', '.join(rid for rid, _ in reward_specs)}",
+        f" seeds           : {', '.join(str(s) for s in seeds)}  (n={len(seeds)})",
+        f" devices         : {devices}",
+        f" total jobs      : {len(algorithms) * len(reward_specs) * len(seeds) * len(device_configs)}",
+        sub,
+        " full resolved args (vars(args)):",
+    ]
+    for key in sorted(vars(args)):
+        lines.append(f"   {key} = {getattr(args, key)}")
+    lines.append(bar)
+    print("\n".join(lines), flush=True)
+    if len(seeds) < 5:
+        print(
+            f"WARNING: only {len(seeds)} seed(s) - constitution Q3 requires >=5 for "
+            "reportable benchmark results (see D-003).",
+            flush=True,
+        )
+
+
 def main() -> None:
     args = parse_args()
     if not (0.0 <= float(args.pacman_random_action_prob) <= 1.0):
@@ -1165,6 +1292,10 @@ def main() -> None:
         reward_specs.append((strategy.strategy_id, class_path))
     if not reward_specs:
         raise ValueError("At least one reward class must be provided.")
+    if not (0.0 < float(args.epsilon_anneal_ratio) <= 1.0):
+        raise ValueError("--epsilon-anneal-ratio must be in (0, 1].")
+    if not (0.0 <= float(args.epsilon_end) < 1.0):
+        raise ValueError("--epsilon-end must be in [0, 1).")
     if args.eval_episodes < 0:
         raise ValueError("--eval-episodes must be non-negative.")
     if args.live_capture_eval_episodes < 0:
@@ -1220,6 +1351,8 @@ def main() -> None:
     for label, root in runs_roots_by_label.items():
         root.mkdir(parents=True, exist_ok=True)
 
+    _print_run_banner(args, algorithms, reward_specs, seeds, device_configs, machine_id)
+
     print("Benchmark device matrix:")
     for cfg in device_configs:
         print(
@@ -1245,6 +1378,8 @@ def main() -> None:
             pacman_curriculum_frame_offset=0,
             machine_id=machine_id,
             epsilon_algorithm=epsilon_algorithm,
+            epsilon_anneal_ratio=args.epsilon_anneal_ratio,
+            epsilon_end=args.epsilon_end,
             live_capture_eval_episodes=args.live_capture_eval_episodes,
             eval_seed_base=args.eval_seed_base,
             allow_cpu_fallback=args.allow_cpu_fallback,

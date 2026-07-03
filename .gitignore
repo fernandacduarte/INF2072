@@ -24,6 +24,45 @@ __pycache__/
 /benchmarl_setup/runs/*/live_progress.csvl
 /benchmarl_setup/runs/*/benchmark_summary.csv
 
+# Decisive reward A/B (plan-000031): keep the heavy per-run blobs ignored, but
+# track the small report-facing artifacts (manifest, comparison table, figures)
+# for C1 provenance. The directory must be un-ignored first (parent of /runs/* is
+# excluded) before specific files inside it can be re-included.
+!/benchmarl_setup/runs/ab/
+/benchmarl_setup/runs/ab/*
+!/benchmarl_setup/runs/ab/ab_manifest.csv
+!/benchmarl_setup/runs/ab/reward_ab.csv
+!/benchmarl_setup/runs/ab/*.png
+
+# R1 positive-control sanity battery (plan-000034): ignore bulky run outputs but
+# keep the manifest for C1 provenance (mirror of the ab/ pattern above).
+!/benchmarl_setup/runs/r1/
+/benchmarl_setup/runs/r1/*
+!/benchmarl_setup/runs/r1/r1_manifest.csv
+
+# Reference run for colleague reproduction (communication-000049): the best IQL
+# run on pinklike3 / capture_v0_closing (capture_rate 0.70). Keep only the single
+# best checkpoint (1M frames, ~82 MB) plus the config and eval-report CSVs needed
+# for `make eval-latest --checkpoint-select best`. All other checkpoints and the
+# heavy per-checkpoint blobs stay ignored. Every parent dir must be un-ignored
+# first because /benchmarl_setup/runs/* excludes the whole subtree (same trick as
+# the ab/ and r1/ blocks above).
+!/benchmarl_setup/runs/pinklike3/
+/benchmarl_setup/runs/pinklike3/*
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/
+/benchmarl_setup/runs/pinklike3/capture_v0_closing/*
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/
+/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/*
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/
+/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/*
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/config.pkl
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/evaluation_report_live_capture.csv
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/evaluation_report_live_capture_checkpoint_1000000.csv
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/evaluation_report_live_capture_checkpoint_1000000_by_variant.csv
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/
+/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/*
+!/benchmarl_setup/runs/pinklike3/capture_v0_closing/cuda/iql_pacman_mlp__884a90e3_26_07_01-03_54_43/checkpoints/checkpoint_1000000.pt
+
 # Render screenshots
 /benchmarl_setup/runs/pacman_render*.png
 /benchmarl_setupruns*.png

@@ -53,6 +53,16 @@ CHECKPOINT_BEST_METRICS = ("reward", "capture_rate")
 def _configure_warning_filters() -> None:
     warnings.filterwarnings(
         "ignore",
+        message=(
+            r"^You are using `torch\.load` with `weights_only=False` "
+            r"\(the current default value\), which uses the default pickle "
+            r"module implicitly\."
+        ),
+        category=FutureWarning,
+        module=r"^benchmarl\.experiment\.experiment$",
+    )
+    warnings.filterwarnings(
+        "ignore",
         message=r"^PettingZoo in TorchRL is tested using version == 1\.24\.3",
         category=UserWarning,
         module=r"^torchrl\.envs\.libs\.pettingzoo$",
@@ -87,6 +97,64 @@ def save_rgb_frame(frame: np.ndarray, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     surface = pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2)))
     pygame.image.save(surface, str(output_path))
+
+
+def save_gif(
+    frames: list,
+    output_path: Path,
+    fps: int = 12,
+    max_width: int = 640,
+    end_hold_ms: int = 1200,
+) -> None:
+    """Assemble captured rgb frames (np.ndarray HxWx3, uint8) into an animated GIF.
+
+    Uses a single shared palette (no per-frame palette swaps -> no flicker/stutter)
+    and per-frame durations (uniform playback with a clean hold on the final frame,
+    instead of duplicated end frames that make the loop feel like it stalls).
+    """
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Pillow is required to save GIFs. Install it with `uv add pillow` "
+            "(or `python -m pip install pillow`)."
+        ) from exc
+
+    if not frames:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rgb = []
+    for frame in frames:
+        img = Image.fromarray(np.asarray(frame, dtype=np.uint8)).convert("RGB")
+        if max_width and img.width > max_width:
+            new_h = int(round(img.height * max_width / img.width))
+            img = img.resize((max_width, new_h))
+        rgb.append(img)
+
+    # One shared palette for every frame (the capture frame is the most colourful).
+    try:
+        no_dither = Image.Dither.NONE
+    except AttributeError:  # older Pillow
+        no_dither = Image.NONE
+    master = rgb[-1].convert("P", palette=Image.ADAPTIVE, colors=128)
+    paletted = [im.quantize(palette=master, dither=no_dither) for im in rgb]
+
+    base = int(round(1000 / max(1, fps)))
+    durations = [base] * len(paletted)
+    durations[-1] = max(base, end_hold_ms)
+
+    # Full opaque frames: no disposal (disposal=2 clears the canvas between
+    # frames and reads as flicker/stutter in several viewers) and no
+    # transparency/optimize passes that could drop or merge frames.
+    paletted[0].save(
+        str(output_path),
+        save_all=True,
+        append_images=paletted[1:],
+        duration=durations,
+        loop=0,
+        optimize=False,
+    )
 
 
 def _read_scalar_values(csv_path: Path) -> list[float]:
@@ -727,35 +795,42 @@ def _effective_pacman_stage(raw_env) -> str:
     return str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
 
 
-def _force_hard_pacman_for_eval(raw_env, checkpoint_path: Path) -> None:
-    pacman_difficulty = str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
-    pacman_curriculum = str(getattr(raw_env, "pacman_curriculum", "off")).strip().lower()
-    pacman_random_action_prob = float(getattr(raw_env, "pacman_random_action_prob", 0.0))
-    pacman_safe_distance = getattr(raw_env, "pacman_safe_distance", None)
+def _set_pacman_evasiveness_for_eval(
+    raw_env, evasiveness: float, checkpoint_path: Path
+) -> None:
+    """Pin the eval Pacman to a fixed evasiveness in [0, 1].
+
+    ``evasiveness`` is the fraction of moves the defense-first policy plays
+    optimally: ``1.0`` = deterministic hard evader (the old forced-hard mode),
+    ``0.0`` = fully random. It maps to ``pacman_random_action_prob = 1 -
+    evasiveness`` on the hard policy with the curriculum off, so the opponent is
+    a single, stable difficulty for the whole eval (no mid-episode ramp).
+    """
+    evasiveness = max(0.0, min(1.0, float(evasiveness)))
+    random_action_prob = 1.0 - evasiveness
+    previous_difficulty = str(getattr(raw_env, "pacman_difficulty", "")).strip().lower()
+    previous_random = float(getattr(raw_env, "pacman_random_action_prob", 0.0))
     previous_stage = _effective_pacman_stage(raw_env)
 
     raw_env.pacman_difficulty = "hard"
     raw_env.pacman_curriculum = "off"
-    raw_env.pacman_random_action_prob = 0.0
+    raw_env.pacman_random_action_prob = random_action_prob
     raw_env.pacman_safe_distance = None
     if hasattr(raw_env, "_build_pacman_policy") and callable(raw_env._build_pacman_policy):
         raw_env._pacman_policy = raw_env._build_pacman_policy()
 
-    effective_stage = _effective_pacman_stage(raw_env)
-    if effective_stage != "hard":
-        raise ValueError(
-            "Failed to force hard Pacman for evaluation. "
-            f"checkpoint={checkpoint_path} effective_stage={effective_stage!r}."
-        )
-
     print(
-        "Pacman eval mode: forced hard stage from checkpoint config "
-        f"(checkpoint={checkpoint_path}, previous_difficulty={pacman_difficulty!r}, "
-        f"previous_curriculum={pacman_curriculum!r}, "
-        f"previous_random_action_prob={pacman_random_action_prob}, "
-        f"previous_safe_distance={pacman_safe_distance!r}, "
+        "Pacman eval mode: fixed evasiveness "
+        f"({evasiveness:.0%} -> random_action_prob={random_action_prob:.3f}) "
+        f"(checkpoint={checkpoint_path}, previous_difficulty={previous_difficulty!r}, "
+        f"previous_random_action_prob={previous_random}, "
         f"previous_effective_stage={previous_stage!r})."
     )
+
+
+def _force_hard_pacman_for_eval(raw_env, checkpoint_path: Path) -> None:
+    # Backwards-compatible alias: hard == 100% evasive.
+    _set_pacman_evasiveness_for_eval(raw_env, 1.0, checkpoint_path)
 
 
 def _assert_effective_hard_pacman(raw_env, checkpoint_path: Path) -> None:
@@ -789,6 +864,11 @@ def run_episode(
     allow_cpu_fallback: bool,
     ascii_step_json: bool,
     allow_non_hard_checkpoint: bool,
+    pacman_evasiveness: float = 0.8,
+    gif_out: Path | None = None,
+    gif_fps: int = 12,
+    gif_stride: int = 1,
+    gif_width: int = 640,
 ) -> None:
     learner = normalize_algorithm(learner)
     resolved_device, resolution_reason = resolve_device(
@@ -839,7 +919,11 @@ def run_episode(
 
     env = experiment.test_env
     raw_env = _unwrap_pacman_env(env)
-    raw_env.shared_memory_in_observation_enabled = False
+    # Keep the SAME observation encoding the checkpoint was trained with. Forcing
+    # this off here zeroed out the shared-memory bearing channel (the directional
+    # signal the policy uses to pursue Pacman outside its local view), producing an
+    # out-of-distribution observation that made trained ghosts wander instead of
+    # chase. Training always runs with this enabled (True), so eval must match.
     raw_env.render_mode = None if render_mode == "ascii" else render_mode
     raw_env.tile_size = tile_size
     raw_env.fps = fps
@@ -847,16 +931,17 @@ def run_episode(
     if allow_non_hard_checkpoint:
         print(
             "Pacman eval mode: keeping checkpoint-defined difficulty/curriculum "
-            "(--allow-non-hard-checkpoint)."
+            "(--allow-non-hard-checkpoint); --pacman-evasiveness ignored."
         )
     else:
-        _force_hard_pacman_for_eval(raw_env, checkpoint_path)
+        _set_pacman_evasiveness_for_eval(raw_env, pacman_evasiveness, checkpoint_path)
     agent_ids = list(getattr(raw_env, "possible_agents", []))
 
     total_reward = 0.0
     done = False
     step = 0
     last_frame = None
+    gif_frames: list = []
     last_action_info = None
     last_reward_info = None
     final_result = None
@@ -886,6 +971,11 @@ def run_episode(
                             total_reward=total_reward,
                             done=done,
                         )
+
+                if gif_out is not None:
+                    gif_frames.append(
+                        raw_env.capture_frame(learner=learner, total_reward=total_reward, done=done)
+                    )
 
                 while not done and step < max_steps:
                     step += 1
@@ -952,6 +1042,17 @@ def run_episode(
                                 last_reward_by_agent=reward_info,
                             )
 
+                    if gif_out is not None and (step % max(1, gif_stride) == 0 or done):
+                        gif_frames.append(
+                            raw_env.capture_frame(
+                                learner=learner,
+                                total_reward=total_reward,
+                                done=done,
+                                last_action_by_agent=action_info,
+                                last_reward_by_agent=reward_info,
+                            )
+                        )
+
                     if show_reward_breakdown:
                         breakdown = getattr(raw_env, "last_team_reward_breakdown", None)
                         if breakdown is not None:
@@ -996,6 +1097,20 @@ def run_episode(
                             last_reward_by_agent=last_reward_info,
                             final_result=final_result,
                         )
+                    if gif_out is not None:
+                        # Single final frame; save_gif holds it via a longer
+                        # per-frame duration (no duplicated frames -> no stall).
+                        gif_frames.append(
+                            raw_env.capture_frame(
+                                learner=learner,
+                                total_reward=total_reward,
+                                done=final_done,
+                                last_action_by_agent=last_action_info,
+                                last_reward_by_agent=last_reward_info,
+                                final_result=final_result,
+                            )
+                        )
+
                     if render_mode == "human":
                         raw_env.wait_for_close(
                             learner=learner,
@@ -1009,6 +1124,9 @@ def run_episode(
             if screenshot_out is not None and last_frame is not None:
                 save_rgb_frame(last_frame, screenshot_out)
                 print(f"Saved screenshot: {screenshot_out}")
+            if gif_out is not None and gif_frames:
+                save_gif(gif_frames, gif_out, fps=gif_fps, max_width=gif_width)
+                print(f"Saved GIF: {gif_out} ({len(gif_frames)} frames)")
     finally:
         raw_env.close()
         experiment.close()
@@ -1132,6 +1250,30 @@ def main() -> None:
         help="Optional PNG path for the last rendered frame.",
     )
     parser.add_argument(
+        "--gif-out",
+        type=Path,
+        default=None,
+        help="Optional path to save the whole episode as an animated GIF (works in any render mode).",
+    )
+    parser.add_argument(
+        "--gif-fps",
+        type=int,
+        default=12,
+        help="Frames per second for the --gif-out animation (default 12).",
+    )
+    parser.add_argument(
+        "--gif-stride",
+        type=int,
+        default=1,
+        help="Record one frame every N steps for --gif-out (default 1 = every step; higher = smaller GIF).",
+    )
+    parser.add_argument(
+        "--gif-width",
+        type=int,
+        default=640,
+        help="Max width in px for the --gif-out animation (frames are downscaled to fit; default 640).",
+    )
+    parser.add_argument(
         "--hide-observations",
         action="store_true",
         help="Disable the translucent local-observation overlays in Pygame renders.",
@@ -1152,11 +1294,24 @@ def main() -> None:
         "--allow-non-hard-checkpoint",
         action="store_true",
         help=(
-            "Disable default hard-forcing in eval replay and keep the checkpoint's "
-            "original Pacman difficulty/curriculum behavior."
+            "Disable default evasiveness-forcing in eval replay and keep the "
+            "checkpoint's original Pacman difficulty/curriculum behavior."
+        ),
+    )
+    parser.add_argument(
+        "--pacman-evasiveness",
+        type=float,
+        default=0.8,
+        help=(
+            "Pacman evasiveness in [0,1] for eval (default 0.8 = 80%% evasive). "
+            "1.0 = deterministic hard evader; 0.0 = fully random. Maps to "
+            "pacman_random_action_prob = 1 - evasiveness. Ignored when "
+            "--allow-non-hard-checkpoint is set."
         ),
     )
     args = parser.parse_args()
+    if not (0.0 <= args.pacman_evasiveness <= 1.0):
+        parser.error("--pacman-evasiveness must be in [0, 1]")
     normalized_learner = normalize_algorithm(args.learner)
     if normalized_learner not in SUPPORTED_ALGORITHMS:
         raise ValueError(
@@ -1186,6 +1341,11 @@ def main() -> None:
         allow_cpu_fallback=args.allow_cpu_fallback,
         ascii_step_json=args.ascii_step_json,
         allow_non_hard_checkpoint=args.allow_non_hard_checkpoint,
+        pacman_evasiveness=args.pacman_evasiveness,
+        gif_out=args.gif_out,
+        gif_fps=args.gif_fps,
+        gif_stride=args.gif_stride,
+        gif_width=args.gif_width,
     )
 
 

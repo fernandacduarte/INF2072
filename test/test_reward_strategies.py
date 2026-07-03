@@ -194,8 +194,9 @@ def test_capture_v0_improved_uses_smooth_legal_delta_and_reverse_action_penalty(
     )
 
     result = strategy.compute(context)
-    # legal_delta = 3 - 2 = 1, reward = 0.2 * 1
-    assert result.breakdown["pacman_legal_moves_delta"] == pytest.approx(0.2)
+    # (1,1) has 4 legal moves; (1,2) has 2 (walls at (0,2),(1,3)).
+    # legal_delta = 4 - 2 = 2, reward = 0.2 * 2
+    assert result.breakdown["pacman_legal_moves_delta"] == pytest.approx(0.4)
     # previous action 0 (RIGHT), current action 1 (LEFT) => reverse penalty
     assert result.breakdown["reverse_action"] == pytest.approx(-0.02)
 
@@ -621,7 +622,6 @@ def test_current_git_variant_applies_overlap_penalty_for_adjacent_opposite_direc
 # --- Pure potential-based reward shaping (capture_v0_pure_potential_shaping) ---
 
 ALPHA = 0.7
-GAMMA = 0.99
 
 
 def _pbrs_context(
@@ -669,8 +669,9 @@ def test_loader_resolves_pure_pbrs_id():
     )
     assert isinstance(strategy, CaptureV0PurePotentialShaping)
     assert strategy.strategy_id == "capture_v0_pure_potential_shaping"
-    assert strategy.weights.gamma == pytest.approx(0.99)
     assert strategy.weights.potential_shaping_alpha == pytest.approx(0.7)
+    # Stronger-than-default timestep so camping carries a real cost.
+    assert strategy.weights.timestep == pytest.approx(-0.05)
 
 
 def test_pure_pbrs_telescoping_term():
@@ -681,9 +682,9 @@ def test_pure_pbrs_telescoping_term():
     first = strategy.compute(_pbrs_context(0, 5, step_count=1))  # distance 5
     assert "potential_shaping" not in first.breakdown
 
-    # Move one tile closer (distance 4): F = gamma*Phi(s') - Phi(s).
+    # Move one tile closer (distance 4): exact telescoping F = Phi(s') - Phi(s).
     second = strategy.compute(_pbrs_context(1, 5, step_count=2))  # distance 4
-    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
+    expected = (-ALPHA * 4.0) - (-ALPHA * 5.0)
     assert second.breakdown["potential_shaping"] == pytest.approx(expected)
     assert expected > 0.0  # closing distance is rewarded
 
@@ -698,7 +699,7 @@ def test_pure_pbrs_capture_pulse():
     )
 
     assert capture.breakdown["GET_PACMAN"] == pytest.approx(100.0)
-    # Phi(capture) = 0; pulse = gamma*0 - (-alpha*dist_before) = +alpha*1.
+    # Phi(capture) = 0; pulse = 0 - (-alpha*dist_before) = +alpha*1.
     assert capture.breakdown["potential_shaping"] == pytest.approx(ALPHA * 1.0)
 
 
@@ -713,9 +714,32 @@ def test_pure_pbrs_timeout_does_not_zero_potential():
 
     assert timeout.breakdown["PACMAN_TIMEOUT_WIN"] == pytest.approx(-100.0)
     # Real telescoping using the actual distance, NOT a forced +alpha*dist_before pulse.
-    expected = GAMMA * (-ALPHA * 4.0) - (-ALPHA * 5.0)
+    expected = (-ALPHA * 4.0) - (-ALPHA * 5.0)
     assert timeout.breakdown["potential_shaping"] == pytest.approx(expected)
     assert timeout.breakdown["potential_shaping"] != pytest.approx(ALPHA * 5.0)
+
+
+def test_pure_pbrs_in_place_oscillation_cannot_be_farmed():
+    """Exact telescoping makes any A<->B<->A cycle net exactly zero shaping.
+
+    Regression for the reward-farming bug (research-000024 follow-up) where
+    discounted shaping let ghosts bank positive reward by oscillating in place
+    next to a visible Pacman instead of capturing it.
+    """
+    strategy = CaptureV0PurePotentialShaping()
+    strategy.reset(_pbrs_context(0, 5))
+    # Pacman fixed at col 5; ghost bounces between col 0 (dist 5) and col 1 (dist 4).
+    rollout = [0, 1, 0, 1, 0, 1, 0]
+    cumulative_shaping = 0.0
+    cumulative_total = 0.0
+    for step, ghost_col in enumerate(rollout, start=1):
+        result = strategy.compute(_pbrs_context(ghost_col, 5, step_count=step))
+        cumulative_shaping += result.breakdown.get("potential_shaping", 0.0)
+        cumulative_total += result.total
+    # Cumulative shaping returns to ~zero whenever the ghost returns to its start.
+    assert cumulative_shaping == pytest.approx(0.0, abs=1e-9)
+    # And the only net effect of camping is the (negative) timestep cost.
+    assert cumulative_total < 0.0
 
 
 def test_pure_pbrs_magnitude_between_timestep_and_terminal():
@@ -725,7 +749,7 @@ def test_pure_pbrs_magnitude_between_timestep_and_terminal():
     result = strategy.compute(_pbrs_context(1, 5, step_count=2))
 
     magnitude = abs(result.breakdown["potential_shaping"])
-    assert magnitude > abs(strategy.weights.timestep)  # > 0.01
+    assert magnitude > abs(strategy.weights.timestep)  # > 0.05
     assert magnitude < abs(strategy.weights.get_pacman)  # < 100
 
 
@@ -741,3 +765,64 @@ def test_pure_pbrs_emits_no_reverse_action_term():
     for context in rollout:
         breakdown = strategy.compute(context).breakdown
         assert "reverse_action" not in breakdown
+
+
+def _pbrs_two_ghost_context(ghost_cols, pacman_col, *, step_count=1):
+    """Two ghosts on a 1xN corridor; BFS distance == |ghost_col - pacman_col|."""
+    ghosts = tuple(
+        GhostTransition(
+            ghost_id=f"ghost_{i}",
+            previous_position=(0, c),
+            current_position=(0, c),
+            action=0,
+            invalid_move=False,
+            local_observation=((1, 1, 1),),
+        )
+        for i, c in enumerate(ghost_cols)
+    )
+    return RewardContext(
+        step_count=step_count,
+        max_steps=200,
+        board_shape=(1, 16),
+        ghost_view_radius=1,
+        wall_positions=frozenset(),
+        ghosts=ghosts,
+        pacman_previous_position=(0, pacman_col),
+        pacman_position=(0, pacman_col),
+        pacman_visible=False,
+        visible_pacman_positions=(),
+        pellets_before=1,
+        pellets_remaining=1,
+        total_pellets=1,
+        capture_happened=False,
+        timeout_happened=False,
+        pacman_win_happened=False,
+    )
+
+
+def test_pure_pbrs_mean_rewards_coordination_over_solo_progress():
+    """Both ghosts closing in must out-reward only one closing in.
+
+    Regression for the min-distance failure mode (research-000024 follow-up:
+    non-nearest ghosts got no gradient and parked, leaving a lone pursuer that
+    could never breach an evading Pacman's safe distance).
+    """
+    pac = 10
+    # Solo: ghost_0 moves 0->1 (dist 10->9), ghost_1 stays at 2 (dist 8).
+    solo = CaptureV0PurePotentialShaping()
+    solo.reset(_pbrs_two_ghost_context((0, 2), pac))
+    solo.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
+    solo_term = solo.compute(
+        _pbrs_two_ghost_context((1, 2), pac, step_count=2)
+    ).breakdown["potential_shaping"]
+
+    # Coordinated: ghost_0 0->1 AND ghost_1 2->3 (both one step closer).
+    coord = CaptureV0PurePotentialShaping()
+    coord.reset(_pbrs_two_ghost_context((0, 2), pac))
+    coord.compute(_pbrs_two_ghost_context((0, 2), pac, step_count=1))
+    coord_term = coord.compute(
+        _pbrs_two_ghost_context((1, 3), pac, step_count=2)
+    ).breakdown["potential_shaping"]
+
+    assert solo_term > 0.0
+    assert coord_term > solo_term

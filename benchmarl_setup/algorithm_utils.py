@@ -91,6 +91,8 @@ def training_exploration_schedule(
     algorithm: str,
     maze: str,
     max_frames: int,
+    anneal_ratio: float = 0.70,
+    eps_end: float = 0.05,
 ) -> dict[str, float | int]:
     normalized_algorithm = normalize_algorithm(algorithm)
     if normalized_algorithm not in SUPPORTED_ALGORITHMS:
@@ -102,8 +104,14 @@ def training_exploration_schedule(
         raise ValueError("max_frames must be >= 1")
 
     eps_init = 1.0
-    eps_end = 0.10
-    anneal_ratio = 0.95
+    eps_end = float(eps_end)
+    if not (0.0 <= eps_end < eps_init):
+        raise ValueError("eps_end must be in [0, 1).")
+    anneal_ratio = float(anneal_ratio)
+    # Fraction of training over which epsilon anneals from eps_init to eps_end.
+    # Lower values give the greedy policy a longer low-epsilon phase to converge.
+    if not (0.0 < anneal_ratio <= 1.0):
+        raise ValueError("anneal_ratio must be in (0, 1].")
 
     anneal_frames = int(resolved_max_frames * anneal_ratio)
     return {

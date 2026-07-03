@@ -24,6 +24,18 @@ _REWARD_CLASS_BY_ID = {
     "capture_v0_pure_potential_shaping": (
         "custom_environment.env.rewards.current:CaptureV0PurePotentialShaping"
     ),
+    "capture_v0_closing": (
+        "custom_environment.env.rewards.current:CaptureV0ClosingReward"
+    ),
+    "capture_v0_closing_shaped": (
+        "custom_environment.env.rewards.current:CaptureV0ClosingShaped"
+    ),
+    "capture_v0_sparse_control": (
+        "custom_environment.env.rewards.current:CaptureV0SparseControl"
+    ),
+    "capture_v0_pure_potential_shaping_pellets": (
+        "custom_environment.env.rewards.current:CaptureV0PurePotentialShapingPellets"
+    ),
     "current_git": "custom_environment.env.rewards.current:CurrentGitTeamReward",
     "current": "custom_environment.env.rewards.current:CurrentTeamReward",
     "current_with_overlap_or_same_corridor": (

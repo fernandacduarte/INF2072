@@ -351,7 +351,20 @@ Researcher has a CSV and PNG comparing IQL, VDN, and QMIX reward curves suitable
 
 ---
 
+### D-003: Adopt the Papoudakis-2021 benchmarking-reporting standard
+
+**Context**: research-000037 reviewed Papoudakis et al. (2021, EPyMARL) for benchmarking best practices. The current aggregate (summarize_benchmark_runs.py) reports mean-over-runs only — discarding the variance from the 5 seeds the project already pays to run — and reads capture% from training-collection rollouts rather than a fixed greedy eval.
+
+**Decision**: Standardise benchmark reporting on: (a) mean ± 95% CI across ≥5 seeds (constitution Q3), with rliable-style robust estimators (IQM + bootstrap CI, Agarwal 2021) given the small-n budget; (b) two-sided t-test (p<0.05) marking algorithms not significantly different from the best; (c) both max-return and all-evals average-return; (d) a fixed greedy N-episode evaluation decoupled from training collection.
+
+**Consequences**: Defensible, citeable comparisons for the course report; modest added code in the summarizer and eval; wide CIs at n=5 surfaced honestly.
+
+**Rejected Alternatives**: Raising seeds to 30–50 (ChatGPT suggestion) — rejected as infeasible at MARL compute cost and not RL-community practice; robust interval estimation is the accepted substitute. Reporting bare mean — rejected as it hides seed variance and enables over-claiming.
+
+---
+
 ## CHANGELOG
 
 2026-06-13 | D-001 | added | - | initial decision: BenchMARL as RL framework
 2026-06-13 | D-002 | added | - | initial decision: PettingZoo as environment interface
+2026-06-30 | D-003 | added | research-000037 | benchmarking-reporting standard (95% CI + significance + greedy eval)

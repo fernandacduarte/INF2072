@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sistema de recompensa -- capture_v0_closing (+shaped)</title>
+<style>
+  :root { color-scheme: light; }
+  html,body { margin:0; background:#f1f5f9; font-family:'Segoe UI',system-ui,Arial,sans-serif; color:#0f172a; }
+  .slide { width:1280px; height:720px; margin:24px auto; background:#fff; border-radius:16px;
+           box-shadow:0 10px 40px rgba(15,23,42,.15); position:relative; overflow:hidden; }
+  .hdr { padding:24px 40px 0 40px; }
+  h1 { margin:0; font-size:31px; letter-spacing:-.5px; }
+  .sub { margin:5px 0 0; font-size:17px; color:#64748b; }
+  .cols { display:flex; gap:22px; padding:18px 40px 0; align-items:flex-start; }
+  .col { flex:1; }
+  .col h2 { margin:0 0 10px; font-size:19px; }
+  .col h2 .tag { font-size:13px; font-weight:600; color:#fff; border-radius:20px; padding:3px 10px; vertical-align:2px; margin-left:6px; }
+  .tag.on  { background:#1a7f37; }
+  .tag.new { background:#7c3aed; }
+  table { width:100%; border-collapse:collapse; font-size:19px; border-radius:10px; overflow:hidden;
+          box-shadow:0 2px 12px rgba(15,23,42,.10); }
+  thead th { background:#0f2c52; color:#fff; font-weight:700; font-size:17px; padding:11px 14px; text-align:left; }
+  thead th.v { text-align:right; }
+  td { padding:10px 14px; border-bottom:1px solid #e8edf3; }
+  tbody tr:nth-child(even) { background:#f8fafc; }
+  tbody tr:last-child td { border-bottom:none; }
+  .name { font-family:'Consolas','Courier New',monospace; font-size:16.5px; letter-spacing:.2px; }
+  .val { text-align:right; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .pos { color:#1a7f37; }
+  .neg { color:#d1242f; }
+  .note { font-size:12px; color:#94a3b8; display:block; }
+  .insight { position:absolute; left:40px; right:40px; bottom:60px; font-size:19px; line-height:1.42;
+             background:#eff6ff; border-left:6px solid #2563eb; padding:12px 18px; border-radius:8px; }
+  .foot { position:absolute; left:40px; right:40px; bottom:16px; font-size:13px; color:#64748b;
+          display:flex; justify-content:space-between; }
+  @media print { body{background:#fff} .slide{box-shadow:none;margin:0} }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="hdr">
+      <h1>Sistema de recompensa: <span style="font-family:Consolas,monospace">capture_v0_closing</span> e a variante <span style="font-family:Consolas,monospace">_shaped</span></h1>
+      <p class="sub">Recompensa de time compartilhada pelos 3 fantasmas -- maze <b>pinklike3</b> -- base esparsa + perseguicao persistente + contencao (+ shaping denso herdado da parte 1)</p>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <h2>Terminais <span class="tag on">ativos</span></h2>
+        <table>
+          <thead><tr><th>Recompensa</th><th class="v">Valor</th></tr></thead>
+          <tbody>
+            <tr><td class="name">GET_PACMAN</td><td class="val pos">+100.0</td></tr>
+            <tr><td class="name">PACMAN_TIMEOUT_WIN</td><td class="val neg">-100.0</td></tr>
+            <tr><td class="name">PACMAN_WIN_PELLETS</td><td class="val neg">-100.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col">
+        <h2>Por passo <span class="tag on">ativos</span></h2>
+        <table>
+          <thead><tr><th>Recompensa</th><th class="v">Valor</th></tr></thead>
+          <tbody>
+            <tr><td class="name">closing <span class="note">por celula de distancia media fechada (clip +/-2.0)</span></td><td class="val pos">+2.0</td></tr>
+            <tr><td class="name">pacman_legal_moves_reduced <span class="note">contencao: reduz saidas do Pac-Man</span></td><td class="val pos">+0.5</td></tr>
+            <tr><td class="name">timestep</td><td class="val neg">-0.05</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col">
+        <h2>Herdadas da parte 1 <span class="tag new">variante _shaped</span></h2>
+        <table>
+          <thead><tr><th>Recompensa</th><th class="v">Valor</th></tr></thead>
+          <tbody>
+            <tr><td class="name">reveal_unseen_local_cells</td><td class="val pos">+0.05</td></tr>
+            <tr><td class="name">valid_move</td><td class="val pos">+0.01</td></tr>
+            <tr><td class="name">stay_still</td><td class="val neg">-0.03</td></tr>
+            <tr><td class="name">invalid_move</td><td class="val neg">-0.08</td></tr>
+            <tr><td class="name">PELLET_EATEN <span class="note">por pastilha comida pelo Pac-Man</span></td><td class="val neg">-0.5</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="insight">
+      <b>Base atual</b> (resultados de 60-78%): pagar a perseguicao a cada passo (<span class="name" style="font-size:15px">closing</span>) + premiar encurralar, com terminais fortes.
+      <b>Variante <span class="name" style="font-size:15px">capture_v0_closing_shaped</span></b>: soma o shaping denso da parte 1 -- hipotese: acelerar o aprendizado inicial (A/B em andamento a 100k frames).
+    </div>
+    <div class="foot">
+      <span>Valores do codigo: CaptureV0ClosingRewardWeights e CaptureV0ClosingShapedWeights (herdadas com os valores da tabela da parte 1). Demais parametros default: max_steps=200, capture_radius=0, epsilon 1.0->0.05 (anneal 40%).</span>
+      <span>fernanda-INF2072 -- branch capture_v0_pure_potential_shaping</span>
+    </div>
+  </div>
+</body>
+</html>
