@@ -15,6 +15,7 @@ from custom_environment.env.rewards import (
 from custom_environment.env.rewards.current import (
     CaptureV0ImproveLegalMovesIncreaseTerminalRewardsReverseAction,
     CaptureV0PurePotentialShaping,
+    CaptureV0PurePotentialShapingPelletsFastCaptureBonus,
     CaptureV0Reward,
     CurrentGitTeamReward,
     CurrentTeamReward,
@@ -672,6 +673,45 @@ def test_loader_resolves_pure_pbrs_id():
     assert strategy.weights.potential_shaping_alpha == pytest.approx(0.7)
     # Stronger-than-default timestep so camping carries a real cost.
     assert strategy.weights.timestep == pytest.approx(-0.05)
+
+
+def test_loader_resolves_fast_capture_bonus_id():
+    strategy = load_reward_strategy(
+        reward_class_from_id(
+            "capture_v0_pure_potential_shaping_pellets_fast_capture_bonus"
+        )
+    )
+    assert isinstance(strategy, CaptureV0PurePotentialShapingPelletsFastCaptureBonus)
+    assert (
+        strategy.strategy_id
+        == "capture_v0_pure_potential_shaping_pellets_fast_capture_bonus"
+    )
+
+
+def test_fast_capture_bonus_scales_with_elapsed_steps():
+    strategy = CaptureV0PurePotentialShapingPelletsFastCaptureBonus()
+    strategy.reset(_pbrs_context(4, 5))
+
+    early_capture = strategy.compute(
+        _pbrs_context(5, 5, step_count=20, capture_happened=True)
+    )
+    expected_early = 20.0 * (1.0 - 20.0 / 200.0)
+    assert early_capture.breakdown["fast_get_pacman_bonus"] == pytest.approx(expected_early)
+
+    strategy.reset(_pbrs_context(4, 5))
+    late_capture = strategy.compute(
+        _pbrs_context(5, 5, step_count=180, capture_happened=True)
+    )
+    expected_late = 20.0 * (1.0 - 180.0 / 200.0)
+    assert late_capture.breakdown["fast_get_pacman_bonus"] == pytest.approx(expected_late)
+    assert early_capture.breakdown["fast_get_pacman_bonus"] > late_capture.breakdown["fast_get_pacman_bonus"]
+
+
+def test_fast_capture_bonus_not_emitted_without_capture():
+    strategy = CaptureV0PurePotentialShapingPelletsFastCaptureBonus()
+    strategy.reset(_pbrs_context(2, 5))
+    result = strategy.compute(_pbrs_context(2, 5, step_count=10, capture_happened=False))
+    assert "fast_get_pacman_bonus" not in result.breakdown
 
 
 def test_pure_pbrs_telescoping_term():
